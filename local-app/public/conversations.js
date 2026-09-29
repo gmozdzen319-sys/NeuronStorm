@@ -1,0 +1,164 @@
+export function createConversations({api,onProfile,onExpired}) {
+  const $=s=>document.querySelector(s), root=$('#conversations');
+  let identity=null, view='inbox', threadId=null, backView='inbox', epoch=0, revision=0, timerBusy=false, signature='', sending=false;
+  let adminPage=1,adminPages=1,adminSearch='',adminState='active',adminThread=false,moderated=null,notificationPage=1,notificationPages=1,notificationThrough=0,notificationSignature='';
+  const date=value=>new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value));
+  const node=(tag,text,className)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el;};
+  function status(id,text='',error=false){const el=$(id);el.textContent=text;el.classList.toggle('error',error);}
+  function shell(next){
+    epoch++;view=next;$('#admin-view').hidden=next!=='admin';$('#notifications-view').hidden=next!=='notifications';signature='';revision=0;
+    $('#landing').hidden=next!=='ask';root.hidden=next==='profile';$('#profile-area').hidden=next!=='profile';
+    $('#questions-list-view').hidden=!['inbox','mine'].includes(next);$('#ask-view').hidden=next!=='ask';$('#thread-view').hidden=next!=='thread';
+    document.querySelectorAll('[data-view]').forEach(button=>{if(button.dataset.view===next)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');});
+  }
+  function clear(){
+    $('#landing').append($('.how'));
+    $('#moderation-dialog').close();$('#admin-nav').hidden=true;$('#notifications-button').hidden=true;$('#admin-list').replaceChildren();$('#notifications-list').replaceChildren();$('#admin-audit').replaceChildren();moderated=null;notificationSignature='';
+    identity=null;epoch++;threadId=null;root.hidden=true;$('#member-nav').hidden=true;$('#ask-question').hidden=true;$('#member-name').hidden=true;
+    $('#questions-list').replaceChildren();$('#thread-replies').replaceChildren();$('#original-question').replaceChildren();$('#question-form').reset();$('#reply-form').reset();
+  }
+  async function failure(error,target){if(error.httpStatus===401){clear();await onExpired();return;}status(target,error.message||'Unable to load this conversation. Please try again.',true);}
+  function questionRow(item){
+    const button=node('button',undefined,'question-row');button.type='button';
+    const top=node('div',undefined,'question-meta');top.append(node('span',(item.categories||[{name:item.category}]).map(t=>t.name).join(' · ')),node('span',date(item.updatedAt)));
+    if(item.unread)top.append(node('span','Unread','unread'));
+    const title=node('h2',item.title),excerpt=node('p',item.excerpt,'question-excerpt'),bottom=node('div',undefined,'question-meta');
+    bottom.append(node('span','By '+item.author),node('span',`${item.replyCount} ${item.replyCount===1?'reply':'replies'}`));button.append(top,title,excerpt,bottom);
+    button.addEventListener('click',()=>openThread(item.id));return button;
+  }
+  async function loadList(background=false){
+    if(!identity||!['inbox','mine'].includes(view))return;
+    const current=epoch,currentView=view;
+    if(!background)status('#list-status','Loading questions…');
+    try{
+      const result=await api('/api/questions?view='+currentView);if(current!==epoch)return;
+      status('#list-status');$('#retry-questions').hidden=true;
+      const next=JSON.stringify(result.questions);if(next===signature)return;signature=next;
+      const list=$('#questions-list');list.replaceChildren();
+      if(!result.questions.length){list.append(node('div',currentView==='mine'?'You have not asked a question yet.':'No questions for you yet. Questions about your profile topics will appear here.','empty-state'));return;}
+      result.questions.forEach(q=>list.append(questionRow(q)));
+    }catch(error){if(current===epoch){await failure(error,'#list-status');$('#retry-questions').hidden=false;}}
+  }
+  async function showList(next='inbox'){
+    if(!identity)return;shell(next);threadId=null;
+    $('#list-title').textContent=next==='mine'?'My Questions':'Questions for You';
+    $('#list-description').textContent=next==='mine'?'Questions you started, with every reply in one place.':identity.role==='admin'?'Administrator access: you can see every conversation here.':'Questions sent to people who share your topics.';
+    await loadList();if(view===next)$('#list-title').focus();
+  }
+  function renderMessage(message,question=false){
+    const article=node('article',undefined,question?'':'reply');
+    const meta=node('div',undefined,'message-meta');meta.append(node('strong',message.author),node('time',date(message.createdAt)));meta.lastChild.dateTime=new Date(message.createdAt).toISOString();
+    article.append(meta,node('p',message.body,'message-body'));return article;
+  }
+  function renderVotes(article,reply){
+    let bar=article.querySelector('.reply-votes');
+    if(!bar){bar=node('div',undefined,'reply-votes');article.append(bar);for(const value of [1,-1]){const button=node('button');button.type='button';button.dataset.vote=value;button.className='vote-button';button.addEventListener('click',async()=>{
+      if(sending)return;const current=epoch,id=threadId;const chosen=Number(button.dataset.current)===value?0:value;sending=true;bar.querySelectorAll('button').forEach(b=>b.disabled=true);
+      try{await api('/api/questions/'+id+'/replies/'+reply.id+'/vote',{value:chosen});if(current===epoch){await loadThread();status('#reply-status','Your rating has been saved.');}}
+      catch(error){if(current===epoch)await failure(error,'#reply-status');}
+      finally{sending=false;if(current===epoch)bar.querySelectorAll('button').forEach(b=>b.disabled=!reply.canVote);}
+    });bar.append(button);}}
+    for(const button of bar.querySelectorAll('button')){const up=Number(button.dataset.vote)===1;button.textContent=(up?'👍 ':'👎 ')+(up?reply.upvotes:reply.downvotes);button.setAttribute('aria-label',(up?'Upvote':'Downvote')+' reply by '+reply.author);button.setAttribute('aria-pressed',String(reply.myVote===Number(button.dataset.vote)));button.dataset.current=reply.myVote;button.disabled=!reply.canVote;button.title=reply.canVote?'Click again to remove your rating':'You cannot rate your own reply.';}
+  }
+  async function loadThread(background=false){
+    if(!identity||view!=='thread'||!threadId)return;
+    const current=epoch,id=threadId;
+    try{
+      const result=await api((adminThread?'/api/admin/conversations/':'/api/questions/')+id);if(current!==epoch||id!==threadId)return;
+      const thread=result.thread;status('#thread-status');moderated=adminThread?thread:null;$('#admin-thread-actions').hidden=!adminThread;$('#reply-form').hidden=thread.deletedAt!==null;if(adminThread){$('#admin-deleted-note').hidden=thread.deletedAt===null;$('#moderate-conversation').textContent=thread.deletedAt===null?'Delete conversation':'Restore conversation';$('#admin-audit').replaceChildren(...(result.audit.length?result.audit.map(item=>node('li',(item.action==='delete'?'Deleted':'Restored')+' · '+date(item.createdAt)+' · '+item.actor)):[node('li','No moderation actions yet.')]));}
+      if(thread.revision!==revision){
+        $('#thread-category').textContent=(thread.categories||[{name:thread.category}]).map(t=>t.name).join(' · ');
+        $('#original-question').replaceChildren(renderMessage(thread,true));
+        $('#replies-title').textContent=`Replies (${thread.replies.length})`;
+        const list=$('#thread-replies');
+        if(!revision)list.replaceChildren();
+        if(!thread.replies.length){list.replaceChildren(node('p','No replies yet. Start the conversation.','muted'));}
+        else{
+          if(!revision||!list.querySelector('[data-reply-id]'))list.replaceChildren();
+          for(const reply of thread.replies)if(!list.querySelector(`[data-reply-id="${reply.id}"]`)){const el=renderMessage(reply);el.dataset.replyId=reply.id;list.append(el);}
+        }
+        revision=thread.revision;
+      }
+      for(const reply of thread.replies){const article=$('#thread-replies').querySelector(`[data-reply-id="${reply.id}"]`);if(article){renderVotes(article,reply);if(thread.deletedAt!==null)article.querySelectorAll('button').forEach(b=>b.disabled=true);}}
+      if(!document.hidden&&thread.deletedAt===null){await api('/api/questions/'+id+'/read',{revision:thread.revision});await loadNotifications();}
+    }catch(error){if(current===epoch){await failure(error,'#thread-status');if(error.httpStatus===404){$('#thread-category').textContent='';$('#admin-thread-actions').hidden=true;moderated=null;$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();$('#reply-form').hidden=true;}}}
+  }
+  async function openThread(id,fromAdmin=false){
+    adminThread=fromAdmin;if(fromAdmin)backView='admin';
+    if(!fromAdmin&&['mine','inbox','notifications'].includes(view))backView=view;
+    shell('thread');threadId=id;$('#admin-thread-actions').hidden=true;$('#reply-form').hidden=false;$('#reply-form').reset();status('#reply-status');status('#thread-status','Loading conversation…');$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();
+    $('#back-to-questions').textContent=backView==='admin'?'Back to Admin Dashboard':backView==='notifications'?'Back to Notifications':backView==='mine'?'Back to My Questions':'Back to Questions for You';
+    await loadThread();if(view==='thread')$('#thread-title').focus();
+  }
+  async function loadStats(){
+    const current=epoch;status('#stats-status','Loading statistics…');$('#stats-values').replaceChildren();
+    try{const {stats}=await api('/api/stats');if(current!==epoch)return;for(const [key,label]of [['members','Members'],['topics','Topics'],['questions','Questions'],['replies','Replies']]){const card=node('div');card.append(node('dt',label),node('dd',new Intl.NumberFormat('en-GB').format(stats[key])));$('#stats-values').append(card);}status('#stats-status');}catch(error){if(current===epoch)await failure(error,'#stats-status');}
+  }
+  function updateChosen(kind){
+    const checked=[...$('#question-'+kind).querySelectorAll('input:checked')];$('#picker-'+kind+'-label').textContent=checked.length?checked.length+(checked.length===1?' topic selected':' topics selected'):'Choose topics';const chips=$('#chosen-'+kind);chips.replaceChildren();
+    for(const check of checked){const name=check.parentElement.textContent,li=node('li'),remove=node('button','×');remove.type='button';remove.setAttribute('aria-label','Remove '+name+' from question');remove.addEventListener('click',()=>{check.checked=false;updateChosen(kind);});li.append(node('span',name),remove);chips.append(li);}
+  }
+  for(const kind of ['work','hobbies'])$('#search-'+kind).addEventListener('input',()=>{const query=$('#search-'+kind).value.normalize('NFKC').toLocaleLowerCase().trim();let matches=0;for(const label of $('#question-'+kind).querySelectorAll('label')){label.hidden=!label.textContent.normalize('NFKC').toLocaleLowerCase().includes(query);if(!label.hidden)matches++;}$('#search-'+kind+'-empty').hidden=matches>0;});
+  async function ask(focusQuestion=false){
+    if(!identity)return;shell('ask');$('#ask-view').append($('.how'));loadStats();$('#question-form').reset();status('#question-status','Loading topics…');$('#send-question').disabled=true;
+    const current=epoch;
+    try{const result=await api('/api/categories?available=1');if(current!==epoch)return;
+      for(const kind of ['work','hobbies']){const list=$('#question-'+kind);list.replaceChildren();for(const topic of result.categories[kind]){const label=node('label',undefined,'topic-choice'),check=node('input');check.type='checkbox';check.name='question-topic';check.value=topic.id;label.append(check,node('span',topic.name));check.addEventListener('change',()=>updateChosen(kind));list.append(label);}if(!result.categories[kind].length)list.append(node('p','No available topics yet.','muted'));$('#picker-'+kind).open=false;$('#search-'+kind).value='';$('#search-'+kind+'-empty').hidden=true;updateChosen(kind);}
+      status('#question-status');$('#send-question').disabled=false;$(focusQuestion?'#ask-title':'#title').focus({preventScroll:true});if(focusQuestion)$('#ask-title').scrollIntoView({block:'start'});else window.scrollTo({top:0});
+    }catch(error){if(current===epoch)await failure(error,'#question-status');}
+  }
+  $('#question-form').addEventListener('submit',async event=>{
+    event.preventDefault();if(sending)return;const categoryIds=[...document.querySelectorAll('input[name="question-topic"]:checked')].map(el=>Number(el.value)),body=$('#question-body').value.trim();
+    if(!categoryIds.length){status('#question-status','Choose at least one topic from Work & Education or Hobbies & Interests.',true);$('#picker-work').open=true;$('#search-work').focus();return;}if(!body){status('#question-status','Enter your question.',true);$('#question-body').focus();return;}
+    const current=epoch;sending=true;$('#send-question').disabled=true;status('#question-status','Sending your question…');
+    try{const result=await api('/api/questions',{categoryIds,body});if(current!==epoch)return;backView='mine';await openThread(result.id);status('#thread-status',`Question sent to ${result.recipientCount} ${result.recipientCount===1?'member':'members'}.`);}
+    catch(error){if(current===epoch)await failure(error,'#question-status');}
+    finally{sending=false;$('#send-question').disabled=false;}
+  });
+  $('#reply-form').addEventListener('submit',async event=>{
+    event.preventDefault();if(sending||!threadId)return;const body=$('#reply-body').value.trim();if(!body){status('#reply-status','Enter a reply.',true);$('#reply-body').focus();return;}
+    const current=epoch,id=threadId;sending=true;$('#send-reply').disabled=true;status('#reply-status','Posting your reply…');
+    try{await api('/api/questions/'+id+'/replies',{body});if(current!==epoch)return;$('#reply-body').value='';status('#reply-status','Your reply has been posted.');await loadThread();}
+    catch(error){if(current===epoch)await failure(error,'#reply-status');}
+    finally{sending=false;$('#send-reply').disabled=false;}
+  });
+  document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{if(button.dataset.view==='profile')onProfile();else if(button.dataset.view==='admin')showAdmin();else if(button.dataset.view==='ask')ask();else showList(button.dataset.view);}));
+  $('.brand').addEventListener('click',event=>{if(identity){event.preventDefault();ask();}});
+  $('#ask-question').addEventListener('click',()=>ask(true));$('#cancel-question').addEventListener('click',()=>showList());$('#back-to-questions').addEventListener('click',()=>backView==='admin'?showAdmin():backView==='notifications'?showNotifications():showList(backView));$('#retry-questions').addEventListener('click',()=>loadList());
+  setInterval(async()=>{if(timerBusy||sending||document.hidden||!identity)return;timerBusy=true;try{if(view==='thread')await loadThread(true);else if(view==='admin')await loadAdmin(true);else await loadList(true);await loadNotifications();}finally{timerBusy=false;}},5000);
+
+  async function loadAdmin(background=false){
+    if(identity?.role!=='admin'||view!=='admin')return;const current=epoch;
+    if(!background)status('#admin-status','Loading conversations…');
+    try{const result=await api('/api/admin/conversations?state='+adminState+'&page='+adminPage+'&search='+encodeURIComponent(adminSearch));if(current!==epoch)return;adminPage=result.page;adminPages=result.pages;status('#admin-status');const next=JSON.stringify(result);if(signature===next)return;signature=next;
+      $('#admin-stats').replaceChildren();for(const [key,label]of [['members','Members'],['active','Active conversations'],['deleted','Deleted conversations'],['replies','Active replies']]){const card=node('div');card.append(node('dt',label),node('dd',result.stats[key]));$('#admin-stats').append(card);}
+      $('#admin-list').replaceChildren();for(const item of result.questions){const button=node('button',undefined,'question-row');button.type='button';button.append(node('h2',item.title),node('p',item.excerpt),node('p','By '+item.author+' · '+date(item.createdAt)+' · '+item.replyCount+' replies','muted'),node('p',item.categories.map(t=>t.name).join(' · '),'question-meta'));if(item.deletedAt!==null)button.append(node('p','Deleted '+date(item.deletedAt),'muted'));button.addEventListener('click',()=>openThread(item.id,true));$('#admin-list').append(button);}if(!result.questions.length)$('#admin-list').append(node('p','No conversations found.','empty-state'));
+      $('#admin-page').textContent='Page '+adminPage+' of '+adminPages+' · '+result.total+' conversations';$('#admin-prev').disabled=adminPage<=1;$('#admin-next').disabled=adminPage>=adminPages;
+    }catch(error){if(current===epoch)await failure(error,'#admin-status');}
+  }
+  async function showAdmin(){if(identity?.role!=='admin')return;shell('admin');threadId=null;await loadAdmin();if(view==='admin')$('#admin-title').focus();}
+  $('#admin-search-form').addEventListener('submit',event=>{event.preventDefault();adminSearch=$('#admin-search').value.trim();adminState=$('#admin-state').value;adminPage=1;signature='';loadAdmin();});
+  $('#admin-state').addEventListener('change',()=>{adminState=$('#admin-state').value;adminPage=1;signature='';loadAdmin();});
+  $('#admin-prev').addEventListener('click',()=>{if(adminPage>1){adminPage--;loadAdmin();}});$('#admin-next').addEventListener('click',()=>{if(adminPage<adminPages){adminPage++;loadAdmin();}});
+  $('#moderate-conversation').addEventListener('click',()=>{
+    if(!moderated||identity?.role!=='admin')return;const removing=moderated.deletedAt===null;$('#moderation-form').reset();status('#moderation-status');$('#moderation-title').textContent=removing?'Delete conversation?':'Restore conversation?';$('#moderation-target').textContent='“'+moderated.body.slice(0,220)+'” — '+moderated.author+' · '+date(moderated.createdAt);$('#moderation-impact').textContent=removing?'This hides the question, all '+moderated.replies.length+' replies, ratings and related notifications from members. Replies cannot be added. Stars from these replies will be excluded. You can restore the conversation from Deleted conversations; this does not permanently erase it.':'This restores access for the original participants, along with replies, ratings and stars. Earlier notifications remain read. No new notification is sent.';$('#moderation-submit').textContent=removing?'Delete conversation':'Restore conversation';$('#moderation-dialog').showModal();
+  });
+  $('#moderation-cancel').addEventListener('click',()=>$('#moderation-dialog').close());
+  $('#moderation-form').addEventListener('submit',async event=>{
+    event.preventDefault();if(sending||!moderated||!$('#moderation-confirm').checked)return;const id=moderated.id,action=moderated.deletedAt===null?'delete':'restore',current=epoch;sending=true;$('#moderation-submit').disabled=true;
+    try{await api('/api/admin/conversations/'+id+'/'+action,{confirmation:id});$('#moderation-dialog').close();if(current===epoch){await showAdmin();status('#admin-status',action==='delete'?'Conversation moved to Deleted conversations.':'Conversation restored.');await loadNotifications();}}
+    catch(error){if(current===epoch)await failure(error,'#moderation-status');}finally{sending=false;$('#moderation-submit').disabled=false;}
+  });
+  async function loadNotifications(){
+    if(!identity)return;const owner=identity.address,current=epoch;
+    try{const result=await api('/api/notifications?page='+notificationPage);if(identity?.address!==owner)return;$('#notification-count').textContent=result.unread;$('#notifications-button').setAttribute('aria-label','Notifications, '+result.unread+' unread');if(view!=='notifications'||current!==epoch)return;status('#notifications-status');notificationThrough=result.throughId;notificationPage=result.page;notificationPages=result.pages;$('#notifications-read-all').disabled=!result.unread;
+      const next=JSON.stringify(result);if(next===notificationSignature)return;notificationSignature=next;$('#notifications-list').replaceChildren();for(const item of result.notifications){const row=node('div',undefined,'notification-row'+(item.readAt===null?' unread-row':'')),open=node('button');open.type='button';open.append(node('strong',item.actor+(item.kind==='question'?' asked a question':' replied')),node('span',item.title),node('span',date(item.createdAt)+(item.readAt===null?' · Unread':'')));open.addEventListener('click',()=>openThread(item.questionId));row.append(open);if(item.readAt===null){const read=node('button','Mark as read','text-button');read.type='button';read.addEventListener('click',async()=>{try{await api('/api/notifications/read',{id:item.id});await loadNotifications();}catch(error){await failure(error,'#notifications-status');}});row.append(read);}$('#notifications-list').append(row);}if(!result.notifications.length)$('#notifications-list').append(node('p','No notifications yet.','empty-state'));$('#notifications-page').textContent='Page '+result.page+' of '+result.pages;$('#notifications-prev').disabled=result.page<=1;$('#notifications-next').disabled=result.page>=result.pages;
+    }catch(error){if(identity?.address===owner){if(error.httpStatus===401)await failure(error,'#notifications-status');else if(view==='notifications')status('#notifications-status','Notifications could not be refreshed. Please try again.',true);}}
+  }
+  async function showNotifications(){if(!identity)return;shell('notifications');notificationSignature='';await loadNotifications();if(view==='notifications')$('#notifications-title').focus();}
+  $('#notifications-button').addEventListener('click',showNotifications);
+  $('#notifications-read-all').addEventListener('click',async()=>{try{await api('/api/notifications/read-all',{throughId:notificationThrough});await loadNotifications();}catch(error){await failure(error,'#notifications-status');}});
+  $('#notifications-prev').addEventListener('click',()=>{if(notificationPage>1){notificationPage--;loadNotifications();}});$('#notifications-next').addEventListener('click',()=>{if(notificationPage<notificationPages){notificationPage++;loadNotifications();}});
+
+  return {clear,openProfile(){if(identity)shell('profile');},setIdentity(account,profile,openInbox=false){identity=account;$('#admin-nav').hidden=account.role!=='admin';$('#notifications-button').hidden=false;loadNotifications();$('#member-nav').hidden=false;$('#ask-question').hidden=false;$('#member-name').hidden=false;$('#member-name').textContent=profile.nickname;if(openInbox){if(account.role==='admin')showAdmin();else ask();}}};
+}

@@ -1,0 +1,1 @@
+{"name":"neuron-storm","version":"0.1.0","private":true,"type":"module","scripts":{"start":"node local-app/server.mjs","test":"node --test local-app/test/*.test.mjs"}}
