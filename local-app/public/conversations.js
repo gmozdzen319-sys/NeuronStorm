@@ -1,7 +1,7 @@
 export function createConversations({api,onProfile,onExpired}) {
   const $=s=>document.querySelector(s), root=$('#conversations');
   let identity=null, view='inbox', threadId=null, backView='inbox', epoch=0, revision=0, timerBusy=false, signature='', sending=false;
-  let adminPage=1,adminPages=1,adminSearch='',adminState='active',adminThread=false,moderated=null,notificationPage=1,notificationPages=1,notificationThrough=0,notificationSignature='';
+  let adminPage=1,adminPages=1,adminSearch='',adminState='active',adminThread=false,moderated=null,pendingModeration=null,notificationPage=1,notificationPages=1,notificationThrough=0,notificationSignature='';
   const date=value=>new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value));
   const node=(tag,text,className)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el;};
   function status(id,text='',error=false){const el=$(id);el.textContent=text;el.classList.toggle('error',error);}
@@ -13,7 +13,7 @@ export function createConversations({api,onProfile,onExpired}) {
   }
   function clear(){
     $('#landing').append($('.how'));
-    $('#moderation-dialog').close();$('#admin-nav').hidden=true;$('#notifications-button').hidden=true;$('#admin-list').replaceChildren();$('#notifications-list').replaceChildren();$('#admin-audit').replaceChildren();moderated=null;notificationSignature='';
+    $('#moderation-dialog').close();$('#admin-nav').hidden=true;$('#notifications-button').hidden=true;$('#admin-list').replaceChildren();$('#notifications-list').replaceChildren();$('#admin-audit').replaceChildren();moderated=null;pendingModeration=null;notificationSignature='';
     identity=null;epoch++;threadId=null;root.hidden=true;$('#member-nav').hidden=true;$('#ask-question').hidden=true;$('#member-name').hidden=true;
     $('#questions-list').replaceChildren();$('#thread-replies').replaceChildren();$('#original-question').replaceChildren();$('#question-form').reset();$('#reply-form').reset();
   }
@@ -81,7 +81,7 @@ export function createConversations({api,onProfile,onExpired}) {
       }
       for(const reply of thread.replies){const article=$('#thread-replies').querySelector(`[data-reply-id="${reply.id}"]`);if(article){renderVotes(article,reply);if(thread.deletedAt!==null)article.querySelectorAll('button').forEach(b=>b.disabled=true);}}
       if(!document.hidden&&thread.deletedAt===null){await api('/api/questions/'+id+'/read',{revision:thread.revision});await loadNotifications();}
-    }catch(error){if(current===epoch){await failure(error,'#thread-status');if(error.httpStatus===404){$('#thread-category').textContent='';$('#admin-thread-actions').hidden=true;moderated=null;$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();$('#reply-form').hidden=true;}}}
+    }catch(error){if(current===epoch){await failure(error,'#thread-status');if(error.httpStatus===404){revision=0;$('#replies-title').textContent='Replies';$('#thread-category').textContent='';$('#admin-thread-actions').hidden=true;moderated=null;$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();$('#reply-form').hidden=true;}}}
   }
   async function openThread(id,fromAdmin=false){
     adminThread=fromAdmin;if(fromAdmin)backView='admin';
@@ -132,7 +132,7 @@ export function createConversations({api,onProfile,onExpired}) {
     if(!background)status('#admin-status','Loading conversations…');
     try{const result=await api('/api/admin/conversations?state='+adminState+'&page='+adminPage+'&search='+encodeURIComponent(adminSearch));if(current!==epoch)return;adminPage=result.page;adminPages=result.pages;status('#admin-status');const next=JSON.stringify(result);if(signature===next)return;signature=next;
       $('#admin-stats').replaceChildren();for(const [key,label]of [['members','Members'],['active','Active conversations'],['deleted','Deleted conversations'],['replies','Active replies']]){const card=node('div');card.append(node('dt',label),node('dd',result.stats[key]));$('#admin-stats').append(card);}
-      $('#admin-list').replaceChildren();for(const item of result.questions){const button=node('button',undefined,'question-row');button.type='button';button.append(node('h2',item.title),node('p',item.excerpt),node('p','By '+item.author+' · '+date(item.createdAt)+' · '+item.replyCount+' replies','muted'),node('p',item.categories.map(t=>t.name).join(' · '),'question-meta'));if(item.deletedAt!==null)button.append(node('p','Deleted '+date(item.deletedAt),'muted'));button.addEventListener('click',()=>openThread(item.id,true));$('#admin-list').append(button);}if(!result.questions.length)$('#admin-list').append(node('p','No conversations found.','empty-state'));
+      $('#admin-list').replaceChildren();for(const item of result.questions){const button=node('button',undefined,'question-row');button.type='button';button.append(node('h2',item.title),node('p',item.excerpt),node('p','By '+item.author+' · '+date(item.createdAt)+' · '+item.replyCount+(item.replyCount===1?' reply':' replies'),'muted'),node('p',item.categories.map(t=>t.name).join(' · '),'question-meta'));if(item.deletedAt!==null)button.append(node('p','Deleted '+date(item.deletedAt),'muted'));button.addEventListener('click',()=>openThread(item.id,true));$('#admin-list').append(button);}if(!result.questions.length)$('#admin-list').append(node('p','No conversations found.','empty-state'));
       $('#admin-page').textContent='Page '+adminPage+' of '+adminPages+' · '+result.total+' conversations';$('#admin-prev').disabled=adminPage<=1;$('#admin-next').disabled=adminPage>=adminPages;
     }catch(error){if(current===epoch)await failure(error,'#admin-status');}
   }
@@ -141,11 +141,11 @@ export function createConversations({api,onProfile,onExpired}) {
   $('#admin-state').addEventListener('change',()=>{adminState=$('#admin-state').value;adminPage=1;signature='';loadAdmin();});
   $('#admin-prev').addEventListener('click',()=>{if(adminPage>1){adminPage--;loadAdmin();}});$('#admin-next').addEventListener('click',()=>{if(adminPage<adminPages){adminPage++;loadAdmin();}});
   $('#moderate-conversation').addEventListener('click',()=>{
-    if(!moderated||identity?.role!=='admin')return;const removing=moderated.deletedAt===null;$('#moderation-form').reset();status('#moderation-status');$('#moderation-title').textContent=removing?'Delete conversation?':'Restore conversation?';$('#moderation-target').textContent='“'+moderated.body.slice(0,220)+'” — '+moderated.author+' · '+date(moderated.createdAt);$('#moderation-impact').textContent=removing?'This hides the question, all '+moderated.replies.length+' replies, ratings and related notifications from members. Replies cannot be added. Stars from these replies will be excluded. You can restore the conversation from Deleted conversations; this does not permanently erase it.':'This restores access for the original participants, along with replies, ratings and stars. Earlier notifications remain read. No new notification is sent.';$('#moderation-submit').textContent=removing?'Delete conversation':'Restore conversation';$('#moderation-dialog').showModal();
+    if(!moderated||identity?.role!=='admin')return;const removing=moderated.deletedAt===null;pendingModeration={id:moderated.id,action:removing?'delete':'restore'};$('#moderation-form').reset();status('#moderation-status');$('#moderation-title').textContent=removing?'Delete conversation?':'Restore conversation?';$('#moderation-target').textContent='“'+moderated.body.slice(0,220)+'” — '+moderated.author+' · '+date(moderated.createdAt);$('#moderation-impact').textContent=removing?'This hides the question, all '+moderated.replies.length+(moderated.replies.length===1?' reply':' replies')+', ratings and related notifications from members. Replies cannot be added. Stars from these replies will be excluded. You can restore the conversation from Deleted conversations; this does not permanently erase it.':'This restores access for the original participants, along with replies, ratings and stars. Earlier notifications remain read. No new notification is sent.';$('#moderation-submit').textContent=removing?'Delete conversation':'Restore conversation';$('#moderation-dialog').showModal();
   });
   $('#moderation-cancel').addEventListener('click',()=>$('#moderation-dialog').close());
   $('#moderation-form').addEventListener('submit',async event=>{
-    event.preventDefault();if(sending||!moderated||!$('#moderation-confirm').checked)return;const id=moderated.id,action=moderated.deletedAt===null?'delete':'restore',current=epoch;sending=true;$('#moderation-submit').disabled=true;
+    event.preventDefault();if(sending||!pendingModeration||!$('#moderation-confirm').checked)return;const {id,action}=pendingModeration,current=epoch;sending=true;$('#moderation-submit').disabled=true;
     try{await api('/api/admin/conversations/'+id+'/'+action,{confirmation:id});$('#moderation-dialog').close();if(current===epoch){await showAdmin();status('#admin-status',action==='delete'?'Conversation moved to Deleted conversations.':'Conversation restored.');await loadNotifications();}}
     catch(error){if(current===epoch)await failure(error,'#moderation-status');}finally{sending=false;$('#moderation-submit').disabled=false;}
   });

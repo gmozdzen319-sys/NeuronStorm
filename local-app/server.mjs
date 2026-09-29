@@ -154,6 +154,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });
+        if(path==='/'){const version=JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version;return res.end(readFileSync(join(root,file),'utf8').replace('__APP_VERSION__',version));}
         return res.end(readFileSync(join(root, file)));
       }
       return json(404, { error: 'Page not found.' });

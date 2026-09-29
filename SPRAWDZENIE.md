@@ -89,3 +89,9 @@ Home z sekcją główną: 32/32 testy. W przeglądarce potwierdzono nowe hasło 
 
 Przeniesienie How Neuron Storm works: 32/32 testy; przeglądarka potwierdziła położenie pod statystykami oraz powrót do sekcji landing po wylogowaniu.
 
+
+
+## Admin Dashboard / Notifications / v0.2.2
+36/36 testów przechodzi. Testy obejmują: autoryzację administratora i odporność na role z profilu, dostęp do obcych zamkniętych wątków, wyszukiwanie/paginację, potwierdzenie delete, origin, soft-delete i restore, blokadę odczytu/odpowiedzi/ocen/mark-read po usunięciu, ukrycie powiadomień i gwiazdek, odzyskanie, zachowanie profili i kategorii oraz trwały audit. Powiadomienia: wielu odbiorców i kategorii bez duplikatów, brak własnych i automatycznych kopii admina, izolacja kont, pojedynczy odczyt/odczyt wszystkich do znanej granicy, odczyt według rewizji i trwałość po ponownym otwarciu bazy.
+Przeglądarka: domyślny panel testowego admina, wyszukiwanie, pełny obcy wątek, jawne potwierdzenie delete, kosz i restore, brak nawigacji admina u członka; powiadomienia pojedyncze/wszystkie, automatyczna aktualizacja po odpowiedzi z drugiego klienta i otwarcie wątku z odczytem. Desktop i 390px: panel, lista powiadomień i dialog; brak błędów JS.
+Testy wyłącznie na bazach tymczasowych i w pamięci. Testowa sesja administratora została jawnie utworzona wyłącznie w izolowanym preview.mjs; nie użyto podpisu ani sesji rzeczywistego administratora. Produkcyjny serwer nie ma ścieżek /qa ani testowego obejścia logowania. Nie usunięto żadnej rzeczywistej rozmowy.

@@ -1,2 +1,16 @@
-{"name":"neuron-storm-local","version":"0.1.0","private":true,"type":"module","engines":{"node":">=24"},"scripts":{"start":"node server.mjs","test":"node --test test/*.test.mjs"},"dependencies":{"quais":"1.0.0-alpha.57"}}
-
+{
+  "name": "neuron-storm-local",
+  "version": "0.2.2",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "dependencies": {
+    "quais": "1.0.0-alpha.57"
+  }
+}

@@ -13,3 +13,5 @@
 - Home po zalogowaniu i kliknięciu Neuron Storm zawiera Ask a Question: 1–100 tematów łącznie z obu grup. Odbiorcy to unikalna suma pasujących kont poza autorem, ustalana przy wysyłaniu. Statystyki: konta, tematy, pytania, odpowiedzi.
 
 - Zatwierdzone: wyszukiwane listy kategorii używanych w profilach, łapki góra/dół pod odpowiedziami, jedna ocena na konto/odpowiedź bez samooceny. Gwiazdki profilu = aktualne otrzymane upvotes; downvotes nie odejmują punktów.
+
+- Przy każdej kolejnej zmianie aplikacji zwiększ wersję w local-app/package.json. Serwer wyświetla ją w lewym dolnym rogu; nie wpisuj odrębnej wersji w HTML. Drobne zmiany: patch; nowe funkcje: minor.
