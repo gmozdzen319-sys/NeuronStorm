@@ -15,3 +15,7 @@
 - Zatwierdzone: wyszukiwane listy kategorii używanych w profilach, łapki góra/dół pod odpowiedziami, jedna ocena na konto/odpowiedź bez samooceny. Gwiazdki profilu = aktualne otrzymane upvotes; downvotes nie odejmują punktów.
 
 - Przy każdej kolejnej zmianie aplikacji zwiększ wersję w local-app/package.json. Serwer wyświetla ją w lewym dolnym rogu; nie wpisuj odrębnej wersji w HTML. Drobne zmiany: patch; nowe funkcje: minor.
+
+- Zatwierdzone: Wallet tylko do odczytu dla adresu zalogowanej sesji, QUAI i tokeny z Quaiscan na Mainnet; jawnie opisuj zakres bez innych kont, Qi i testnetu. Nie dodawaj transakcji ani podpisów do podglądu sald.
+
+- Zatwierdzone 0.4.0: token Neuron Storm (NS), kontrakt 0x003bc332Ef45fdd554F9e81786be6312A72540E6, Quai Mainnet (chain ID 9), 18 decimals. Odczyt balanceOf/totalSupply przez oficjalny RPC, saldo w nagłówku, informacja NS is live. Nowa rejestracja wymaga wallet_watchAsset i jawnego oświadczenia użytkownika, że NS jest widoczny; API Pelagus nie dowodzi trwałego dodania. Nigdy nie przedstawiaj oświadczenia jako weryfikacji on-chain ani nie wymagaj zakupu tokenów. Zachowaj istniejące profile.

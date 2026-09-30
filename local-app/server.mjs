@@ -1,3 +1,6 @@
+import {createMarketReader} from './token-market.mjs';
+import {NS_TOKEN,createNeuronReader} from './neuron-token.mjs';
+import {createHoldingsReader} from './holdings.mjs';
 import {listNotifications,readNotifications} from './notifications.mjs';
 import {requireAdmin,adminList,adminThread,moderateThread} from './admin.mjs';
 import http from 'node:http';
@@ -17,8 +20,9 @@ const hash = (value) => createHash('sha256').update(value).digest('hex');
 const cookies = (req) => Object.fromEntries((req.headers.cookie || '').split(';').map(v => v.trim().split('=')));
 const failure = (status, message) => Object.assign(new Error(message), { status });
 
-export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin = 'http://localhost:3000', now = Date.now } = {}) {
+export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin = 'http://localhost:3000', now = Date.now, holdingsFetch = fetch, tokenFetch = fetch, marketFetch = fetch } = {}) {
   if (database !== ':memory:') mkdirSync(dirname(database), { recursive: true });
+  const runningVersion=JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version;
   const db = new DatabaseSync(database);
   db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
     CREATE TABLE IF NOT EXISTS accounts(address TEXT PRIMARY KEY, created_at INTEGER NOT NULL);
@@ -28,6 +32,11 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
     CREATE INDEX IF NOT EXISTS challenges_expiry ON challenges(expires);`);
   initProfiles(db);
   initThreads(db);
+  db.exec('CREATE TABLE IF NOT EXISTS token_confirmations(address TEXT PRIMARY KEY REFERENCES accounts(address), contract TEXT NOT NULL, confirmed_at INTEGER NOT NULL)');
+  const tokenConfirmed=address=>!!db.prepare('SELECT 1 FROM token_confirmations WHERE address=? AND contract=?').get(address.toLowerCase(),NS_TOKEN.address);
+  const readMarket=createMarketReader(marketFetch);
+  const readNeuron=createNeuronReader(tokenFetch);
+  const readHoldings = createHoldingsReader(holdingsFetch);
   const limits = new Map();
   const cookie = (name, value, age) => `${name}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${origin.startsWith('https:') ? '; Secure' : ''}`;
   function account(req) {
@@ -68,6 +77,12 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         db.prepare('DELETE FROM challenges WHERE expires<=?').run(now());
         db.prepare('DELETE FROM sessions WHERE expires<=?').run(now());
       }
+      if(path==='/api/version'&&req.method==='GET')return json(200,{version:runningVersion});
+      if(path==='/api/token/market'&&req.method==='GET')return json(200,await readMarket());
+      if(path==='/api/token'&&req.method==='GET')return json(200,await readNeuron());
+      if(path==='/api/token/balance'&&req.method==='GET'){const current=account(req);if(!current)throw failure(401,'Please sign in to view your balance.');return json(200,await readNeuron(current.address));}
+      if(path==='/api/token/confirm'&&req.method==='POST'){const current=account(req);if(!current)throw failure(401,'Please sign in first.');const input=await body(req);if(input.contract!==NS_TOKEN.address||input.confirmed!==true)throw failure(400,'Confirm that Neuron Storm is visible in Pelagus.');db.prepare('INSERT OR REPLACE INTO token_confirmations VALUES(?,?,?)').run(current.address.toLowerCase(),NS_TOKEN.address,now());return json(200,{confirmed:true});}
+      if(path==='/api/wallet' && req.method==='GET'){const current=account(req);if(!current)throw failure(401,'Please sign in to view your wallet.');const [holdings,neuron]=await Promise.allSettled([readHoldings(current.address),readNeuron(current.address)]);if(holdings.status==='rejected'&&neuron.status==='rejected')throw holdings.reason;const result=holdings.status==='fulfilled'?{...holdings.value,assets:[...holdings.value.assets]}:{address:current.address,network:'Quai Mainnet',assets:[],updatedAt:new Date().toISOString()};result.assets=result.assets.filter(asset=>asset.contract?.toLowerCase()!==NS_TOKEN.address.toLowerCase());if(neuron.status==='fulfilled')result.assets.unshift({name:NS_TOKEN.name,symbol:NS_TOKEN.symbol,type:'ERC-20',contract:NS_TOKEN.address,balance:neuron.value.balance});result.warning=holdings.status==='rejected'?'Other wallet balances are unavailable. Showing NS from Quai Network.':neuron.status==='rejected'?'NS balance could not be refreshed from Quai Network. Other balances are from Quaiscan.':'';return json(200,result);}
       if (path === '/api/session' && req.method === 'GET') return json(200, { account: account(req) });
       if(path==='/api/notifications'&&req.method==='GET')return json(200,listNotifications(db,account(req),new URL(req.url,origin).searchParams));
       if(['/api/notifications/read','/api/notifications/read-all'].includes(path)&&req.method==='POST')return json(200,readNotifications(db,account(req),await body(req),path.endsWith('read-all'),now()));
@@ -79,7 +94,6 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         throw failure(405,'This administration request is not supported.');
       }
       if(path==='/api/stats'&&req.method==='GET'){
-        if(!account(req))throw failure(401,'Your session has expired. Please sign in again.');
         return json(200,{stats:{members:db.prepare('SELECT count(*) AS n FROM accounts').get().n,topics:db.prepare('SELECT count(*) AS n FROM categories').get().n,questions:db.prepare('SELECT count(*) AS n FROM questions WHERE deleted_at IS NULL').get().n,replies:db.prepare('SELECT count(*) AS n FROM replies r JOIN questions q ON q.id=r.question_id WHERE q.deleted_at IS NULL').get().n}});
       }
       if(path==='/api/questions'){
@@ -101,9 +115,10 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         if (!current) throw failure(401, 'Your session has expired. Please sign in again.');
         const address = current.address.toLowerCase();
         if (path === '/api/categories' && req.method === 'GET') return json(200, { categories: readCategories(db,new URL(req.url,origin).searchParams.get('available')==='1') });
-        if (path === '/api/profile' && req.method === 'GET') return json(200, { profile: readProfile(db, address) });
+        if (path === '/api/profile' && req.method === 'GET') return json(200, { profile: readProfile(db, address), tokenSetupRequired: !readProfile(db,address)&&!tokenConfirmed(address), token:NS_TOKEN });
         if (path === '/api/profile' && req.method === 'POST') {
           const input = await body(req);
+          if(!readProfile(db,address)&&!tokenConfirmed(address))throw failure(409,'Add Neuron Storm to Pelagus and confirm it before completing your profile.');
           return json(200, { profile: saveProfile(db, address, input, now()) });
         }
         throw failure(405, 'This method is not supported.');
@@ -150,11 +165,11 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0)]);
         return json(200, { ok: true });
       }
-      const files = { '/': ['public/index.html', 'text/html'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
+      const files = { '/': ['public/index.html', 'text/html'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });
-        if(path==='/'){const version=JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version;return res.end(readFileSync(join(root,file),'utf8').replace('__APP_VERSION__',version));}
+        if(path==='/'){const version=runningVersion;return res.end(readFileSync(join(root,file),'utf8').replace('__APP_VERSION__',version));}
         return res.end(readFileSync(join(root, file)));
       }
       return json(404, { error: 'Page not found.' });

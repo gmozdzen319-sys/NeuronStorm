@@ -1,3 +1,6 @@
+import {NS_TOKEN,createNeuronReader} from '../neuron-token.mjs';
+import {addNeuronToken} from '../public/wallet.js';
+import {mockTokenFetch} from './token-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Wallet, isQuaiAddress } from 'quais';
@@ -8,11 +11,37 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomBytes, createHash } from 'node:crypto';
 import http from 'node:http';
+import {formatBalance,createHoldingsReader} from '../holdings.mjs';
+
+test('wallet uses authenticated address only, exact balances and caches explorer calls', async t => {
+  const seen=[];
+  const f=await fixture(t,{holdingsFetch:async url=>{seen.push(url);return {ok:true,json:async()=>({status:'1',result:url.searchParams.get('action')==='balance'?'123456789012345678901234567890':[{name:'Test token',symbol:'TEST',type:'ERC-20',contractAddress:'0x0000000000000000000000000000000000000001',balance:'1000001',decimals:'6'}]})};}});
+  assert.equal((await f.request('/api/wallet')).status,401);assert.equal(seen.length,0);
+  await f.login();
+  const result=await f.request('/api/wallet?address='+other.address);
+  assert.equal(result.status,200);assert.equal(result.data.address,wallet.address);
+  assert.equal(result.data.assets.find(a=>a.symbol==='QUAI').balance,'123456789012.34567890123456789');
+  assert.equal(result.data.assets.find(a=>a.symbol==='TEST').balance,'1.000001');
+  assert.ok(seen.every(url=>url.searchParams.get('address')===wallet.address));
+  await f.request('/api/wallet');assert.equal(seen.length,2);
+  await f.request('/api/logout',{});assert.equal((await f.request('/api/wallet')).status,401);
+});
+test('wallet distinguishes empty holdings from explorer failures and invalid data', async()=>{
+  assert.equal(formatBalance('1',18),'0.000000000000000001');
+  assert.throws(()=>formatBalance('NaN',18));assert.throws(()=>formatBalance('1',256));
+  const address='0x0000000000000000000000000000000000000000';
+  const read=createHoldingsReader(async url=>({ok:true,json:async()=>url.searchParams.get('action')==='balance'?{status:'1',result:'0'}:{status:'0',message:'No tokens found',result:[]}}));
+  assert.equal((await read(address)).assets.length,1);
+  for(const data of [{status:'0',message:'Rate limited',result:[]},{status:'1',result:[{contractAddress:address,balance:'invalid',decimals:18}]}]){
+    const fail=createHoldingsReader(async url=>({ok:true,json:async()=>url.searchParams.get('action')==='balance'?{status:'1',result:'0'}:data}));
+    await assert.rejects(fail(address),e=>e.status===502);
+  }
+});
 
 function newWallet() { let w; do { w = new Wallet(randomBytes(32).toString('hex')); } while (!isQuaiAddress(w.address)); return w; }
 const wallet = newWallet(), other = newWallet();
 async function fixture(t, extra = {}) {
-  const app = createApp({ database: ':memory:', ...extra });
+  const app = createApp({ database: ':memory:', tokenFetch:mockTokenFetch, ...extra });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${app.server.address().port}`;
   t.after(async () => { await new Promise(resolve => app.server.close(resolve)); app.db.close(); });
@@ -28,7 +57,7 @@ async function fixture(t, extra = {}) {
     });
   }
   const challenge = async (address = wallet.address) => (await request('/api/challenge', { address })).data;
-  const login = async (signer = wallet) => { const c = await challenge(signer.address); return request('/api/verify', { id: c.id, signature: await signer.signMessage(c.message) }); };
+  const login = async (signer = wallet) => { const c = await challenge(signer.address); const result=await request('/api/verify', { id: c.id, signature: await signer.signMessage(c.message) });if(result.status===200)await request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true});return result; };
   return { ...app, request, challenge, login, jar };
 }
 test('address alone is not authentication; signature creates session; logout revokes it', async t => {
@@ -224,7 +253,7 @@ test('administrator also starts with no profile and profile data cannot alter ro
   const f=await fixture(t),session=randomBytes(32).toString('hex');
   f.db.prepare('INSERT INTO accounts VALUES(?,?)').run(ADMIN,Date.now());
   f.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(session).digest('hex'),ADMIN,Date.now()+60000);
-  f.jar.ns_session=session;
+  f.jar.ns_session=session;await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true});
   assert.equal((await f.request('/api/profile')).data.profile,null);
   assert.equal((await f.request('/api/profile',{...profileInput,role:'member'})).status,200);
   assert.equal((await f.request('/api/session')).data.account.role,'admin');
@@ -272,7 +301,7 @@ test('shared thread reaches two recipients; outsiders blocked; unread, snapshots
   assert.equal((await f.request('/api/questions/'+newer.data.id,undefined,aHeaders)).status,404);
   assert.equal((await f.request('/api/questions/'+newer.data.id,undefined,outsiderHeaders)).status,200);
   const adminToken=randomBytes(32).toString('hex');f.db.prepare('INSERT INTO accounts VALUES(?,?)').run(ADMIN,time);f.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(adminToken).digest('hex'),ADMIN,time+60000);
-  const adminHeaders={Cookie:`ns_session=${adminToken}`};await f.request('/api/profile',{nickname:'Admin',work:['Administration'],hobbies:[]},adminHeaders);
+  const adminHeaders={Cookie:`ns_session=${adminToken}`};await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true},adminHeaders);await f.request('/api/profile',{nickname:'Admin',work:['Administration'],hobbies:[]},adminHeaders);
   assert.equal((await f.request('/api/questions?view=inbox',undefined,adminHeaders)).data.questions.length,2);
   assert.equal((await f.request('/api/questions/'+id,undefined,adminHeaders)).status,200);
   assert.equal((await f.request('/api/questions/'+id+'/replies',{body:'Admin note'},adminHeaders)).status,201);
@@ -304,7 +333,7 @@ test('questions, replies, recipients and read state survive database reopening',
 
 
 test('multiple topic groups deliver once per member and expose aggregate statistics only',async t=>{
-  const f=await fixture(t);assert.equal((await f.request('/api/stats')).status,401);
+  const f=await fixture(t);assert.equal((await f.request('/api/stats')).status,200);
   const ah=await createMember(f,newWallet(),'Author',['Writing']);
   const rh=await createMember(f,newWallet(),'Reader',['Books']);
   await f.request('/api/profile',{nickname:'Reader',work:['Books'],hobbies:['Gardening']},rh);
@@ -370,7 +399,7 @@ test('ratings and profile stars survive reopening the database',async t=>{
 
 async function adminMember(f){
   const session=randomBytes(32).toString('hex');f.db.prepare('INSERT OR IGNORE INTO accounts VALUES(?,?)').run(ADMIN,Date.now());f.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(session).digest('hex'),ADMIN,Date.now()+600000);
-  const headers={Cookie:`ns_session=${session}`};await f.request('/api/profile',{nickname:'Administrator',work:['Administration'],hobbies:[]},headers);return headers;
+  const headers={Cookie:`ns_session=${session}`};await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true},headers);await f.request('/api/profile',{nickname:'Administrator',work:['Administration'],hobbies:[]},headers);return headers;
 }
 test('admin dashboard protects endpoints, soft-deletes, audits and restores without losing participants',async t=>{
   const f=await fixture(t),ah=await createMember(f,newWallet(),'Author',['Books']),rh=await createMember(f,newWallet(),'Reader',['Books']),admin=await adminMember(f);
@@ -454,4 +483,57 @@ test('notification read state survives reopening with no migration duplicates',a
   const notice=(await first.request('/api/notifications',undefined,rh)).data.notifications[0];await first.request('/api/notifications/read',{id:notice.id},rh);
   const second=await fixture(t,{database});await second.login(recipient);const result=(await second.request('/api/notifications')).data;assert.equal(result.total,1);assert.equal(result.unread,0);assert.equal(result.notifications[0].id,notice.id);
   t.after(()=>rmSync(folder,{recursive:true,force:true}));
+});
+
+test('public statistics match signed-in totals without exposing private resources',async t=>{
+  const f=await fixture(t),ah=await createMember(f,newWallet(),'Private author',['Books']),rh=await createMember(f,newWallet(),'Private reader',['Books']),admin=await adminMember(f),anonymous={Cookie:''};
+  const categoryId=(await f.request('/api/categories',undefined,ah)).data.categories.work.find(c=>c.name==='Books').id;
+  const id=(await f.request('/api/questions',{categoryId,body:'Private question content'},ah)).data.id;
+  await f.request('/api/questions/'+id+'/replies',{body:'Private reply content'},rh);
+  const publicStats=await f.request('/api/stats',undefined,anonymous);
+  assert.equal(publicStats.status,200);assert.deepEqual(publicStats.data,(await f.request('/api/stats',undefined,ah)).data);
+  assert.deepEqual(publicStats.data,{stats:{members:3,topics:2,questions:1,replies:1}});
+  for(const path of ['/api/profile','/api/categories','/api/questions','/api/questions/'+id,'/api/notifications','/api/admin/conversations'])assert.equal((await f.request(path,undefined,anonymous)).status,401);
+  await f.request('/api/admin/conversations/'+id+'/delete',{confirmation:id},admin);
+  assert.deepEqual((await f.request('/api/stats',undefined,anonymous)).data,{stats:{members:3,topics:2,questions:0,replies:0}});
+  await f.request('/api/admin/conversations/'+id+'/restore',{confirmation:id},admin);
+  assert.deepEqual((await f.request('/api/stats',undefined,anonymous)).data,publicStats.data);
+});
+
+test('registration requires an authenticated explicit NS confirmation and persists it',async t=>{
+ const f=await fixture(t);assert.equal((await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true})).status,401);
+ const c=await f.challenge();await f.request('/api/verify',{id:c.id,signature:await wallet.signMessage(c.message)});
+ assert.equal((await f.request('/api/profile')).data.tokenSetupRequired,true);
+ assert.equal((await f.request('/api/profile',profileInput)).status,409);
+ assert.equal((await f.request('/api/token/confirm',{contract:other.address,confirmed:true})).status,400);
+ assert.equal((await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:false})).status,400);
+ assert.equal((await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true},{Origin:'https://evil.example'})).status,403);
+ await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true});
+ assert.equal((await f.request('/api/profile',profileInput)).status,200);
+ assert.equal((await f.request('/api/profile')).data.tokenSetupRequired,false);
+ assert.equal(f.db.prepare('SELECT count(*) AS n FROM token_confirmations').get().n,1);
+});
+test('NS balance uses session address and on-chain calls only; public supply exposes no balances',async t=>{
+ const calls=[];const f=await fixture(t,{tokenFetch:async(url,options)=>{calls.push(JSON.parse(options.body));return mockTokenFetch(url,options);}});
+ assert.equal((await f.request('/api/token/balance')).status,401);assert.equal(calls.length,0);
+ const stats=(await f.request('/api/token')).data;assert.equal(stats.totalSupply,'10000000');assert.equal(stats.balance,undefined);
+ await f.login();const result=(await f.request('/api/token/balance?address='+other.address)).data;
+ assert.equal(result.address,wallet.address);assert.equal(result.balance,'1234.56789');
+ assert.ok(calls.some(c=>c.method==='quai_call'&&c.params[0].data==='0x70a08231'+wallet.address.slice(2).toLowerCase().padStart(64,'0')));
+ assert.ok(calls.every(c=>['quai_chainId','quai_blockNumber','quai_call'].includes(c.method)));
+});
+test('NS reader rejects wrong networks, invalid contract results and network failures',async()=>{
+ for(const fetcher of [async()=>({ok:false}),async()=>({ok:true,json:async()=>({result:'0x3a98'})}),async(url,opts)=>JSON.parse(opts.body).method==='quai_call'?{ok:true,json:async()=>({result:'0x'})}:mockTokenFetch(url,opts)]){
+  await assert.rejects(createNeuronReader(fetcher)(wallet.address),e=>e.status===502);
+ }
+});
+test('adding NS checks account and mainnet, sends only watchAsset, handles refusal and switches',async()=>{
+ const calls=[];const provider={request:async request=>{calls.push(request);return request.method==='quai_accounts'?[wallet.address]:request.method==='quai_chainId'?'0x9':true;}};
+ assert.equal(await addNeuronToken(provider,wallet.address,NS_TOKEN),true);
+ assert.deepEqual(calls.map(c=>c.method),['quai_accounts','quai_chainId','wallet_watchAsset','quai_accounts']);
+ assert.deepEqual(calls[2].params,{type:'ERC20',options:{address:NS_TOKEN.address,symbol:'NS',decimals:18,chainId:9}});
+ await assert.rejects(addNeuronToken({request:async()=>[other.address]},wallet.address,NS_TOKEN),/signed-in account/);
+ await assert.rejects(addNeuronToken({request:async r=>r.method==='quai_accounts'?[wallet.address]:'0x3a98'},wallet.address,NS_TOKEN),/Mainnet/);
+ await assert.rejects(addNeuronToken({request:async r=>r.method==='quai_accounts'?[wallet.address]:r.method==='quai_chainId'?'0x9':false},wallet.address,NS_TOKEN),/not accepted/);
+ let reads=0;await assert.rejects(addNeuronToken({request:async r=>r.method==='quai_accounts'?[++reads===1?wallet.address:other.address]:r.method==='quai_chainId'?'0x9':true},wallet.address,NS_TOKEN),/account changed/);
 });

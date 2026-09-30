@@ -6,7 +6,7 @@ export function createConversations({api,onProfile,onExpired}) {
   const node=(tag,text,className)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el;};
   function status(id,text='',error=false){const el=$(id);el.textContent=text;el.classList.toggle('error',error);}
   function shell(next){
-    epoch++;view=next;$('#admin-view').hidden=next!=='admin';$('#notifications-view').hidden=next!=='notifications';signature='';revision=0;
+    epoch++;view=next;$('#wallet-view').hidden=next!=='wallet';$('#admin-view').hidden=next!=='admin';$('#notifications-view').hidden=next!=='notifications';signature='';revision=0;
     $('#landing').hidden=next!=='ask';root.hidden=next==='profile';$('#profile-area').hidden=next!=='profile';
     $('#questions-list-view').hidden=!['inbox','mine'].includes(next);$('#ask-view').hidden=next!=='ask';$('#thread-view').hidden=next!=='thread';
     document.querySelectorAll('[data-view]').forEach(button=>{if(button.dataset.view===next)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');});
@@ -14,8 +14,10 @@ export function createConversations({api,onProfile,onExpired}) {
   function clear(){
     $('#landing').append($('.how'));
     $('#moderation-dialog').close();$('#admin-nav').hidden=true;$('#notifications-button').hidden=true;$('#admin-list').replaceChildren();$('#notifications-list').replaceChildren();$('#admin-audit').replaceChildren();moderated=null;pendingModeration=null;notificationSignature='';
+    $('#wallet-button').hidden=true;$('#wallet-assets').replaceChildren();$('#wallet-address').textContent='';$('#wallet-updated').textContent='';status('#wallet-status');
     identity=null;epoch++;threadId=null;root.hidden=true;$('#member-nav').hidden=true;$('#ask-question').hidden=true;$('#member-name').hidden=true;
     $('#questions-list').replaceChildren();$('#thread-replies').replaceChildren();$('#original-question').replaceChildren();$('#question-form').reset();$('#reply-form').reset();
+    $('#landing').insertBefore($('.platform-stats'),$('.how'));loadStats();
   }
   async function failure(error,target){if(error.httpStatus===401){clear();await onExpired();return;}status(target,error.message||'Unable to load this conversation. Please try again.',true);}
   function questionRow(item){
@@ -100,7 +102,7 @@ export function createConversations({api,onProfile,onExpired}) {
   }
   for(const kind of ['work','hobbies'])$('#search-'+kind).addEventListener('input',()=>{const query=$('#search-'+kind).value.normalize('NFKC').toLocaleLowerCase().trim();let matches=0;for(const label of $('#question-'+kind).querySelectorAll('label')){label.hidden=!label.textContent.normalize('NFKC').toLocaleLowerCase().includes(query);if(!label.hidden)matches++;}$('#search-'+kind+'-empty').hidden=matches>0;});
   async function ask(focusQuestion=false){
-    if(!identity)return;shell('ask');$('#ask-view').append($('.how'));loadStats();$('#question-form').reset();status('#question-status','Loading topics…');$('#send-question').disabled=true;
+    if(!identity)return;shell('ask');$('#ask-view').append($('.platform-stats'),$('.how'));loadStats();$('#question-form').reset();status('#question-status','Loading topics…');$('#send-question').disabled=true;
     const current=epoch;
     try{const result=await api('/api/categories?available=1');if(current!==epoch)return;
       for(const kind of ['work','hobbies']){const list=$('#question-'+kind);list.replaceChildren();for(const topic of result.categories[kind]){const label=node('label',undefined,'topic-choice'),check=node('input');check.type='checkbox';check.name='question-topic';check.value=topic.id;label.append(check,node('span',topic.name));check.addEventListener('change',()=>updateChosen(kind));list.append(label);}if(!result.categories[kind].length)list.append(node('p','No available topics yet.','muted'));$('#picker-'+kind).open=false;$('#search-'+kind).value='';$('#search-'+kind+'-empty').hidden=true;updateChosen(kind);}
@@ -122,7 +124,7 @@ export function createConversations({api,onProfile,onExpired}) {
     catch(error){if(current===epoch)await failure(error,'#reply-status');}
     finally{sending=false;$('#send-reply').disabled=false;}
   });
-  document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{if(button.dataset.view==='profile')onProfile();else if(button.dataset.view==='admin')showAdmin();else if(button.dataset.view==='ask')ask();else showList(button.dataset.view);}));
+  document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{if(button.dataset.view==='profile')onProfile();else if(button.dataset.view==='wallet')showWallet();else if(button.dataset.view==='admin')showAdmin();else if(button.dataset.view==='ask')ask();else showList(button.dataset.view);}));
   $('.brand').addEventListener('click',event=>{if(identity){event.preventDefault();ask();}});
   $('#ask-question').addEventListener('click',()=>ask(true));$('#cancel-question').addEventListener('click',()=>showList());$('#back-to-questions').addEventListener('click',()=>backView==='admin'?showAdmin():backView==='notifications'?showNotifications():showList(backView));$('#retry-questions').addEventListener('click',()=>loadList());
   setInterval(async()=>{if(timerBusy||sending||document.hidden||!identity)return;timerBusy=true;try{if(view==='thread')await loadThread(true);else if(view==='admin')await loadAdmin(true);else await loadList(true);await loadNotifications();}finally{timerBusy=false;}},5000);
@@ -160,5 +162,15 @@ export function createConversations({api,onProfile,onExpired}) {
   $('#notifications-read-all').addEventListener('click',async()=>{try{await api('/api/notifications/read-all',{throughId:notificationThrough});await loadNotifications();}catch(error){await failure(error,'#notifications-status');}});
   $('#notifications-prev').addEventListener('click',()=>{if(notificationPage>1){notificationPage--;loadNotifications();}});$('#notifications-next').addEventListener('click',()=>{if(notificationPage<notificationPages){notificationPage++;loadNotifications();}});
 
-  return {clear,openProfile(){if(identity)shell('profile');},setIdentity(account,profile,openInbox=false){identity=account;$('#admin-nav').hidden=account.role!=='admin';$('#notifications-button').hidden=false;loadNotifications();$('#member-nav').hidden=false;$('#ask-question').hidden=false;$('#member-name').hidden=false;$('#member-name').textContent=profile.nickname;if(openInbox){if(account.role==='admin')showAdmin();else ask();}}};
+  async function showWallet(){if(!identity)return;shell('wallet');threadId=null;$('#wallet-title').focus();await loadWallet();}
+  async function loadWallet(){
+    if(!identity||view!=='wallet')return;const current=epoch,owner=identity.address;
+    $('#wallet-address').textContent=owner;$('#wallet-assets').replaceChildren();$('#wallet-updated').textContent='';$('#wallet-refresh').disabled=true;status('#wallet-status','Loading your balances…');
+    try{const result=await api('/api/wallet');if(current!==epoch||identity?.address!==owner)return;
+      for(const asset of result.assets){const card=node('article',undefined,'wallet-asset'),heading=node('div');heading.append(node('h2',asset.name),node('span',asset.symbol+' · '+asset.type,'muted'));card.append(heading,node('strong',asset.balance+(asset.rawUnits?' raw units':''),'wallet-balance'));if(asset.contract)card.append(node('p',asset.contract,'address'));$('#wallet-assets').append(card);}
+      status('#wallet-status',result.warning||'',!!result.warning);$('#wallet-updated').textContent='Last checked: '+date(result.updatedAt);
+    }catch(error){if(current===epoch)await failure(error,'#wallet-status');}finally{if(current===epoch)$('#wallet-refresh').disabled=false;}
+  }
+  $('#wallet-refresh').addEventListener('click',loadWallet);$('#wallet-profile').addEventListener('click',onProfile);
+  return {clear,setAccount(account){identity=account;$('#wallet-button').hidden=!account;},openProfile(){if(identity)shell('profile');},setIdentity(account,profile,openInbox=false){identity=account;$('#admin-nav').hidden=account.role!=='admin';$('#notifications-button').hidden=false;loadNotifications();$('#member-nav').hidden=false;$('#ask-question').hidden=false;$('#member-name').hidden=false;$('#member-name').textContent=profile.nickname;if(openInbox){if(account.role==='admin')showAdmin();else ask();}}};
 }

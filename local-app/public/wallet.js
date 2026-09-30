@@ -1,4 +1,16 @@
 const labels = { connect: 'wallet connection', challenge: 'message preparation', sign: 'message signing', account: 'account check', verify: 'server verification' };
+export async function addNeuronToken(provider,address,token){
+  if(!provider?.request)throw new Error('Open this page in a browser with Pelagus installed and unlocked.');
+  const accounts=await provider.request({method:'quai_accounts',params:[]});
+  if(accounts?.[0]?.toLowerCase()!==address.toLowerCase())throw new Error('Select your signed-in account in Pelagus, then try again.');
+  const chain=await provider.request({method:'quai_chainId',params:[]});
+  if(BigInt(chain)!==9n)throw new Error('Select Quai Mainnet in Pelagus, then try again.');
+  const accepted=await provider.request({method:'wallet_watchAsset',params:{type:'ERC20',options:{address:token.address,symbol:token.symbol,decimals:token.decimals,chainId:9}}});
+  if(accepted!==true)throw new Error('The token request was not accepted. Please try again.');
+  const current=await provider.request({method:'quai_accounts',params:[]});
+  if(current?.[0]?.toLowerCase()!==address.toLowerCase())throw new Error('Your account changed. Please sign in again.');
+  return true;
+}
 async function atStage(stage, action) {
   try { return await action(); }
   catch (cause) {

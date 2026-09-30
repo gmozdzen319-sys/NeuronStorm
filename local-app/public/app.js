@@ -1,21 +1,24 @@
-import { connectWallet, signIn, walletError } from './wallet.js';
+import {createTokenUI} from './token-ui.js';
+import { connectWallet, signIn, walletError, addNeuronToken } from './wallet.js';
 import { createConversations } from './conversations.js';
 const $ = selector => document.querySelector(selector);
 const login = $('#login'), logout = $('#logout'), status = $('#status'), form = $('#profile-form');
 let busy = false, generation = 0, connectedAddress = null;
 let currentAccount = null, profile = null, catalog = { work: [], hobbies: [] }, selected = { work: [], hobbies: [] };
+let tokenSetupRequired=false, neuronToken=null;
 let profileRevision = 0, saving = false, loading = false;
 const key = name => name.normalize('NFKC').replace(/\s/gu, '').toLowerCase();
 function resetConnection() { connectedAddress = null; login.textContent = 'Sign in with Pelagus'; }
 async function api(path, data) {
   const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST', credentials: 'same-origin', headers: data === undefined ? {} : { 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data) });
   const result = await response.json();
-  if (!response.ok) throw Object.assign(new Error(result.error || 'Unable to reach the server.'), { httpStatus: response.status });
+  if (!response.ok) throw Object.assign(new Error(response.status===404 && ['/api/wallet','/api/token','/api/token/balance','/api/token/confirm'].includes(path) ? 'This feature needs the latest server version. Restart Neuron Storm and refresh the page.' : result.error || 'Unable to reach the server.'), { httpStatus: response.status });
   return result;
 }
 function notice(message = '', error = false) { status.textContent = message; status.classList.toggle('error', error); }
 function profileNotice(message = '', type = '') { const target=$('#profile-status'); target.textContent=message; target.className=type; }
 function showProfile() {
+  $('#token-setup').hidden=true;
   conversations.openProfile();
   $('#profile-eyebrow').textContent='YOUR CORNER OF NEURON STORM';
   $('#profile-title').textContent='My Profile';
@@ -46,6 +49,8 @@ function fillOptions() {
   }
 }
 function showEditor() {
+  $('#token-setup').hidden=!tokenSetupRequired;
+  if(tokenSetupRequired){form.hidden=true;$('#profile-view').hidden=true;$('#profile-title').textContent='Welcome to Neuron Storm';$('#profile-intro').textContent='One more step before creating your profile.';return;}
   $('#profile-eyebrow').textContent=profile?'KEEP YOUR PROFILE UP TO DATE':'MAKE YOURSELF AT HOME';
   $('#profile-title').textContent=profile?'Edit your profile':'Create your profile';
   $('#profile-intro').textContent='A little about you and the topics you care about.';
@@ -65,7 +70,7 @@ async function loadProfile() {
   try {
     const [saved,topics]=await Promise.all([api('/api/profile'),api('/api/categories')]);
     if(revision!==profileRevision)return;
-    profile=saved.profile;catalog=topics.categories;profileNotice();
+    profile=saved.profile;tokenSetupRequired=saved.tokenSetupRequired;neuronToken=saved.token;catalog=topics.categories;profileNotice();
     if(profile)conversations.setIdentity(currentAccount,profile,true);else showEditor();
   } catch(error) {
     if(revision!==profileRevision)return;
@@ -75,10 +80,10 @@ async function loadProfile() {
 }
 async function renderSession(account) {
   const changed=currentAccount?.address?.toLowerCase()!==account?.address?.toLowerCase();
-  currentAccount=account;
+  currentAccount=account;conversations.setAccount(account);tokenUI.setAccount(account);
   login.hidden=!!account;logout.hidden=!account;if(changed||!account)$('#landing').hidden=!!account;if(changed||!account)$('#profile-area').hidden=!account;
   $('#address').textContent=account?.address||'';$('#role').textContent=account?.role==='admin'?'Administrator':'';
-  if(!account){conversations.clear();profileRevision++;loading=false;profile=null;selected={work:[],hobbies:[]};form.reset();form.hidden=true;$('#profile-view').hidden=true;for(const kind of ['work','hobbies']){$('#saved-'+kind).replaceChildren();$('#'+kind+'-selected').replaceChildren();}$('#saved-nickname').textContent='';$('#saved-name').textContent='';profileNotice();return;}
+  if(!account){tokenSetupRequired=false;neuronToken=null;$('#token-setup').hidden=true;$('#token-confirm-area').hidden=true;$('#token-visible').checked=false;$('#confirm-ns').disabled=true;$('#token-setup-status').textContent='';conversations.clear();profileRevision++;loading=false;profile=null;selected={work:[],hobbies:[]};form.reset();form.hidden=true;$('#profile-view').hidden=true;for(const kind of ['work','hobbies']){$('#saved-'+kind).replaceChildren();$('#'+kind+'-selected').replaceChildren();}$('#saved-nickname').textContent='';$('#saved-name').textContent='';profileNotice();return;}
   if(changed) {await loadProfile();if(!profile)$('#profile-title').focus();}
 }
 function addTopic(kind) {
@@ -102,7 +107,7 @@ $('#edit-profile').addEventListener('click',async()=>{
 $('#cancel-edit').addEventListener('click',()=>{profileNotice();showProfile();});
 $('#retry-profile').addEventListener('click',loadProfile);
 form.addEventListener('submit',async event=>{
-  event.preventDefault();if(saving)return;
+  event.preventDefault();if(saving||tokenSetupRequired)return;
   profileNotice();
   const nickname=$('#nickname').value.trim();
   $('#nickname').setAttribute('aria-invalid',String(!nickname));
@@ -152,7 +157,8 @@ async function refresh(){
   catch{notice('Unable to reach the local server. Start Neuron Storm and refresh this page.',true);}
   finally{login.disabled=false;}
 }
-const conversations=createConversations({api,onProfile:async()=>{if(profile){profileNotice();showProfile();await refreshPoints();}},onExpired:async()=>{await renderSession(null);notice('Your session has expired. Please sign in again.',true);}});
+const conversations=createConversations({api,onProfile:async()=>{if(!profile){conversations.openProfile();showEditor();return;}if(profile){profileNotice();showProfile();await refreshPoints();}},onExpired:async()=>{await renderSession(null);notice('Your session has expired. Please sign in again.',true);}});
+const tokenUI=createTokenUI({api,onExpired:()=>renderSession(null)});
 await refresh();window.addEventListener('focus',refresh);setInterval(refresh,60000);
 
 async function refreshPoints(){
@@ -161,3 +167,15 @@ async function refreshPoints(){
   try{const result=await api('/api/profile');if(current!==profileRevision||!result.profile)return;profile.points=result.profile.points;$('#saved-points').textContent='★ '+profile.points+(profile.points===1?' star':' stars');}catch(error){if(error.httpStatus===401)await refresh();}
 }
 setInterval(()=>{if(!document.hidden)refreshPoints();},5000);
+
+$('#add-ns').addEventListener('click',async()=>{
+  const owner=currentAccount?.address,revision=profileRevision;if(!owner||!neuronToken)return;
+  const button=$('#add-ns');button.disabled=true;$('#token-setup-status').textContent='Check Pelagus to add Neuron Storm…';$('#token-confirm-area').hidden=true;$('#token-visible').checked=false;$('#confirm-ns').disabled=true;
+  try{await addNeuronToken(window.pelagus,owner,neuronToken);if(revision!==profileRevision||currentAccount?.address!==owner)return;$('#token-setup-status').textContent='Request sent to Pelagus. Confirm below once NS is visible in your wallet.';$('#token-confirm-area').hidden=false;}
+  catch(error){if(revision===profileRevision)$('#token-setup-status').textContent=error.message||'Unable to add NS. Please try again.';}finally{button.disabled=false;}
+});
+$('#token-visible').addEventListener('change',()=>{$('#confirm-ns').disabled=!$('#token-visible').checked;});
+$('#confirm-ns').addEventListener('click',async()=>{
+  if(!$('#token-visible').checked||!currentAccount||!neuronToken)return;const owner=currentAccount.address,revision=profileRevision;$('#confirm-ns').disabled=true;
+  try{await api('/api/token/confirm',{contract:neuronToken.address,confirmed:true});if(revision!==profileRevision||currentAccount?.address!==owner)return;tokenSetupRequired=false;showEditor();$('#nickname').focus();}catch(error){if(revision===profileRevision){$('#token-setup-status').textContent=error.message;$('#confirm-ns').disabled=false;}}
+});
