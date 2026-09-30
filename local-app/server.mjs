@@ -1,3 +1,5 @@
+import {initPayments,createPayments,REWARD_ADDRESS} from './payments.mjs';
+import {initCommunity,presence,ranking} from './community.mjs';
 import {initActions,prepareAction,submitAction} from './actions.mjs';
 import {initDebate,debate} from './debate.mjs';
 import {createMarketReader} from './token-market.mjs';
@@ -21,7 +23,7 @@ const hash = (value) => createHash('sha256').update(value).digest('hex');
 const cookies = (req) => Object.fromEntries((req.headers.cookie || '').split(';').map(v => v.trim().split('=')));
 const failure = (status, message) => Object.assign(new Error(message), { status });
 
-export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin = 'http://localhost:3000', now = Date.now, tokenFetch = fetch, marketFetch = fetch } = {}) {
+export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin = 'http://localhost:3000', now = Date.now, tokenFetch = fetch, marketFetch = fetch, paymentFetch = fetch } = {}) {
   if (database !== ':memory:') mkdirSync(dirname(database), { recursive: true });
   const runningVersion=JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version;
   const db = new DatabaseSync(database);
@@ -35,6 +37,8 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
   initThreads(db);
   initActions(db);
   initDebate(db);
+  initPayments(db);initCommunity(db);
+  const payments=createPayments(db,paymentFetch);
   db.exec('CREATE TABLE IF NOT EXISTS token_confirmations(address TEXT PRIMARY KEY REFERENCES accounts(address), contract TEXT NOT NULL, confirmed_at INTEGER NOT NULL)');
   const tokenConfirmed=address=>!!db.prepare('SELECT 1 FROM token_confirmations WHERE address=? AND contract=?').get(address.toLowerCase(),NS_TOKEN.address);
   const readMarket=createMarketReader(marketFetch);
@@ -80,6 +84,16 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         db.prepare('DELETE FROM challenges WHERE expires<=?').run(now());
         db.prepare('DELETE FROM sessions WHERE expires<=?').run(now());
       }
+      if(path==='/api/presence'&&req.method==='POST'){
+        const input=await body(req);let visitor=cookies(req).ns_visitor;
+        if(!visitor||!/^[a-f0-9]{64}$/.test(visitor))visitor=token();
+        res.setHeader('Set-Cookie',cookie('ns_visitor',visitor,604800));
+        return json(200,presence(db,hash(visitor),account(req),input.active===true,now()));
+      }
+      if(path==='/api/ranking'&&req.method==='GET')return json(200,ranking(db,new URL(req.url,origin).searchParams,now(),account(req)?.role==='admin'));
+      if(path==='/api/rewards'&&req.method==='GET'){const balance=await readNeuron(REWARD_ADDRESS);return json(200,{address:REWARD_ADDRESS,balance:balance.balance,updatedAt:balance.updatedAt});}
+      if(path==='/api/payments/prepare'&&req.method==='POST')return json(200,await payments.prepare(account(req),await body(req),now()));
+      if(path==='/api/payments/confirm'&&req.method==='POST')return json(200,await payments.confirm(account(req),await body(req),now()));
       if(path==='/api/version'&&req.method==='GET')return json(200,{version:runningVersion});
       if(path==='/api/token/market'&&req.method==='GET')return json(200,await readMarket());
       if(path==='/api/token'&&req.method==='GET')return json(200,await readNeuron());
@@ -94,13 +108,20 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
       if(['/api/notifications/read','/api/notifications/read-all'].includes(path)&&req.method==='POST')return json(200,readNotifications(db,account(req),await body(req),path.endsWith('read-all'),now()));
       if(path.startsWith('/api/admin/')){
         const current=account(req);requireAdmin(db,current);
+        if(path==='/api/admin/members'&&req.method==='GET'){
+          const params=new URL(req.url,origin).searchParams,page=Number(params.get('page')||1),search=(params.get('search')||'').trim();
+          if(!Number.isSafeInteger(page)||page<1||page>100000||search.length>100)throw failure(400,'Invalid member search.');
+          const filter="(?='' OR instr(lower(COALESCE(p.nickname,'')),lower(?))>0 OR instr(a.address,lower(?))>0)";
+          const args=[search,search,search],total=db.prepare(`SELECT count(*) AS n FROM accounts a LEFT JOIN profiles p ON p.address=a.address WHERE ${filter}`).get(...args).n;
+          return json(200,{page,pages:Math.max(1,Math.ceil(total/50)),members:db.prepare(`SELECT a.address,COALESCE(p.nickname,'Profile incomplete') AS nickname FROM accounts a LEFT JOIN profiles p ON p.address=a.address WHERE ${filter} ORDER BY a.created_at,a.address LIMIT 50 OFFSET ?`).all(...args,(page-1)*50)});
+        }
         if(path==='/api/admin/conversations'&&req.method==='GET')return json(200,adminList(db,current,new URL(req.url,origin).searchParams));
         const route=path.match(/^\/api\/admin\/conversations\/([a-f0-9-]{36})(?:\/(delete|restore))?$/);
         if(route){if(!route[2]&&req.method==='GET')return json(200,adminThread(db,current,route[1]));if(route[2]&&req.method==='POST')return json(200,moderateThread(db,current,route[1],route[2],await body(req),now()));}
         throw failure(405,'This administration request is not supported.');
       }
       if(path==='/api/stats'&&req.method==='GET'){
-        return json(200,{stats:{members:db.prepare('SELECT count(*) AS n FROM accounts').get().n,topics:db.prepare('SELECT count(*) AS n FROM categories').get().n,questions:db.prepare('SELECT count(*) AS n FROM questions WHERE deleted_at IS NULL').get().n,replies:db.prepare('SELECT count(*) AS n FROM replies r JOIN questions q ON q.id=r.question_id WHERE q.deleted_at IS NULL').get().n}});
+        return json(200,{stats:{members:db.prepare('SELECT count(*) AS n FROM accounts').get().n,topics:db.prepare('SELECT count(*) AS n FROM categories').get().n,questions:db.prepare('SELECT count(*) AS n FROM questions WHERE deleted_at IS NULL').get().n,replies:db.prepare('SELECT count(*) AS n FROM replies r JOIN questions q ON q.id=r.question_id WHERE q.deleted_at IS NULL AND r.deleted_at IS NULL').get().n}});
       }
       if(path==='/api/questions'){
         const current=account(req);
@@ -108,7 +129,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         if(req.method==='POST')return json(201,submitAction(db,current,hash(cookies(req).ns_session||''),path,await body(req),now()));
       }
       const voteRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/replies\/(\d+)\/vote$/);
-      if(voteRoute&&req.method==='POST')return json(200,voteOnReply(db,account(req),voteRoute[1],Number(voteRoute[2]),await body(req)));
+      if(voteRoute&&req.method==='POST')return json(200,voteOnReply(db,account(req),voteRoute[1],Number(voteRoute[2]),await body(req),now()));
       const threadRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})(?:\/(replies|read))?$/);
       if(threadRoute){
         const current=account(req),[,id,action]=threadRoute;
@@ -171,7 +192,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0)]);
         return json(200, { ok: true });
       }
-      const files = { '/': ['public/index.html', 'text/html'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
+      const files = { '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });

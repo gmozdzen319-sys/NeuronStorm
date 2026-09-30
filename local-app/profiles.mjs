@@ -9,7 +9,7 @@ function text(value, label, max, required = false) {
   return clean;
 }
 function categories(value, label) {
-  if (!Array.isArray(value) || value.length > 20) throw invalid(`${label} must contain no more than 20 topics.`);
+  if (!Array.isArray(value) || value.length > 4) throw invalid(`${label} must contain no more than 4 topics.`);
   const unique = new Map();
   for (const item of value) {
     const name = text(item, 'Topic', 60, true), key = categoryKey(name);
@@ -33,7 +33,7 @@ export function readProfile(db, address) {
   const profile = db.prepare('SELECT nickname, first_name AS firstName, last_name AS lastName FROM profiles WHERE address=?').get(address);
   if (!profile) return null;
   const selected = db.prepare(`SELECT c.id,c.kind,c.name FROM categories c JOIN profile_categories p ON p.category_id=c.id WHERE p.address=? ORDER BY c.name COLLATE NOCASE,c.id`).all(address);
-  const points=db.prepare('SELECT count(*) AS n FROM reply_votes v JOIN replies r ON r.id=v.reply_id JOIN questions q ON q.id=r.question_id WHERE q.deleted_at IS NULL AND r.author=? AND v.value=1').get(address).n;
+  const points=db.prepare('SELECT count(*) AS n FROM reply_votes v JOIN replies r ON r.id=v.reply_id JOIN questions q ON q.id=r.question_id WHERE q.deleted_at IS NULL AND r.deleted_at IS NULL AND r.author=? AND v.value=1').get(address).n;
   return { ...profile, points, work: selected.filter(c => c.kind === 'work').map(({id,name})=>({id,name})), hobbies: selected.filter(c => c.kind === 'hobbies').map(({id,name})=>({id,name})) };
 }
 export function readCategories(db,availableOnly=false) {

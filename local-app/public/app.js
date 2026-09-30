@@ -42,7 +42,7 @@ function renderSelected(kind) {
     button.addEventListener('click',()=>{selected[kind]=selected[kind].filter(item=>key(item)!==key(name));renderSelected(kind);$('#'+kind+'-input').focus();});
     li.append(label,button);list.append(li);
   }
-  $('#'+kind+'-empty').hidden=!!selected[kind].length;
+  $('#'+kind+'-empty').hidden=!!selected[kind].length;$('#'+kind+'-add').disabled=selected[kind].length>=4;
 }
 function fillOptions() {
   for(const kind of ['work','hobbies']) {
@@ -94,7 +94,7 @@ function addTopic(kind) {
   if(name.length>60){profileNotice('Topic names must be 60 characters or fewer.','error');input.focus();return false;}
   const canonical=catalog[kind].find(item=>key(item.name)===key(name))?.name||name;
   if(selected[kind].some(item=>key(item)===key(canonical))){input.value='';profileNotice('That topic is already selected.');return true;}
-  if(selected[kind].length>=20){profileNotice('You can choose up to 20 topics in each group.','error');return false;}
+  if(selected[kind].length>=4){profileNotice('You can choose up to 4 topics in each group.','error');return false;}
   selected[kind].push(canonical);input.value='';renderSelected(kind);profileNotice();input.focus();return true;
 }
 for(const kind of ['work','hobbies']) {

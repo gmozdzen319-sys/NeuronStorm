@@ -303,7 +303,7 @@ test('shared thread reaches two recipients; outsiders blocked; unread, snapshots
   await f.request('/api/profile',{nickname:'Electrician A',work:['Gardening'],hobbies:[]},aHeaders);
   await f.request('/api/profile',{nickname:'Observer',work:['Electrical work'],hobbies:[]},outsiderHeaders);
   assert.equal((await f.request('/api/questions/'+id,undefined,aHeaders)).status,200);
-  assert.equal((await f.request('/api/questions/'+id+'/replies',{body:'Still here.'},aHeaders)).status,201);
+  assert.equal((await f.request('/api/questions/'+id+'/replies',{body:'Still here.'},aHeaders)).status,409);
   assert.equal((await f.request('/api/questions/'+id,undefined,outsiderHeaders)).status,404);
   const newer=await f.request('/api/questions',{categoryId:category,body:'Another question.'},authorHeaders);
   assert.equal(newer.data.recipientCount,2);
@@ -625,4 +625,21 @@ test('frontend signed sender never posts when Pelagus declines or the account ch
   const send=createSignedSender(api,()=>({address:wallet.address}));
   await assert.rejects(send('/api/questions',{body:'Question',categoryIds:[1]}),/declined/);
   decline=false;await assert.rejects(send('/api/questions',{body:'Question',categoryIds:[1]}),/signed-in account/);assert.equal(commits,0);
+});
+
+
+test('profile topic caps are enforced by the server and preserve the saved profile',async t=>{
+ const f=await fixture(t);await f.login();const four=['One','Two','Three','Four'];
+ assert.equal((await f.request('/api/profile',{nickname:'Limits',work:four,hobbies:four})).status,200);
+ for(const kind of ['work','hobbies'])assert.equal((await f.request('/api/profile',{nickname:'Too many',work:four,hobbies:four,[kind]:[...four,'Five']})).status,400);
+ assert.equal((await f.request('/api/profile')).data.profile.nickname,'Limits');
+});
+test('member wallet directory is admin-only and public ranking never reveals addresses',async t=>{
+ const f=await fixture(t),headers=await createMember(f,newWallet(),'Member',['Books']);
+ assert.equal((await f.request('/api/admin/members',undefined,{Cookie:''})).status,401);
+ assert.equal((await f.request('/api/admin/members',undefined,headers)).status,403);
+ const session=randomBytes(32).toString('hex');f.db.prepare('INSERT INTO accounts VALUES(?,?)').run(ADMIN,Date.now());f.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(session).digest('hex'),ADMIN,Date.now()+60000);
+ const admin={Cookie:'ns_session='+session};await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true},admin);await f.request('/api/profile',{nickname:'Admin',work:['Administration'],hobbies:[]},admin);
+ const result=await f.request('/api/admin/members',undefined,admin);assert.equal(result.status,200);assert.equal(result.data.members.length,2);assert.ok(result.data.members.every(m=>/^0x/.test(m.address)));
+ const ranking=await f.request('/api/ranking',undefined,{Cookie:''});assert.equal(ranking.status,200);assert.ok(!JSON.stringify(ranking.data).includes('0x'));
 });

@@ -1,3 +1,4 @@
+import {createRewardsUI} from './rewards-ui.js';
 import {createNotificationSound} from './notification-sound.js';
 import {createSignedSender} from './wallet.js';
 import {createDebate} from './debate.js';
@@ -7,17 +8,18 @@ export function createConversations({api,onProfile,onExpired}) {
   let adminPage=1,adminPages=1,adminSearch='',adminState='active',adminThread=false,moderated=null,pendingModeration=null,notificationPage=1,notificationPages=1,notificationThrough=0,notificationSignature='';
   const sounds=createNotificationSound($('#notification-sound'));
   const signedSend=createSignedSender(api,()=>identity),debate=createDebate(api,onExpired);
+  const rewards=createRewardsUI(api,()=>identity,async()=>{await loadThread();status('#thread-status','NS payment confirmed.');});
   const date=value=>new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value));
   const node=(tag,text,className)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el;};
   function status(id,text='',error=false){const el=$(id);el.textContent=text;el.classList.toggle('error',error);}
   function shell(next){
-    debate.stop();epoch++;view=next;$('#wallet-view').hidden=next!=='wallet';$('#admin-view').hidden=next!=='admin';$('#notifications-view').hidden=next!=='notifications';signature='';revision=0;
+    debate.stop();epoch++;view=next;$('#ranking-view').hidden=next!=='ranking';$('#wallet-view').hidden=next!=='wallet';$('#admin-view').hidden=next!=='admin';$('#notifications-view').hidden=next!=='notifications';signature='';revision=0;
     $('#landing').hidden=next!=='ask';root.hidden=next==='profile';$('#profile-area').hidden=next!=='profile';
     $('#questions-list-view').hidden=!['inbox','mine'].includes(next);$('#ask-view').hidden=next!=='ask';$('#thread-view').hidden=next!=='thread';
     document.querySelectorAll('[data-view]').forEach(button=>{if(button.dataset.view===next)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');});
   }
   function clear(){
-    debate.stop();sounds.setAccount(null);
+    debate.stop();sounds.setAccount(null);rewards.clear();
     $('#landing').append($('.how'));
     $('#moderation-dialog').close();$('#admin-nav').hidden=true;$('#notifications-button').hidden=true;$('#admin-list').replaceChildren();$('#notifications-list').replaceChildren();$('#admin-audit').replaceChildren();moderated=null;pendingModeration=null;notificationSignature='';
     $('#wallet-button').hidden=true;$('#wallet-assets').replaceChildren();$('#wallet-address').textContent='';$('#wallet-updated').textContent='';status('#wallet-status');
@@ -56,7 +58,7 @@ export function createConversations({api,onProfile,onExpired}) {
   function renderMessage(message,question=false){
     const article=node('article',undefined,question?'':'reply');
     const meta=node('div',undefined,'message-meta');meta.append(node('strong',message.author),node('time',date(message.createdAt)));meta.lastChild.dateTime=new Date(message.createdAt).toISOString();
-    article.append(meta,node('p',message.body,'message-body'));return article;
+    if(message.editedAt)meta.append(node('span','Edited '+date(message.editedAt)));article.append(meta,node('p',message.body,'message-body'));return article;
   }
   function renderVotes(article,reply){
     let bar=article.querySelector('.reply-votes');
@@ -73,13 +75,13 @@ export function createConversations({api,onProfile,onExpired}) {
     const current=epoch,id=threadId;
     try{
       const result=await api((adminThread?'/api/admin/conversations/':'/api/questions/')+id);if(current!==epoch||id!==threadId)return;
-      const thread=result.thread;if(thread.deletedAt===null)debate.start(id);else debate.stop();status('#thread-status');moderated=adminThread?thread:null;$('#admin-thread-actions').hidden=!adminThread;$('#reply-form').hidden=thread.deletedAt!==null;if(adminThread){$('#admin-deleted-note').hidden=thread.deletedAt===null;$('#moderate-conversation').textContent=thread.deletedAt===null?'Delete conversation':'Restore conversation';$('#admin-audit').replaceChildren(...(result.audit.length?result.audit.map(item=>node('li',(item.action==='delete'?'Deleted':'Restored')+' · '+date(item.createdAt)+' · '+item.actor)):[node('li','No moderation actions yet.')]));}
+      const thread=result.thread;if(thread.deletedAt===null)debate.start(id);else debate.stop();status('#thread-status');moderated=adminThread?thread:null;$('#admin-thread-actions').hidden=!adminThread;$('#reply-form').hidden=thread.deletedAt!==null||!thread.canReply;$('#one-answer-note').hidden=thread.deletedAt!==null||thread.canReply;if(adminThread){$('#admin-deleted-note').hidden=thread.deletedAt===null;$('#moderate-conversation').textContent=thread.deletedAt===null?'Delete conversation':'Restore conversation';$('#admin-audit').replaceChildren(...(result.audit.length?result.audit.map(item=>node('li',(item.action==='delete'?'Deleted':'Restored')+' · '+date(item.createdAt)+' · '+item.actor)):[node('li','No moderation actions yet.')]));}
       if(thread.revision!==revision){
         $('#thread-category').textContent=(thread.categories||[{name:thread.category}]).map(t=>t.name).join(' · ');
         $('#original-question').replaceChildren(renderMessage(thread,true));
         $('#replies-title').textContent=`Replies (${thread.replies.length})`;
         const list=$('#thread-replies');
-        if(!revision)list.replaceChildren();
+        list.replaceChildren();
         if(!thread.replies.length){list.replaceChildren(node('p','No replies yet. Start the conversation.','muted'));}
         else{
           if(!revision||!list.querySelector('[data-reply-id]'))list.replaceChildren();
@@ -87,7 +89,7 @@ export function createConversations({api,onProfile,onExpired}) {
         }
         revision=thread.revision;
       }
-      for(const reply of thread.replies){const article=$('#thread-replies').querySelector(`[data-reply-id="${reply.id}"]`);if(article){renderVotes(article,reply);if(thread.deletedAt!==null)article.querySelectorAll('button').forEach(b=>b.disabled=true);}}
+      for(const [replyIndex,reply] of thread.replies.entries()){const article=$('#thread-replies').querySelector(`[data-reply-id="${reply.id}"]`);if(article){article.querySelector('.message-body').textContent=reply.body;renderVotes(article,reply);rewards.decorate(article,reply);const replyList=$('#thread-replies');if(replyList.children[replyIndex]!==article)replyList.insertBefore(article,replyList.children[replyIndex]||null);if(thread.deletedAt!==null)article.querySelectorAll('button').forEach(b=>b.disabled=true);}}
       if(!document.hidden&&thread.deletedAt===null){await api('/api/questions/'+id+'/read',{revision:thread.revision});await loadNotifications();}
     }catch(error){if(current===epoch){await failure(error,'#thread-status');if(error.httpStatus===404){debate.stop();revision=0;$('#replies-title').textContent='Replies';$('#thread-category').textContent='';$('#admin-thread-actions').hidden=true;moderated=null;$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();$('#reply-form').hidden=true;}}}
   }
@@ -130,7 +132,7 @@ export function createConversations({api,onProfile,onExpired}) {
     catch(error){if(current===epoch)await failure(error,'#reply-status');}
     finally{sending=false;$('#send-reply').disabled=false;}
   });
-  document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{if(button.dataset.view==='profile')onProfile();else if(button.dataset.view==='wallet')showWallet();else if(button.dataset.view==='admin')showAdmin();else if(button.dataset.view==='ask')ask();else showList(button.dataset.view);}));
+  document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>{if(button.dataset.view==='profile')onProfile();else if(button.dataset.view==='wallet')showWallet();else if(button.dataset.view==='admin')showAdmin();else if(button.dataset.view==='ranking'){shell('ranking');rewards.show();$('#ranking-title').focus();}else if(button.dataset.view==='ask')ask();else showList(button.dataset.view);}));
   $('.brand').addEventListener('click',event=>{if(identity){event.preventDefault();ask();}});
   $('#ask-question').addEventListener('click',()=>ask(true));$('#cancel-question').addEventListener('click',()=>showList());$('#back-to-questions').addEventListener('click',()=>backView==='admin'?showAdmin():backView==='notifications'?showNotifications():showList(backView));$('#retry-questions').addEventListener('click',()=>loadList());
   setInterval(async()=>{if(timerBusy||sending||!identity)return;timerBusy=true;try{if(document.hidden){await loadNotifications();return;}if(view==='thread')await loadThread(true);else if(view==='admin')await loadAdmin(true);else await loadList(true);await loadNotifications();}finally{timerBusy=false;}},5000);
@@ -140,7 +142,7 @@ export function createConversations({api,onProfile,onExpired}) {
     if(!background)status('#admin-status','Loading conversations…');
     try{const result=await api('/api/admin/conversations?state='+adminState+'&page='+adminPage+'&search='+encodeURIComponent(adminSearch));if(current!==epoch)return;adminPage=result.page;adminPages=result.pages;status('#admin-status');const next=JSON.stringify(result);if(signature===next)return;signature=next;
       $('#admin-stats').replaceChildren();for(const [key,label]of [['members','Members'],['active','Active conversations'],['deleted','Deleted conversations'],['replies','Active replies']]){const card=node('div');card.append(node('dt',label),node('dd',result.stats[key]));$('#admin-stats').append(card);}
-      $('#admin-list').replaceChildren();for(const item of result.questions){const button=node('button',undefined,'question-row');button.type='button';button.append(node('h2',item.title),node('p',item.excerpt),node('p','By '+item.author+' · '+date(item.createdAt)+' · '+item.replyCount+(item.replyCount===1?' reply':' replies'),'muted'),node('p',item.categories.map(t=>t.name).join(' · '),'question-meta'));if(item.deletedAt!==null)button.append(node('p','Deleted '+date(item.deletedAt),'muted'));button.addEventListener('click',()=>openThread(item.id,true));$('#admin-list').append(button);}if(!result.questions.length)$('#admin-list').append(node('p','No conversations found.','empty-state'));
+      $('#admin-list').replaceChildren();for(const item of result.questions){const button=node('button',undefined,'question-row');button.type='button';button.append(node('h2',item.title),node('p',item.excerpt.split('\n').slice(1).join('\n').trim()),node('p','By '+item.author+' · '+date(item.createdAt)+' · '+item.replyCount+(item.replyCount===1?' reply':' replies'),'muted'),node('p',item.categories.map(t=>t.name).join(' · '),'question-meta'));if(item.deletedAt!==null)button.append(node('p','Deleted '+date(item.deletedAt),'muted'));button.addEventListener('click',()=>openThread(item.id,true));$('#admin-list').append(button);}if(!result.questions.length)$('#admin-list').append(node('p','No conversations found.','empty-state'));
       $('#admin-page').textContent='Page '+adminPage+' of '+adminPages+' · '+result.total+' conversations';$('#admin-prev').disabled=adminPage<=1;$('#admin-next').disabled=adminPage>=adminPages;
     }catch(error){if(current===epoch)await failure(error,'#admin-status');}
   }
@@ -178,5 +180,5 @@ export function createConversations({api,onProfile,onExpired}) {
     }catch(error){if(current===epoch)await failure(error,'#wallet-status');}finally{if(current===epoch)$('#wallet-refresh').disabled=false;}
   }
   $('#wallet-refresh').addEventListener('click',loadWallet);$('#wallet-profile').addEventListener('click',onProfile);
-  return {clear,setAccount(account){identity=account;sounds.setAccount(account);$('#wallet-button').hidden=!account;},openProfile(){if(identity)shell('profile');},setIdentity(account,profile,openInbox=false){identity=account;sounds.setAccount(account);$('#admin-nav').hidden=account.role!=='admin';$('#notifications-button').hidden=false;loadNotifications();$('#member-nav').hidden=false;$('#ask-question').hidden=false;$('#member-name').hidden=false;$('#member-name').textContent=profile.nickname;if(openInbox){if(account.role==='admin')showAdmin();else ask();}}};
+  return {clear,setAccount(account){identity=account;sounds.setAccount(account);rewards.setAccount(account);$('#wallet-button').hidden=!account;},openProfile(){if(identity)shell('profile');},setIdentity(account,profile,openInbox=false){identity=account;sounds.setAccount(account);rewards.setAccount(account);$('#admin-nav').hidden=account.role!=='admin';$('#notifications-button').hidden=false;loadNotifications();$('#member-nav').hidden=false;$('#ask-question').hidden=false;$('#member-name').hidden=false;$('#member-name').textContent=profile.nickname;if(openInbox){if(account.role==='admin')showAdmin();else ask();}}};
 }
