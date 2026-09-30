@@ -118,3 +118,7 @@ Przeglądarka na odizolowanej bazie w pamięci i testowych portfelach: wysłanie
 
 ## Wersja 0.7.0
 53/53 testy zaliczone, w tym identyfikacja własnej wiadomości z sesji, monotoniczne nowe zdarzenia, brak powtórzeń dźwięku, przełączenie konta, wyciszenie i brak odtwarzania zaległych wyciszonych zdarzeń. Syntezę dźwięku sprawdzono przez test AudioContext; nie deklarujemy odsłuchu fizycznych głośników. Przeglądarka: dymki dwóch testowych uczestników, zapamiętane wyciszenie po odświeżeniu, przełącznik obok dzwonka, 390 px bez przepełnienia, brak błędów JS. Animację obejrzano w chwili łączenia neuronów na rzeczywistej lokalnej stronie. Zrzuty debate-bubbles-preview.png (konta testowe), neuron-background-preview.png. Lokalny serwer uruchomiony jako 0.7.0, Render nie był wdrażany.
+
+
+## Wersja 0.7.1
+Nowy krój nagłówka hero: Segoe UI, bez kursywy w błękitnym fragmencie. Oryginalny PNG pozostał bez zmian; hero i profil mają maskę miękkich krawędzi w obu osiach, mieszanie screen i minimalny ruch 2 px / 0,3% w cyklu 16 sekund. Systemowe ograniczenie ruchu wyłącza animację. 53/53 testy zaliczone. Przeglądarka: desktop i 390 px bez przepełnienia, brak prostokątnych krawędzi logo, brak błędów JS. Podgląd hero-blended-logo-preview.png. Lokalny serwer 0.7.1; bez wdrożenia Render.
