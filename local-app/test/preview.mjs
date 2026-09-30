@@ -6,10 +6,10 @@ import {Wallet,isQuaiAddress} from 'quais';
 import {createApp,ADMIN} from '../server.mjs';
 const origin='http://127.0.0.1:43127';const {server,db}=createApp({database:':memory:',origin,tokenFetch:mockTokenFetch,holdingsFetch:async url=>({ok:true,json:async()=>({status:'1',result:url.searchParams.get('action')==='balance'?'125012345678901234567':[{name:'Demo token (test data)',symbol:'DEMO',type:'ERC-20',contractAddress:'0x0000000000000000000000000000000000000001',balance:'25000000',decimals:'6'}]})})});
 await new Promise(resolve=>server.listen(43127,'127.0.0.1',resolve));
-const sessions={},addresses={};
+const sessions={},addresses={},wallets={};
 for(const [actor,nickname,topic]of [['author','Morgan','Cooking'],['alex','Alex','Electrical work'],['sam','Sam','Electrical work'],['outsider','Taylor','Gardening'],['newcomer','New member','Books']]){
   let wallet;do{wallet=new Wallet(randomBytes(32).toString('hex'));}while(!isQuaiAddress(wallet.address));
-  addresses[actor]=wallet.address;
+  addresses[actor]=wallet.address;wallets[actor]=wallet;
   const challengeResponse=await fetch(origin+'/api/challenge',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json'},body:JSON.stringify({address:wallet.address})});
   const challenge=await challengeResponse.json();
   const response=await fetch(origin+'/api/verify',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',Cookie:challengeResponse.headers.getSetCookie()[0].split(';')[0]},body:JSON.stringify({id:challenge.id,signature:await wallet.signMessage(challenge.message)})});
@@ -19,7 +19,7 @@ for(const [actor,nickname,topic]of [['author','Morgan','Cooking'],['alex','Alex'
 }
 // Synthetic administrator session exists only in this disposable in-memory fixture.
 const adminToken=randomBytes(32).toString('hex');db.prepare('INSERT INTO accounts VALUES(?,?)').run(ADMIN,Date.now());db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(adminToken).digest('hex'),ADMIN,Date.now()+28800000);sessions.admin='ns_session='+adminToken+'; HttpOnly; SameSite=Strict; Path=/';
-async function qaRequest(actor,path,data){const response=await fetch(origin+path,{method:data===undefined?'GET':'POST',headers:{Origin:origin,'Content-Type':'application/json',Cookie:sessions[actor].split(';')[0]},body:data===undefined?undefined:JSON.stringify(data)});if(!response.ok)throw new Error('QA seed failed '+response.status);return response.json();}
+async function qaRequest(actor,path,data){if(data?.body&&(path==='/api/questions'||/^\/api\/questions\/[^/]+\/replies$/.test(path))){const challenge=await qaRequest(actor,'/api/actions/challenge',{path,payload:data});data={actionId:challenge.id,signature:await wallets[actor].signMessage(challenge.message)};}const response=await fetch(origin+path,{method:data===undefined?'GET':'POST',headers:{Origin:origin,'Content-Type':'application/json',Cookie:sessions[actor].split(';')[0]},body:data===undefined?undefined:JSON.stringify(data)});if(!response.ok)throw new Error('QA seed failed '+response.status);return response.json();}
 await qaRequest('admin','/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true});
 await qaRequest('admin','/api/profile',{nickname:'Test Administrator',work:['Administration'],hobbies:[]});
 const categoryId=(await qaRequest('author','/api/categories')).categories.work.find(c=>c.name==='Electrical work').id;
@@ -29,7 +29,8 @@ const reply=(await qaRequest('author','/api/questions/'+question.id)).thread.rep
 await qaRequest('author','/api/questions',{categoryId,body:'Which lighting controls are easiest to use?'});
 const handler=server.listeners('request')[0];server.removeListener('request',handler);
 server.on('request',(req,res)=>{
-  if(req.url==='/qa-wallet-provider.js'){res.writeHead(200,{'Content-Type':'text/javascript'});return res.end('window.pelagus={request:async ({method})=>{if(method==="quai_accounts")return '+JSON.stringify([addresses.newcomer])+';if(method==="quai_chainId")return "0x9";if(method==="wallet_watchAsset")return true;throw new Error("Unsupported QA request")}};');}
+  if(req.url==='/qa-wallet-provider.js'){const actor=Object.keys(sessions).find(key=>req.headers.cookie?.includes(sessions[key].split(';')[0]))||'author';res.writeHead(200,{'Content-Type':'text/javascript'});return res.end('window.pelagus={request:async ({method,params})=>{if(method==="quai_accounts")return '+JSON.stringify([addresses[actor]])+';if(method==="quai_chainId")return "0x9";if(method==="wallet_watchAsset")return true;if(method==="personal_sign"){const r=await fetch("/qa-sign",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({message:params[0]})});return (await r.json()).signature;}throw new Error("Unsupported QA request")}};');}
+  if(req.url==='/qa-sign'&&req.method==='POST'){const actor=Object.keys(sessions).find(key=>req.headers.cookie?.includes(sessions[key].split(';')[0]));if(!wallets[actor]){res.writeHead(403);return res.end('{}');}let body='';req.on('data',chunk=>body+=chunk);req.on('end',async()=>{try{const message=Buffer.from(JSON.parse(body).message.slice(2),'hex').toString('utf8');res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({signature:await wallets[actor].signMessage(message)}));}catch{res.writeHead(400);res.end('{}');}});return;}
   const actor=req.url?.match(/^\/qa\/(author|alex|sam|outsider|admin|newcomer)$/)?.[1];
   if(actor){res.writeHead(302,{'Set-Cookie':sessions[actor],Location:'/'});return res.end();}
   if(req.url==='/'&&req.method==='GET'){

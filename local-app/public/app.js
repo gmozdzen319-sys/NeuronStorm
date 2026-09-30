@@ -1,3 +1,5 @@
+import {startNeuronBackground} from './neuron-background.js';
+startNeuronBackground();
 import {createTokenUI} from './token-ui.js';
 import { connectWallet, signIn, walletError, addNeuronToken } from './wallet.js';
 import { createConversations } from './conversations.js';

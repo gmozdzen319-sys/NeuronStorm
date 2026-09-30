@@ -23,7 +23,7 @@ export function requireProfile(db,account){
   if(!account)throw fail(401,'Your session has expired. Please sign in again.');
   if(!db.prepare('SELECT 1 FROM profiles WHERE address=?').get(account.address.toLowerCase()))throw fail(403,'Complete your profile before joining conversations.');
 }
-function allowed(db,id,account,includeDeleted=false){
+export function allowed(db,id,account,includeDeleted=false){
   const q=db.prepare('SELECT * FROM questions WHERE id=?').get(id);
   if(!q||(q.deleted_at!==null&&!(includeDeleted&&account.role==='admin'))||(account.role!=='admin'&&!db.prepare('SELECT 1 FROM question_participants WHERE question_id=? AND address=?').get(id,account.address.toLowerCase())))throw fail(404,'This conversation was not found.');
   return q;
@@ -33,7 +33,7 @@ export function createQuestion(db,account,input,now){
   const body=message(input.body,4000),raw=input.categoryIds??[input.categoryId],author=account.address.toLowerCase();
   if(!Array.isArray(raw)||!raw.length||raw.length>100||raw.some(id=>!Number.isSafeInteger(id)||!db.prepare('SELECT 1 FROM categories WHERE id=?').get(id)))throw fail(400,'Choose at least one existing topic (up to 100).');
   const categoryIds=[...new Set(raw)],categoryId=categoryIds[0];
-  db.exec('BEGIN IMMEDIATE');
+  db.exec('SAVEPOINT thread_write');
   try{
     const recipients=db.prepare(`SELECT DISTINCT address FROM profile_categories WHERE category_id IN (${categoryIds.map(()=>'?').join(',')}) AND address<>?`).all(...categoryIds,author);
     if(!recipients.length)throw fail(409,'No other members currently have any of the selected topics. Your question has not been sent. Choose another topic or try again later.');
@@ -44,8 +44,8 @@ export function createQuestion(db,account,input,now){
     for(const r of recipients)db.prepare('INSERT INTO question_participants VALUES(?,?,1)').run(id,r.address);
     for(const r of recipients)db.prepare("INSERT INTO notifications(address,question_id,actor,kind,revision,created_at) VALUES(?,?,?,'question',1,?)").run(r.address,id,author,now);
     db.prepare('INSERT INTO question_reads VALUES(?,?,1)').run(id,author);
-    db.exec('COMMIT');return {id,recipientCount:recipients.length};
-  }catch(error){db.exec('ROLLBACK');throw error;}
+    db.exec('RELEASE thread_write');return {id,recipientCount:recipients.length};
+  }catch(error){db.exec('ROLLBACK TO thread_write; RELEASE thread_write');throw error;}
 }
 export function listQuestions(db,account,view){
   requireProfile(db,account);
@@ -83,8 +83,8 @@ export function voteOnReply(db,account,id,replyId,input){
 }
 export function replyToThread(db,account,id,input,now){
   requireProfile(db,account);allowed(db,id,account);const body=message(input.body,2000);
-  db.exec('BEGIN IMMEDIATE');
-  try{db.prepare('INSERT INTO replies(question_id,author,body,created_at) VALUES(?,?,?,?)').run(id,account.address.toLowerCase(),body,now);db.prepare('UPDATE questions SET revision=revision+1,updated_at=? WHERE id=?').run(now,id);db.prepare("INSERT INTO notifications(address,question_id,actor,kind,revision,created_at) SELECT qp.address,q.id,?,'reply',q.revision,? FROM question_participants qp JOIN questions q ON q.id=qp.question_id WHERE q.id=? AND qp.address<>?").run(account.address.toLowerCase(),now,id,account.address.toLowerCase());db.exec('COMMIT');return {ok:true};}catch(error){db.exec('ROLLBACK');throw error;}
+  db.exec('SAVEPOINT thread_write');
+  try{db.prepare('INSERT INTO replies(question_id,author,body,created_at) VALUES(?,?,?,?)').run(id,account.address.toLowerCase(),body,now);db.prepare('UPDATE questions SET revision=revision+1,updated_at=? WHERE id=?').run(now,id);db.prepare("INSERT INTO notifications(address,question_id,actor,kind,revision,created_at) SELECT qp.address,q.id,?,'reply',q.revision,? FROM question_participants qp JOIN questions q ON q.id=qp.question_id WHERE q.id=? AND qp.address<>?").run(account.address.toLowerCase(),now,id,account.address.toLowerCase());db.exec('RELEASE thread_write');return {ok:true};}catch(error){db.exec('ROLLBACK TO thread_write; RELEASE thread_write');throw error;}
 }
 export function markThreadRead(db,account,id,input){
   requireProfile(db,account);const q=allowed(db,id,account);

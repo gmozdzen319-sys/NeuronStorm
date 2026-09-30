@@ -108,3 +108,13 @@ Odczyt rzeczywistego kontraktu przez oficjalny RPC potwierdził podaż 10 000 00
 
 ## Cena NS 0.5.0
 46/46 testów: wybór właściwej puli i płynności, zmiana dodatnia/ujemna/zerowa/brak danych, nowa pula, cache i awarie. Rzeczywisty odczyt GeckoTerminal działa; serwer zrestartowany do 0.5.0. Sprawdzono dokładny href Quainance z ?ve, widok desktop i 390 px, brak przepełnienia i błędów JS. Podgląd ns-price-preview.png.
+
+
+## Wersja 0.6.0 — 30.09.2026
+51/51 testów przez node --test local-app/test/*.test.mjs. Sprawdzono: Wallet tylko NS bez zapytań do indeksu innych aktywów; Quainance jako jedyne źródło ceny, cache i brak danych; podpis treści/domeny/konta/sesji/wątku, odmowę i zmianę konta, termin ważności, równoległe ponowienie i utratę odpowiedzi sieciowej; dwie kategorie prowadzą do jednego odbiorcy i jednego powiadomienia; identyczna odpowiedź nie zwiększa ponownie liczby odpowiedzi i powiadomień.
+Debate: dostęp wyłącznie uczestników/administratora, odmowa dla anonimowego i obcego konta, ochrona Origin, powtórzenie żądania nie powiela wiadomości, oddzielna historia bez formalnych odpowiedzi/powiadomień, obecność wygasa, paginacja starszych i nowszych wiadomości, usunięty wątek blokuje odczyt i wysłanie.
+Przeglądarka na odizolowanej bazie w pamięci i testowych portfelach: wysłanie podpisanego pytania oraz odpowiedzi, wspólna historia Debate między Alex i Sam, lista online, brak powtórzenia tytułu w kartach, Wallet tylko NS, 390 px bez przepełnienia poziomego, brak błędów JS. Zrzuty: debate-preview.png i ns-only-wallet-preview.png (dane testowe). Lokalny serwer uruchomiony jako 0.6.0; rzeczywiste publiczne API pokazuje source Quainance, a stronę sprawdzono po restarcie (ns-quainance-price-preview.png). Nie podpisywano prawdziwym portfelem użytkownika i nie wdrażano na Render. Historyczne duplikaty nie zostały skasowane ani scalone.
+
+
+## Wersja 0.7.0
+53/53 testy zaliczone, w tym identyfikacja własnej wiadomości z sesji, monotoniczne nowe zdarzenia, brak powtórzeń dźwięku, przełączenie konta, wyciszenie i brak odtwarzania zaległych wyciszonych zdarzeń. Syntezę dźwięku sprawdzono przez test AudioContext; nie deklarujemy odsłuchu fizycznych głośników. Przeglądarka: dymki dwóch testowych uczestników, zapamiętane wyciszenie po odświeżeniu, przełącznik obok dzwonka, 390 px bez przepełnienia, brak błędów JS. Animację obejrzano w chwili łączenia neuronów na rzeczywistej lokalnej stronie. Zrzuty debate-bubbles-preview.png (konta testowe), neuron-background-preview.png. Lokalny serwer uruchomiony jako 0.7.0, Render nie był wdrażany.

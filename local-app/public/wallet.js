@@ -1,4 +1,23 @@
 const labels = { connect: 'wallet connection', challenge: 'message preparation', sign: 'message signing', account: 'account check', verify: 'server verification' };
+export function createSignedSender(api,getAccount){
+  let pending=null;
+  return async function send(path,payload,progress=()=>{}){
+    const address=getAccount()?.address,provider=window.pelagus;
+    if(!address||!provider?.request)throw new Error('Open this page with Pelagus installed and sign in first.');
+    const check=async()=>{const accounts=await provider.request({method:'quai_accounts',params:[]});if(accounts?.[0]?.toLowerCase()!==address.toLowerCase()||getAccount()?.address!==address)throw new Error('Select your signed-in account in Pelagus, then try again.');};
+    await check();const key=JSON.stringify([address,path,payload]);
+    if(!pending||pending.key!==key){
+      const challenge=await api('/api/actions/challenge',{path,payload});
+      progress('Confirm this message in Pelagus…');
+      const message='0x'+Array.from(new TextEncoder().encode(challenge.message),b=>b.toString(16).padStart(2,'0')).join('');
+      const signature=await provider.request({method:'personal_sign',params:[message,address.toLowerCase()]});
+      await check();pending={key,actionId:challenge.id,signature};
+    }
+    progress('Sending your signed message…');
+    try{const result=await api(path,{actionId:pending.actionId,signature:pending.signature});pending=null;return result;}
+    catch(error){if(error.httpStatus&&error.httpStatus<500)pending=null;throw error;}
+  };
+}
 export async function addNeuronToken(provider,address,token){
   if(!provider?.request)throw new Error('Open this page in a browser with Pelagus installed and unlocked.');
   const accounts=await provider.request({method:'quai_accounts',params:[]});

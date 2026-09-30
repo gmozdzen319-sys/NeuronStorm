@@ -19,3 +19,5 @@
 - Zatwierdzone: Wallet tylko do odczytu dla adresu zalogowanej sesji, QUAI i tokeny z Quaiscan na Mainnet; jawnie opisuj zakres bez innych kont, Qi i testnetu. Nie dodawaj transakcji ani podpisów do podglądu sald.
 
 - Zatwierdzone 0.4.0: token Neuron Storm (NS), kontrakt 0x003bc332Ef45fdd554F9e81786be6312A72540E6, Quai Mainnet (chain ID 9), 18 decimals. Odczyt balanceOf/totalSupply przez oficjalny RPC, saldo w nagłówku, informacja NS is live. Nowa rejestracja wymaga wallet_watchAsset i jawnego oświadczenia użytkownika, że NS jest widoczny; API Pelagus nie dowodzi trwałego dodania. Nigdy nie przedstawiaj oświadczenia jako weryfikacji on-chain ani nie wymagaj zakupu tokenów. Zachowaj istniejące profile.
+
+- Zatwierdzone 0.6.0: Wallet tylko NS. Cena i zmiana z Quainance. Pytania i formalne odpowiedzi wymagają podpisu personal_sign w Pelagus i serwerowej weryfikacji treści, sesji i nonce; bez transakcji. Debate to wspólny prywatny czat w pytaniu, bez dodatkowego podpisu, z obecnością online. Nie scalać ani nie usuwać historycznych wątków na podstawie podobnej treści.

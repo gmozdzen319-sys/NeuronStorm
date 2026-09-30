@@ -1,5 +1,5 @@
 import {NS_TOKEN,createNeuronReader} from '../neuron-token.mjs';
-import {addNeuronToken} from '../public/wallet.js';
+import {addNeuronToken,createSignedSender} from '../public/wallet.js';
 import {mockTokenFetch} from './token-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -13,17 +13,16 @@ import { randomBytes, createHash } from 'node:crypto';
 import http from 'node:http';
 import {formatBalance,createHoldingsReader} from '../holdings.mjs';
 
-test('wallet uses authenticated address only, exact balances and caches explorer calls', async t => {
+test('wallet shows NS only for authenticated address and never calls the asset indexer', async t => {
   const seen=[];
   const f=await fixture(t,{holdingsFetch:async url=>{seen.push(url);return {ok:true,json:async()=>({status:'1',result:url.searchParams.get('action')==='balance'?'123456789012345678901234567890':[{name:'Test token',symbol:'TEST',type:'ERC-20',contractAddress:'0x0000000000000000000000000000000000000001',balance:'1000001',decimals:'6'}]})};}});
   assert.equal((await f.request('/api/wallet')).status,401);assert.equal(seen.length,0);
   await f.login();
   const result=await f.request('/api/wallet?address='+other.address);
   assert.equal(result.status,200);assert.equal(result.data.address,wallet.address);
-  assert.equal(result.data.assets.find(a=>a.symbol==='QUAI').balance,'123456789012.34567890123456789');
-  assert.equal(result.data.assets.find(a=>a.symbol==='TEST').balance,'1.000001');
+  assert.deepEqual(result.data.assets.map(a=>a.symbol),['NS']);
   assert.ok(seen.every(url=>url.searchParams.get('address')===wallet.address));
-  await f.request('/api/wallet');assert.equal(seen.length,2);
+  await f.request('/api/wallet');assert.equal(seen.length,0);
   await f.request('/api/logout',{});assert.equal((await f.request('/api/wallet')).status,401);
 });
 test('wallet distinguishes empty holdings from explorer failures and invalid data', async()=>{
@@ -38,7 +37,8 @@ test('wallet distinguishes empty holdings from explorer failures and invalid dat
   }
 });
 
-function newWallet() { let w; do { w = new Wallet(randomBytes(32).toString('hex')); } while (!isQuaiAddress(w.address)); return w; }
+const testSigners=new Map();
+function newWallet() { let w; do { w = new Wallet(randomBytes(32).toString('hex')); } while (!isQuaiAddress(w.address)); testSigners.set(w.address.toLowerCase(),w); return w; }
 const wallet = newWallet(), other = newWallet();
 async function fixture(t, extra = {}) {
   const app = createApp({ database: ':memory:', tokenFetch:mockTokenFetch, ...extra });
@@ -47,6 +47,15 @@ async function fixture(t, extra = {}) {
   t.after(async () => { await new Promise(resolve => app.server.close(resolve)); app.db.close(); });
   const jar = {};
   async function request(path, data, headers = {}) {
+    // Exercise the real signature flow using only disposable test wallets.
+    if(data?.body!==undefined&&(path==='/api/questions'||/^\/api\/questions\/[^/]+\/replies$/.test(path))){
+      const challenge=await request('/api/actions/challenge',{path,payload:data},headers);
+      if(challenge.status!==200)return challenge;
+      const session=(headers.Cookie??('ns_session='+jar.ns_session)).match(/ns_session=([^;]+)/)?.[1];
+      const account=session&&app.db.prepare('SELECT address FROM sessions WHERE token_hash=?').get(createHash('sha256').update(session).digest('hex'));
+      const signer=account&&testSigners.get(account.address);
+      if(signer)data={actionId:challenge.data.id,signature:await signer.signMessage(challenge.data.message)};
+    }
     return new Promise((resolve,reject)=>{
       const req=http.request(url+path,{method:data===undefined?'GET':'POST',headers:{Host:'localhost:3000',Origin:'http://localhost:3000','Content-Type':'application/json',Cookie:Object.entries(jar).map(([k,v])=>`${k}=${v}`).join('; '),...headers}},res=>{
         let raw='';res.on('data',chunk=>raw+=chunk);res.on('end',()=>{
@@ -304,7 +313,7 @@ test('shared thread reaches two recipients; outsiders blocked; unread, snapshots
   const adminHeaders={Cookie:`ns_session=${adminToken}`};await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true},adminHeaders);await f.request('/api/profile',{nickname:'Admin',work:['Administration'],hobbies:[]},adminHeaders);
   assert.equal((await f.request('/api/questions?view=inbox',undefined,adminHeaders)).data.questions.length,2);
   assert.equal((await f.request('/api/questions/'+id,undefined,adminHeaders)).status,200);
-  assert.equal((await f.request('/api/questions/'+id+'/replies',{body:'Admin note'},adminHeaders)).status,201);
+  assert.equal((await f.request('/api/questions/'+id+'/replies',{body:'Admin note'},adminHeaders)).status,400);
 });
 test('no recipients, invalid messages, incomplete profiles and foreign origins cannot create threads',async t=>{
   const f=await fixture(t);await f.login();
@@ -536,4 +545,84 @@ test('adding NS checks account and mainnet, sends only watchAsset, handles refus
  await assert.rejects(addNeuronToken({request:async r=>r.method==='quai_accounts'?[wallet.address]:'0x3a98'},wallet.address,NS_TOKEN),/Mainnet/);
  await assert.rejects(addNeuronToken({request:async r=>r.method==='quai_accounts'?[wallet.address]:r.method==='quai_chainId'?'0x9':false},wallet.address,NS_TOKEN),/not accepted/);
  let reads=0;await assert.rejects(addNeuronToken({request:async r=>r.method==='quai_accounts'?[++reads===1?wallet.address:other.address]:r.method==='quai_chainId'?'0x9':true},wallet.address,NS_TOKEN),/account changed/);
+});
+
+
+test('signed sends bind content, account, session and route; repeated confirmation writes once',async t=>{
+  let time=Date.now();const f=await fixture(t,{now:()=>time}),a=newWallet(),r=newWallet();
+  const ah=await createMember(f,a,'Author',['Writing']),rh=await createMember(f,r,'Driver',['Driver']);
+  await f.request('/api/profile',{nickname:'Driver',work:['Driver'],hobbies:['Travel']},rh);
+  const topics=(await f.request('/api/categories',undefined,ah)).data.categories,ids=[topics.work.find(x=>x.name==='Driver').id,topics.hobbies[0].id];
+  const prepare=async(path,payload,headers=ah)=> (await f.request('/api/actions/challenge',{path,payload},headers)).data;
+  assert.equal((await f.request('/api/questions',{},ah)).status,400);
+  const c=await prepare('/api/questions',{body:'One question',categoryIds:ids});
+  assert.match(c.message,/Driver/);assert.match(c.message,/Travel/);assert.match(c.message,/One question/);
+  const signed={actionId:c.id,signature:await a.signMessage(c.message)};
+  assert.equal((await f.request('/api/questions',{...signed,signature:await r.signMessage(c.message)},ah)).status,403);
+  assert.equal((await f.request('/api/questions',signed,rh)).status,403);
+  const results=await Promise.all([f.request('/api/questions',signed,ah),f.request('/api/questions',signed,ah)]);
+  assert.equal(results[0].status,201);assert.deepEqual(results[0].data,results[1].data);const id=results[0].data.id;
+  assert.equal(results[0].data.recipientCount,1);
+  const again=await f.request('/api/questions',{body:'One question',categoryIds:[...ids].reverse()},ah);assert.equal(again.data.id,id);
+  assert.equal((await f.request('/api/questions?view=inbox',undefined,rh)).data.questions.length,1);
+  assert.equal((await f.request('/api/notifications',undefined,rh)).data.notifications.length,1);
+  const path='/api/questions/'+id+'/replies';assert.equal((await f.request(path,signed,ah)).status,403);
+  const reply=await prepare(path,{body:'One reply'},rh),rs={actionId:reply.id,signature:await r.signMessage(reply.message)};
+  await f.request(path,rs,rh);await f.request(path,rs,rh);await f.request(path,{body:'One reply'},rh);
+  assert.equal((await f.request('/api/questions/'+id,undefined,ah)).data.thread.replies.length,1);
+  assert.equal((await f.request('/api/notifications',undefined,ah)).data.notifications.length,1);
+  const expires=await prepare(path,{body:'Expired'},rh);time+=300001;
+  assert.equal((await f.request(path,{actionId:expires.id,signature:await r.signMessage(expires.message)},rh)).status,409);
+  await f.login(a);const newSession={Cookie:'ns_session='+f.jar.ns_session};
+  assert.equal((await f.request('/api/questions',signed,newSession)).status,403);
+});
+
+test('Debate is private, unsigned, idempotent and separate from formal replies; presence expires',async t=>{
+  let time=Date.now();const f=await fixture(t,{now:()=>time});
+  const ah=await createMember(f,newWallet(),'Author',['Writing']),rh=await createMember(f,newWallet(),'Reader',['Books']),oh=await createMember(f,newWallet(),'Outsider',['Other']);
+  const categoryId=(await f.request('/api/categories',undefined,ah)).data.categories.work.find(x=>x.name==='Books').id;
+  const id=(await f.request('/api/questions',{categoryId,body:'Discuss books'},ah)).data.id,path='/api/questions/'+id+'/debate';
+  assert.equal((await f.request(path,undefined,oh)).status,404);
+  assert.equal((await f.request(path,undefined,{Cookie:''})).status,401);
+  const message={body:'A live idea',clientId:'11111111-1111-4111-8111-111111111111'};
+  assert.equal((await f.request(path,message,oh)).status,404);
+  assert.equal((await f.request(path,message,{...rh,Origin:'https://evil.example'})).status,403);
+  assert.equal((await f.request(path,message,rh)).status,200);await f.request(path,message,rh);
+  assert.equal((await f.request(path,{...message,body:'Changed'},rh)).status,409);
+  const seen=(await f.request(path+'?presence=1',undefined,ah)).data;
+  assert.equal(seen.messages.length,1);assert.equal(seen.messages[0].mine,0);assert.equal((await f.request(path,undefined,rh)).data.messages[0].mine,1);assert.deepEqual(seen.online,['Author','Reader']);
+  assert.equal((await f.request('/api/questions/'+id,undefined,ah)).data.thread.replies.length,0);
+  assert.equal((await f.request('/api/notifications',undefined,ah)).data.notifications.length,0);
+  time+=26000;assert.deepEqual((await f.request(path,undefined,ah)).data.online,[]);
+  // Seed older history only in the disposable database to verify both paging directions.
+  const address=f.db.prepare('SELECT author FROM questions WHERE id=?').get(id).author;
+  for(let n=0;n<60;n++)f.db.prepare('INSERT INTO debate_messages(question_id,author,body,client_id,created_at) VALUES(?,?,?,?,?)').run(id,address,'Older '+n,'seed-'+n,time);
+  const last=(await f.request(path,undefined,ah)).data;assert.equal(last.messages.length,50);assert.equal(last.hasEarlier,true);
+  const earlier=(await f.request(path+'?before='+last.messages[0].id,undefined,ah)).data;
+  assert.equal(earlier.messages.length,11);assert.equal(earlier.hasEarlier,false);
+  const newer=(await f.request(path+'?after='+earlier.messages.at(-1).id,undefined,ah)).data;assert.deepEqual(newer.messages,last.messages);
+  f.db.prepare('UPDATE questions SET deleted_at=? WHERE id=?').run(time,id);
+  assert.equal((await f.request(path,undefined,ah)).status,404);assert.equal((await f.request(path,message,rh)).status,404);
+});
+
+
+test('frontend signed sender reuses confirmation after a network error without signing twice',async t=>{
+  const old=globalThis.window;t.after(()=>{if(old===undefined)delete globalThis.window;else globalThis.window=old;});
+  let signs=0,commits=0;const requests=[];const account={address:wallet.address};
+  globalThis.window={pelagus:{request:async({method})=>{if(method==='quai_accounts')return [wallet.address];if(method==='personal_sign'){signs++;return 'test-signature';}throw Error('Unexpected wallet method');}}};
+  const api=async(path,data)=>{if(path==='/api/actions/challenge')return {id:'nonce',message:'Exact message'};requests.push(data);if(++commits===1)throw Error('Connection lost');return {id:'one-question'};};
+  const send=createSignedSender(api,()=>account);
+  await assert.rejects(send('/api/questions',{body:'Question',categoryIds:[1]}),/Connection lost/);
+  assert.deepEqual(await send('/api/questions',{body:'Question',categoryIds:[1]}),{id:'one-question'});
+  assert.equal(signs,1);assert.deepEqual(requests[0],requests[1]);
+});
+
+test('frontend signed sender never posts when Pelagus declines or the account changes',async t=>{
+  const old=globalThis.window;t.after(()=>{if(old===undefined)delete globalThis.window;else globalThis.window=old;});
+  let commits=0,current=wallet.address,decline=true;
+  globalThis.window={pelagus:{request:async({method})=>{if(method==='quai_accounts')return [current];if(decline)throw Error('Request declined');current=other.address;return 'test-signature';}}};
+  const api=async(path)=>{if(path==='/api/actions/challenge')return {id:'nonce',message:'Exact message'};commits++;};
+  const send=createSignedSender(api,()=>({address:wallet.address}));
+  await assert.rejects(send('/api/questions',{body:'Question',categoryIds:[1]}),/declined/);
+  decline=false;await assert.rejects(send('/api/questions',{body:'Question',categoryIds:[1]}),/signed-in account/);assert.equal(commits,0);
 });

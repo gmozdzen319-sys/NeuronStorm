@@ -1,6 +1,7 @@
+import {initActions,prepareAction,submitAction} from './actions.mjs';
+import {initDebate,debate} from './debate.mjs';
 import {createMarketReader} from './token-market.mjs';
 import {NS_TOKEN,createNeuronReader} from './neuron-token.mjs';
-import {createHoldingsReader} from './holdings.mjs';
 import {listNotifications,readNotifications} from './notifications.mjs';
 import {requireAdmin,adminList,adminThread,moderateThread} from './admin.mjs';
 import http from 'node:http';
@@ -11,7 +12,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getAddress, verifyMessage, isQuaiAddress } from 'quais';
 import { initProfiles, readProfile, readCategories, saveProfile } from './profiles.mjs';
-import { initThreads, createQuestion, listQuestions, readThread, replyToThread, markThreadRead, voteOnReply } from './threads.mjs';
+import { initThreads, listQuestions, readThread, markThreadRead, voteOnReply } from './threads.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 export const ADMIN = '0x00198C77e2cce7C839A34aF8C54Eb82106862640'.toLowerCase();
@@ -20,7 +21,7 @@ const hash = (value) => createHash('sha256').update(value).digest('hex');
 const cookies = (req) => Object.fromEntries((req.headers.cookie || '').split(';').map(v => v.trim().split('=')));
 const failure = (status, message) => Object.assign(new Error(message), { status });
 
-export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin = 'http://localhost:3000', now = Date.now, holdingsFetch = fetch, tokenFetch = fetch, marketFetch = fetch } = {}) {
+export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin = 'http://localhost:3000', now = Date.now, tokenFetch = fetch, marketFetch = fetch } = {}) {
   if (database !== ':memory:') mkdirSync(dirname(database), { recursive: true });
   const runningVersion=JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version;
   const db = new DatabaseSync(database);
@@ -32,11 +33,12 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
     CREATE INDEX IF NOT EXISTS challenges_expiry ON challenges(expires);`);
   initProfiles(db);
   initThreads(db);
+  initActions(db);
+  initDebate(db);
   db.exec('CREATE TABLE IF NOT EXISTS token_confirmations(address TEXT PRIMARY KEY REFERENCES accounts(address), contract TEXT NOT NULL, confirmed_at INTEGER NOT NULL)');
   const tokenConfirmed=address=>!!db.prepare('SELECT 1 FROM token_confirmations WHERE address=? AND contract=?').get(address.toLowerCase(),NS_TOKEN.address);
   const readMarket=createMarketReader(marketFetch);
   const readNeuron=createNeuronReader(tokenFetch);
-  const readHoldings = createHoldingsReader(holdingsFetch);
   const limits = new Map();
   const cookie = (name, value, age) => `${name}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${origin.startsWith('https:') ? '; Secure' : ''}`;
   function account(req) {
@@ -69,11 +71,12 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
       const path = new URL(req.url, origin).pathname;
       if (req.method === 'POST') {
         if (req.headers.origin !== origin) throw failure(403, 'This request origin is not allowed.');
-        const ip = req.socket.remoteAddress;
+        const isDebate=/^\/api\/questions\/[a-f0-9-]{36}\/debate$/.test(path);
+        const ip = (account(req)?.address.toLowerCase()||req.socket.remoteAddress)+(isDebate?':debate':':actions');
         const entry = limits.get(ip);
         const counter = !entry || entry.until <= now() ? { count: 0, until: now() + 60000 } : entry;
         limits.set(ip, counter);
-        if (++counter.count > 60) throw failure(429, 'Too many attempts. Please try again in a minute.');
+        if (++counter.count > (isDebate?120:60)) throw failure(429, 'Too many attempts. Please try again in a minute.');
         db.prepare('DELETE FROM challenges WHERE expires<=?').run(now());
         db.prepare('DELETE FROM sessions WHERE expires<=?').run(now());
       }
@@ -82,7 +85,10 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
       if(path==='/api/token'&&req.method==='GET')return json(200,await readNeuron());
       if(path==='/api/token/balance'&&req.method==='GET'){const current=account(req);if(!current)throw failure(401,'Please sign in to view your balance.');return json(200,await readNeuron(current.address));}
       if(path==='/api/token/confirm'&&req.method==='POST'){const current=account(req);if(!current)throw failure(401,'Please sign in first.');const input=await body(req);if(input.contract!==NS_TOKEN.address||input.confirmed!==true)throw failure(400,'Confirm that Neuron Storm is visible in Pelagus.');db.prepare('INSERT OR REPLACE INTO token_confirmations VALUES(?,?,?)').run(current.address.toLowerCase(),NS_TOKEN.address,now());return json(200,{confirmed:true});}
-      if(path==='/api/wallet' && req.method==='GET'){const current=account(req);if(!current)throw failure(401,'Please sign in to view your wallet.');const [holdings,neuron]=await Promise.allSettled([readHoldings(current.address),readNeuron(current.address)]);if(holdings.status==='rejected'&&neuron.status==='rejected')throw holdings.reason;const result=holdings.status==='fulfilled'?{...holdings.value,assets:[...holdings.value.assets]}:{address:current.address,network:'Quai Mainnet',assets:[],updatedAt:new Date().toISOString()};result.assets=result.assets.filter(asset=>asset.contract?.toLowerCase()!==NS_TOKEN.address.toLowerCase());if(neuron.status==='fulfilled')result.assets.unshift({name:NS_TOKEN.name,symbol:NS_TOKEN.symbol,type:'ERC-20',contract:NS_TOKEN.address,balance:neuron.value.balance});result.warning=holdings.status==='rejected'?'Other wallet balances are unavailable. Showing NS from Quai Network.':neuron.status==='rejected'?'NS balance could not be refreshed from Quai Network. Other balances are from Quaiscan.':'';return json(200,result);}
+      if(path==='/api/wallet' && req.method==='GET'){const current=account(req);if(!current)throw failure(401,'Please sign in to view your wallet.');const neuron=await readNeuron(current.address);return json(200,{address:current.address,network:'Quai Mainnet',assets:[{name:NS_TOKEN.name,symbol:NS_TOKEN.symbol,type:'ERC-20',contract:NS_TOKEN.address,balance:neuron.balance}],updatedAt:neuron.updatedAt||new Date(now()).toISOString()});}
+      if(path==='/api/actions/challenge'&&req.method==='POST'){const input=await body(req);return json(200,prepareAction(db,account(req),hash(cookies(req).ns_session||''),input.path,input.payload,origin,now()));}
+      const debateRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/debate$/);
+      if(debateRoute&&['GET','POST'].includes(req.method))return json(200,debate(db,account(req),debateRoute[1],hash(cookies(req).ns_session||''),new URL(req.url,origin).searchParams,req.method==='POST'?await body(req):null,now()));
       if (path === '/api/session' && req.method === 'GET') return json(200, { account: account(req) });
       if(path==='/api/notifications'&&req.method==='GET')return json(200,listNotifications(db,account(req),new URL(req.url,origin).searchParams));
       if(['/api/notifications/read','/api/notifications/read-all'].includes(path)&&req.method==='POST')return json(200,readNotifications(db,account(req),await body(req),path.endsWith('read-all'),now()));
@@ -99,7 +105,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
       if(path==='/api/questions'){
         const current=account(req);
         if(req.method==='GET')return json(200,{questions:listQuestions(db,current,new URL(req.url,origin).searchParams.get('view')||'inbox')});
-        if(req.method==='POST')return json(201,createQuestion(db,current,await body(req),now()));
+        if(req.method==='POST')return json(201,submitAction(db,current,hash(cookies(req).ns_session||''),path,await body(req),now()));
       }
       const voteRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/replies\/(\d+)\/vote$/);
       if(voteRoute&&req.method==='POST')return json(200,voteOnReply(db,account(req),voteRoute[1],Number(voteRoute[2]),await body(req)));
@@ -107,7 +113,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
       if(threadRoute){
         const current=account(req),[,id,action]=threadRoute;
         if(!action&&req.method==='GET')return json(200,{thread:readThread(db,current,id)});
-        if(action==='replies'&&req.method==='POST')return json(201,replyToThread(db,current,id,await body(req),now()));
+        if(action==='replies'&&req.method==='POST')return json(201,submitAction(db,current,hash(cookies(req).ns_session||''),path,await body(req),now()));
         if(action==='read'&&req.method==='POST')return json(200,markThreadRead(db,current,id,await body(req)));
       }
       if (path === '/api/profile' || path === '/api/categories') {
@@ -165,7 +171,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0)]);
         return json(200, { ok: true });
       }
-      const files = { '/': ['public/index.html', 'text/html'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
+      const files = { '/': ['public/index.html', 'text/html'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });

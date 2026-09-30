@@ -15,8 +15,8 @@ export function createTokenUI({api,onExpired}){
       const sign=change>0?'▲ +':change<0?'▼ −':'↔ ';
       $('#ns-change').textContent=change===null?'Change unavailable':sign+Math.abs(change).toFixed(2)+'% ('+data.period+')';
       $('#ns-change').className=change===null?'':change>0?'price-up':change<0?'price-down':'price-flat';
-      $('.token-price-line').title='Source: GeckoTerminal · Quainance pool '+data.pool+' · Checked '+new Date(data.checkedAt).toLocaleString();
-    }catch{$('#ns-price').textContent='Price unavailable';$('#ns-change').textContent='';$('#ns-change').className='';$('.token-price-line').title='GeckoTerminal market data could not be refreshed.';}
+      $('.token-price-line').title='Source: Quainance · Pool '+data.pool+' · Checked '+new Date(data.checkedAt).toLocaleString();
+    }catch{$('#ns-price').textContent='Price unavailable';$('#ns-change').textContent='';$('#ns-change').className='';$('.token-price-line').title='Quainance market data could not be refreshed.';}
   }
   refreshMarket();setInterval(()=>{if(!document.hidden)refreshMarket();},60000);
   $('#ns-balance').addEventListener('click',()=>$('#wallet-button').click());
