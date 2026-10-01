@@ -1,5 +1,5 @@
 import {initPayments,createPayments,REWARD_ADDRESS} from './payments.mjs';
-import {initCommunity,presence,ranking} from './community.mjs';
+import {initCommunity,presence,ranking,rewardGrowth} from './community.mjs';
 import {initActions,prepareAction,submitAction} from './actions.mjs';
 import {initDebate,debate} from './debate.mjs';
 import {createMarketReader} from './token-market.mjs';
@@ -91,7 +91,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         return json(200,presence(db,hash(visitor),account(req),input.active===true,now()));
       }
       if(path==='/api/ranking'&&req.method==='GET')return json(200,ranking(db,new URL(req.url,origin).searchParams,now(),account(req)?.role==='admin'));
-      if(path==='/api/rewards'&&req.method==='GET'){const balance=await readNeuron(REWARD_ADDRESS);return json(200,{address:REWARD_ADDRESS,balance:balance.balance,updatedAt:balance.updatedAt});}
+      if(path==='/api/rewards'&&req.method==='GET'){const balance=await readNeuron(REWARD_ADDRESS);return json(200,{address:REWARD_ADDRESS,balance:balance.balance,updatedAt:balance.updatedAt,...rewardGrowth(db,balance.balance,now())});}
       if(path==='/api/payments/prepare'&&req.method==='POST')return json(200,await payments.prepare(account(req),await body(req),now()));
       if(path==='/api/payments/confirm'&&req.method==='POST')return json(200,await payments.confirm(account(req),await body(req),now()));
       if(path==='/api/version'&&req.method==='GET')return json(200,{version:runningVersion});

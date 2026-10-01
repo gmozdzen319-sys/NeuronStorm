@@ -1,4 +1,13 @@
 export function weekStart(now){const d=new Date(now);d.setUTCHours(0,0,0,0);d.setUTCDate(d.getUTCDate()-((d.getUTCDay()+6)%7));return d.getTime();}
+export function rewardGrowth(db,balance,now){
+  db.exec('CREATE TABLE IF NOT EXISTS reward_baselines(week INTEGER PRIMARY KEY,balance TEXT NOT NULL,observed_at INTEGER NOT NULL)');
+  const units=value=>{if(!/^\d+(\.\d{1,18})?$/.test(value))throw Error('Invalid reward balance');const [whole,fraction=""]=value.split('.');return BigInt(whole)*10n**18n+BigInt(fraction.padEnd(18,'0'));};
+  const current=units(balance),week=weekStart(now);
+  db.prepare('INSERT OR IGNORE INTO reward_baselines VALUES(?,?,?)').run(week,balance,now);
+  const baseline=db.prepare('SELECT balance,observed_at FROM reward_baselines WHERE week=?').get(week),start=units(baseline.balance);
+  const change=start===0n?(current===0n?'0.00':null):(()=>{const delta=current-start,absolute=delta<0n?-delta:delta,hundredths=(absolute*10000n+start/2n)/start;return (delta<0n?'-':'')+(hundredths/100n)+'.'+String(hundredths%100n).padStart(2,'0');})();
+  return {changePercent:change,baselineAt:baseline.observed_at,baselineBalance:baseline.balance};
+}
 export function initCommunity(db){db.exec(`CREATE TABLE IF NOT EXISTS site_visitors(week INTEGER NOT NULL,visitor TEXT NOT NULL,PRIMARY KEY(week,visitor));CREATE TABLE IF NOT EXISTS site_presence(visitor TEXT PRIMARY KEY,address TEXT,seen INTEGER NOT NULL);`);}
 export function presence(db,visitor,account,active,now){
   const week=weekStart(now);db.prepare('INSERT OR IGNORE INTO site_visitors VALUES(?,?)').run(week,visitor);

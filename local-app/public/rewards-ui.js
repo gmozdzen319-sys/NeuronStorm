@@ -40,13 +40,27 @@ export function createRewardsUI(api,getAccount,onChanged){
   function decorate(article,reply){if(article.querySelector('.answer-actions'))return;const bar=el('div','');bar.className='answer-actions';if(reply.canVote){const tip=el('button','Tip NS');tip.className='login';tip.type='button';tip.addEventListener('click',()=>open('tip',reply));bar.append(tip);}else for(const [action,label] of [['edit','Edit · 1 NS'],['delete','Delete · 1 NS']]){const button=el('button',label);button.className='text-button';button.type='button';button.addEventListener('click',()=>open(action,reply));bar.append(button);}if(reply.walletAddress){const wallet=el('code',reply.walletAddress);wallet.className='address admin-answer-wallet';bar.append(wallet);}article.append(bar);}
   let rankRequest=0;
   async function loadRanking(){const current=++rankRequest;$('#ranking-status').textContent='Loading ranking…';try{const result=await api('/api/ranking?category='+$('#ranking-category').value);if(current!==rankRequest)return;const picker=$('#ranking-category'),chosen=picker.value;picker.replaceChildren(new Option('All fields','0'));for(const c of result.categories)picker.append(new Option(c.name+' · '+(c.kind==='work'?'Work & Education':'Hobbies & Interests'),c.id));picker.value=chosen;$('#ranking-period').textContent=new Date(result.weekStart).toLocaleDateString('en-GB',{timeZone:'UTC'})+' – '+new Date(result.weekEnd-1).toLocaleDateString('en-GB',{timeZone:'UTC'})+' · resets Monday, 00:00 UTC';const list=$('#ranking-list');list.replaceChildren();result.rows.forEach((row,i)=>{const card=el('article','');card.className='ranking-row';card.append(el('strong',`${i+1}. ${row.nickname}`),el('span',`★ ${row.stars}`),el('span',`${row.activity} activity · ${row.answers} answers · ${row.questions} questions`));if(row.address){const wallet=el('code',row.address);wallet.className='address';card.append(wallet);}list.append(card);});if(!result.rows.length)list.append(el('p','No activity in this field this week yet.'));$('#ranking-status').textContent='';}catch(error){if(current===rankRequest)$('#ranking-status').textContent=error.message;}}
-  async function pool(){try{const data=await api('/api/rewards');$('#reward-balance').textContent=data.balance+' NS';$('#reward-address').textContent=data.address;$('#reward-address').href='https://explorer.qu.ai/address/'+data.address;}catch{$('#reward-balance').textContent='Balance unavailable';}}
+  let poolBusy=false;
+  async function pool(){
+    if(poolBusy)return;poolBusy=true;
+    try{
+      const data=await api('/api/rewards');
+      for(const id of ['#reward-balance','#nav-reward-balance'])$(id).textContent=data.balance+' NS';
+      const change=data.changePercent,label=change===null?'New funds · % unavailable':(Number(change)>0?'+':'')+change+'% this week';
+      const note='Compared with the first recorded balance this week ('+new Date(data.baselineAt).toLocaleString('en-GB',{timeZone:'UTC'})+' UTC).'+(change===null?' Percentage growth cannot be calculated from a zero starting balance.':'');
+      for(const id of ['#reward-change','#nav-reward-change']){const node=$(id);node.textContent=label;node.title=note;node.classList.toggle('pool-up',Number(change)>0);node.classList.toggle('pool-down',Number(change)<0);}
+      $('#reward-growth-note').textContent=note;
+      $('#reward-address').textContent=data.address;$('#reward-address').href='https://explorer.qu.ai/address/'+data.address;
+    }catch{for(const id of ['#reward-balance','#nav-reward-balance'])$(id).textContent='Balance unavailable';for(const id of ['#reward-change','#nav-reward-change','#reward-growth-note'])$(id).textContent='';}
+    finally{poolBusy=false;}
+  }
   $('#ranking-category').addEventListener('change',loadRanking);
   async function members(){if(getAccount()?.role!=='admin')return;const account=owner;try{const data=await api('/api/admin/members?page='+memberPage+'&search='+encodeURIComponent($('#member-search').value.trim()));if(owner!==account)return;memberPages=data.pages;$('#member-wallet-list').replaceChildren();for(const row of data.members){const card=el('div','');card.className='member-wallet';card.append(el('strong',row.nickname),el('code',row.address));$('#member-wallet-list').append(card);}$('#member-page').textContent=`Page ${memberPage} of ${memberPages}`;$('#member-prev').disabled=memberPage<=1;$('#member-next').disabled=memberPage>=memberPages;$('#member-status').textContent='';}catch(error){if(owner===account)$('#member-status').textContent=error.message;}}
   $('#admin-members').addEventListener('toggle',()=>{if($('#admin-members').open)members();});$('#member-search-form').addEventListener('submit',event=>{event.preventDefault();memberPage=1;members();});$('#member-prev').addEventListener('click',()=>{if(memberPage>1){memberPage--;members();}});$('#member-next').addEventListener('click',()=>{if(memberPage<memberPages){memberPage++;members();}});
   let presenceBusy=false;
   async function ping(){if(presenceBusy)return;presenceBusy=true;try{const data=await api('/api/presence',{active:!document.hidden});$('#online-total').textContent=data.online;$('#weekly-total').textContent=data.weeklyVisitors;}catch{$('#online-total').textContent='—';$('#weekly-total').textContent='—';}finally{presenceBusy=false;}}
   ping();setInterval(()=>{if(!document.hidden)ping();},25000);document.addEventListener('visibilitychange',ping);
-  setInterval(()=>{if(!document.hidden&&!$('#ranking-view').hidden){loadRanking();pool();}},30000);
+  pool();document.addEventListener('visibilitychange',()=>{if(!document.hidden)pool();});
+  setInterval(()=>{if(!document.hidden){pool();if(!$('#ranking-view').hidden)loadRanking();}},30000);
   return {setAccount,decorate,show(){loadRanking();pool();},clear(){setAccount(null);}};
 }
