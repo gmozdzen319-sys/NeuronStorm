@@ -39,3 +39,20 @@ test('reward growth persists its weekly baseline and handles deposits, withdrawa
   assert.equal(rewardGrowth(db,'2',next+1000).changePercent,null);
   assert.throws(()=>rewardGrowth(db,'invalid',next+2000));
 });
+
+test('answer tip totals include only verified tips, preserve exact decimals and never double count',async t=>{
+  const {db,reply,question,now}=fixture(t),net=network(),payments=createPayments(db,net.fetch);
+  const total=()=>readThread(db,a,question).replies.find(r=>r.id===reply);
+  assert.equal(total().tipTotal,'0');
+  const intent=await payments.prepare(a,{replyId:reply,action:'tip',amount:'2.500000000000000001'},now);
+  assert.equal(total().tipTotal,'0');net.paid(intent);
+  await payments.confirm(a,{id:intent.id,txHash:net.hash},now);
+  assert.equal(total().tipTotal,'2.500000000000000001');assert.equal(total().tipCount,1);
+  await payments.confirm(a,{id:intent.id,txHash:net.hash},now);
+  assert.equal(total().tipCount,1);
+  const net2=network(),payments2=createPayments(db,net2.fetch);
+  const second=await payments2.prepare(c,{replyId:reply,action:'tip',amount:'1'},now);
+  const pair=net2.paid(second),hash='0x'+'cc'.repeat(32);pair.receipt.transactionHash=hash;pair.tx.hash=hash;
+  await payments2.confirm(c,{id:second.id,txHash:hash},now);
+  assert.equal(total().tipTotal,'3.500000000000000001');assert.equal(total().tipCount,2);
+});

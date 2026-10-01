@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import {formatBalance} from './holdings.mjs';
 const fail=(status,message)=>Object.assign(new Error(message),{status});
 export function initThreads(db){
   db.exec(`CREATE TABLE IF NOT EXISTS questions(id TEXT PRIMARY KEY, author TEXT NOT NULL REFERENCES profiles(address),category_id INTEGER NOT NULL REFERENCES categories(id),body TEXT NOT NULL,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL,revision INTEGER NOT NULL DEFAULT 1);
@@ -71,6 +72,11 @@ export function readThread(db,account,id,includeDeleted=false){
     COALESCE((SELECT value FROM reply_votes v WHERE v.reply_id=r.id AND v.voter=?),0) AS myVote,
     r.author<>? AS canVote
     FROM replies r JOIN profiles p ON p.address=r.author WHERE r.question_id=? AND r.deleted_at IS NULL ORDER BY upvotes DESC,r.id`).all(account.address.toLowerCase(),account.address.toLowerCase(),id);
+  const tips=new Map();
+  for(const payment of db.prepare("SELECT p.reply_id,p.units FROM payment_intents p JOIN replies r ON r.id=p.reply_id WHERE r.question_id=? AND p.action='tip' AND p.completed_at IS NOT NULL").all(id)){
+    const total=tips.get(payment.reply_id)||{units:0n,count:0};total.units+=BigInt(payment.units);total.count++;tips.set(payment.reply_id,total);
+  }
+  for(const reply of replies){const total=tips.get(reply.id)||{units:0n,count:0};reply.tipUnits=String(total.units);reply.tipTotal=formatBalance(String(total.units),18);reply.tipCount=total.count;}
   return {canReply:!db.prepare('SELECT 1 FROM answer_slots WHERE question_id=? AND author=?').get(id,account.address.toLowerCase()),id,body:q.body,author,deletedAt:q.deleted_at,categories:topics(db,id),category:category.name,categoryKind:category.kind,createdAt:q.created_at,revision:q.revision,replies:replies.map(({walletAddress,...r})=>account.role==='admin'?{...r,walletAddress}:r),recipientCount:db.prepare('SELECT count(*) AS n FROM question_participants WHERE question_id=? AND is_recipient=1').get(id).n};
 }
 export function voteOnReply(db,account,id,replyId,input,now=Date.now()){

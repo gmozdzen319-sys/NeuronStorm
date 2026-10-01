@@ -39,3 +39,23 @@ body{isolation:isolate}#neuron-background{position:fixed;inset:0;width:100%;heig
 .answer-actions{flex-wrap:wrap}.admin-answer-wallet{flex-basis:100%;font-size:11px}.ranking-row{flex-wrap:wrap}.ranking-row code{flex-basis:100%;font-size:11px;overflow-wrap:anywhere}
 
 .member-nav .nav-reward-pool{display:flex;align-items:center;gap:7px;flex-wrap:wrap;font-size:11px;color:#a7bbca}.nav-reward-pool strong{color:#61d8ed;font-size:12px}.nav-reward-pool small{font-size:10px}.pool-change{display:inline-block;margin-left:14px;color:#a7bbca;font-size:13px}.pool-up{color:#56d792!important}.pool-down{color:#ff7e8b!important}
+
+.answer-actions{flex-wrap:wrap}.tip-total{position:relative;display:inline-flex;align-items:center;color:#69dce9;font-size:12px;padding:8px 11px;border:1px solid #234454;border-radius:20px;background:#0c2029}.tip-confirmed{animation:tip-glow 2.4s ease-out}.tip-celebration{position:absolute;left:0;bottom:100%;white-space:nowrap;color:#77ecc4;font-size:12px;font-weight:600;pointer-events:none;animation:tip-rise 2.4s ease-out forwards}.tip-confirmed::after{content:'✦';position:absolute;right:-9px;top:-9px;color:#6de7ff;animation:tip-spark 2.4s ease-out forwards}@keyframes tip-glow{0%,100%{transform:scale(1);box-shadow:none}20%{transform:scale(1.09);box-shadow:0 0 24px #3fdde966}50%{transform:scale(1.02);box-shadow:0 0 10px #3fdde944}}@keyframes tip-rise{0%{opacity:0;transform:translateY(5px)}15%,70%{opacity:1}100%{opacity:0;transform:translateY(-20px)}}@keyframes tip-spark{0%{opacity:0;transform:scale(.3) rotate(0)}25%{opacity:1;transform:scale(1.3) rotate(60deg)}100%{opacity:0;transform:scale(.5) rotate(120deg)}}@media(prefers-reduced-motion:reduce){.tip-confirmed,.tip-celebration,.tip-confirmed::after{animation:none}.tip-confirmed{border-color:#77ecc4}.tip-confirmed::after{display:none}}
+
+/* A shared neural path connects the question to every answer. */
+.conversation-flow{position:relative;padding-left:30px;margin-top:8px}
+.conversation-flow::before{content:'';position:absolute;left:8px;top:32px;bottom:30px;width:1px;background:linear-gradient(#ed586a 0%,#527b9f 100px,#35c9ef 75%,#35c9ef15)}
+.conversation-flow .original-question,.conversation-flow .reply{position:relative;margin:0 0 18px;padding:23px 25px;border:1px solid #274351;border-radius:18px;background:linear-gradient(125deg,#10212be8,#0a141df2);box-shadow:0 10px 30px #00000018}
+.conversation-flow .original-question{border-color:#5d3546;background:linear-gradient(125deg,#261720e8,#0c1822f2);margin-top:0}
+.conversation-flow .original-question::before,.conversation-flow .reply::before{content:'';position:absolute;left:-28px;top:27px;width:9px;height:9px;border-radius:50%;background:#58d8ed;border:3px solid #081119;box-shadow:0 0 13px #35c9ef55}
+.conversation-flow .original-question::before{background:#f06c80;box-shadow:0 0 13px #ed586a55}
+.conversation-flow .original-question::after,.conversation-flow .reply::after{content:'';position:absolute;left:-16px;top:34px;width:15px;height:1px;background:#386777}
+.conversation-flow .original-question::after{background:#855063}
+.message-kind{display:block;margin-bottom:14px;color:#5cd6ec;text-transform:uppercase;letter-spacing:1.8px;font-size:10px;font-weight:700}
+.original-question .message-kind{color:#f18c9b}
+.conversation-flow .message-body{margin:14px 0 0;line-height:1.75}
+.conversation-flow #replies-title{font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:#91afbd;margin:26px 0 16px}
+.conversation-flow .answer-actions{padding-top:14px;border-top:1px solid #24404b;margin-top:18px;gap:12px}
+.conversation-flow .answer-actions .text-button{margin-bottom:0}
+.conversation-flow .reply:hover{border-color:#386376}
+@media(max-width:620px){.conversation-flow{padding-left:23px}.conversation-flow::before{left:5px}.conversation-flow .original-question,.conversation-flow .reply{padding:18px 16px;border-radius:14px}.conversation-flow .original-question::before,.conversation-flow .reply::before{left:-24px;top:22px}.conversation-flow .original-question::after,.conversation-flow .reply::after{left:-12px;top:29px;width:11px}.conversation-flow .message-meta{gap:6px}.conversation-flow .message-meta time{font-size:10px}}

@@ -57,6 +57,7 @@ export function createConversations({api,onProfile,onExpired}) {
   }
   function renderMessage(message,question=false){
     const article=node('article',undefined,question?'':'reply');
+    article.append(node('span',question?'Question':'Answer','message-kind'));
     const meta=node('div',undefined,'message-meta');meta.append(node('strong',message.author),node('time',date(message.createdAt)));meta.lastChild.dateTime=new Date(message.createdAt).toISOString();
     if(message.editedAt)meta.append(node('span','Edited '+date(message.editedAt)));article.append(meta,node('p',message.body,'message-body'));return article;
   }

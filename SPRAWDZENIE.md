@@ -130,3 +130,9 @@ Przeglądarka na bazie w pamięci z jawnie oznaczonym symulowanym portfelem i RP
 
 ## 0.8.1 — NS reward pool w nawigacji
 Saldo obok Weekly Ranking, odświeżane co 30 sekund. Procent względem pierwszego zapisanego salda w tygodniu UTC; zerowa baza nie daje sztucznego procentu. Testy obejmują wzrost, spadek, trwałość bazy i nowy tydzień.
+
+## 0.8.2 — live tip totals
+63 tests passed. Browser QA: simulated 2.5 NS + 1 NS displayed as 3.5 NS beside Tip NS. Only confirmed in-app tips count; exact 18-decimal arithmetic and idempotence verified. No real funds transferred.
+
+## 0.8.3 — Conversation cards
+Question and answers connected by a red-to-blue neural path. Separate labelled cards; desktop and 390px mobile checked without horizontal overflow. 63 tests passed.
