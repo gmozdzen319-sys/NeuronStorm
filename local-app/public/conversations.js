@@ -1,3 +1,5 @@
+import {createGlobe} from './globe.js';
+import {createLifecycleUI} from './lifecycle-ui.js';
 import {createRewardsUI} from './rewards-ui.js';
 import {createNotificationSound} from './notification-sound.js';
 import {createSignedSender} from './wallet.js';
@@ -6,8 +8,10 @@ export function createConversations({api,onProfile,onExpired}) {
   const $=s=>document.querySelector(s), root=$('#conversations');
   let identity=null, view='inbox', threadId=null, backView='inbox', epoch=0, revision=0, timerBusy=false, signature='', sending=false;
   let adminPage=1,adminPages=1,adminSearch='',adminState='active',adminThread=false,moderated=null,pendingModeration=null,notificationPage=1,notificationPages=1,notificationThrough=0,notificationSignature='';
+  const globe=createGlobe({api,getAccount:()=>identity});
   const sounds=createNotificationSound($('#notification-sound'));
   const signedSend=createSignedSender(api,()=>identity),debate=createDebate(api,onExpired);
+  const lifecycle=createLifecycleUI({api,signedSend,getAccount:()=>identity,onClosed:async()=>{await showList('mine');status('#list-status','Best answer accepted. The conversation is closed and saved for administrator reward review.');await loadNotifications();}});
   const rewards=createRewardsUI(api,()=>identity,async()=>{await loadThread();status('#thread-status','NS payment confirmed.');});
   const date=value=>new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value));
   const node=(tag,text,className)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el;};
@@ -19,7 +23,7 @@ export function createConversations({api,onProfile,onExpired}) {
     document.querySelectorAll('[data-view]').forEach(button=>{if(button.dataset.view===next)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');});
   }
   function clear(){
-    debate.stop();sounds.setAccount(null);rewards.clear();
+    globe.clear();debate.stop();sounds.setAccount(null);rewards.clear();lifecycle.clear();
     $('#landing').append($('.how'));
     $('#moderation-dialog').close();$('#admin-nav').hidden=true;$('#notifications-button').hidden=true;$('#admin-list').replaceChildren();$('#notifications-list').replaceChildren();$('#admin-audit').replaceChildren();moderated=null;pendingModeration=null;notificationSignature='';
     $('#wallet-button').hidden=true;$('#wallet-assets').replaceChildren();$('#wallet-address').textContent='';$('#wallet-updated').textContent='';status('#wallet-status');
@@ -29,11 +33,11 @@ export function createConversations({api,onProfile,onExpired}) {
   }
   async function failure(error,target){if(error.httpStatus===401){clear();await onExpired();return;}status(target,error.message||'Unable to load this conversation. Please try again.',true);}
   function questionRow(item){
-    const button=node('button',undefined,'question-row');button.type='button';
+    const button=node('button',undefined,'question-row'+(item.unread?' unread-pulse':''));button.type='button';
     const top=node('div',undefined,'question-meta');top.append(node('span',(item.categories||[{name:item.category}]).map(t=>t.name).join(' · ')),node('span',date(item.updatedAt)));
     if(item.unread)top.append(node('span','Unread','unread'));
     const title=node('h2',item.title),excerpt=node('p',item.excerpt.split('\n').slice(1).join('\n').trim(),'question-excerpt'),bottom=node('div',undefined,'question-meta');
-    bottom.append(node('span','By '+item.author),node('span',`${item.replyCount} ${item.replyCount===1?'reply':'replies'}`));button.append(top,title);if(excerpt.textContent)button.append(excerpt);button.append(bottom);
+    bottom.append(node('span','By '+item.author),node('span',`${item.replyCount} ${item.replyCount===1?'reply':'replies'}`));button.append(top,title);if(excerpt.textContent)button.append(excerpt);button.append(bottom);const timer=node('span');lifecycle.clock(timer,item.expiresAt);button.append(timer);
     button.addEventListener('click',()=>openThread(item.id));return button;
   }
   async function loadList(background=false){
@@ -41,7 +45,7 @@ export function createConversations({api,onProfile,onExpired}) {
     const current=epoch,currentView=view;
     if(!background)status('#list-status','Loading questions…');
     try{
-      const result=await api('/api/questions?view='+currentView);if(current!==epoch)return;
+      const result=await api('/api/questions?view='+currentView);if(current!==epoch)return;lifecycle.sync(result.serverTime);
       status('#list-status');$('#retry-questions').hidden=true;
       const next=JSON.stringify(result.questions);if(next===signature)return;signature=next;
       const list=$('#questions-list');list.replaceChildren();
@@ -55,9 +59,10 @@ export function createConversations({api,onProfile,onExpired}) {
     $('#list-description').textContent=next==='mine'?'Questions you started, with every reply in one place.':identity.role==='admin'?'Administrator access: you can see every conversation here.':'Questions sent to people who share your topics.';
     await loadList();if(view===next)$('#list-title').focus();
   }
+  const pulseObserver=new IntersectionObserver(entries=>{for(const entry of entries){if(!entry.isIntersecting)continue;const card=entry.target;pulseObserver.unobserve(card);setTimeout(()=>{card.classList.remove('unread-pulse');card.querySelector('.message-new')?.remove();},7000);}},{threshold:.35});
   function renderMessage(message,question=false){
     const article=node('article',undefined,question?'':'reply');
-    article.append(node('span',question?'Question':'Answer','message-kind'));
+    article.append(node('span',question?'Question':'Answer','message-kind'));if(message.unread){article.classList.add('unread-pulse');article.append(node('span','New','message-new'));pulseObserver.observe(article);}
     const meta=node('div',undefined,'message-meta');meta.append(node('strong',message.author),node('time',date(message.createdAt)));meta.lastChild.dateTime=new Date(message.createdAt).toISOString();
     if(message.editedAt)meta.append(node('span','Edited '+date(message.editedAt)));article.append(meta,node('p',message.body,'message-body'));return article;
   }
@@ -76,7 +81,7 @@ export function createConversations({api,onProfile,onExpired}) {
     const current=epoch,id=threadId;
     try{
       const result=await api((adminThread?'/api/admin/conversations/':'/api/questions/')+id);if(current!==epoch||id!==threadId)return;
-      const thread=result.thread;if(thread.deletedAt===null)debate.start(id);else debate.stop();status('#thread-status');moderated=adminThread?thread:null;$('#admin-thread-actions').hidden=!adminThread;$('#reply-form').hidden=thread.deletedAt!==null||!thread.canReply;$('#one-answer-note').hidden=thread.deletedAt!==null||thread.canReply;if(adminThread){$('#admin-deleted-note').hidden=thread.deletedAt===null;$('#moderate-conversation').textContent=thread.deletedAt===null?'Delete conversation':'Restore conversation';$('#admin-audit').replaceChildren(...(result.audit.length?result.audit.map(item=>node('li',(item.action==='delete'?'Deleted':'Restored')+' · '+date(item.createdAt)+' · '+item.actor)):[node('li','No moderation actions yet.')]));}
+      const thread=result.thread;lifecycle.sync(result.serverTime);lifecycle.clock($('#thread-clock'),thread.expiresAt);if(thread.deletedAt===null)debate.start(id);else debate.stop();status('#thread-status');moderated=adminThread?thread:null;$('#admin-thread-actions').hidden=!adminThread;$('#reply-form').hidden=thread.deletedAt!==null||!thread.canReply;$('#one-answer-note').hidden=thread.deletedAt!==null||thread.canReply;if(adminThread){$('#admin-deleted-note').hidden=thread.deletedAt===null;$('#moderate-conversation').textContent=thread.deletedAt===null?'Delete conversation':'Restore conversation';$('#admin-audit').replaceChildren(...(result.audit.length?result.audit.map(item=>node('li',(item.action==='delete'?'Deleted':'Restored')+' · '+date(item.createdAt)+' · '+item.actor)):[node('li','No moderation actions yet.')]));}
       if(thread.revision!==revision){
         $('#thread-category').textContent=(thread.categories||[{name:thread.category}]).map(t=>t.name).join(' · ');
         $('#original-question').replaceChildren(renderMessage(thread,true));
@@ -90,14 +95,14 @@ export function createConversations({api,onProfile,onExpired}) {
         }
         revision=thread.revision;
       }
-      for(const [replyIndex,reply] of thread.replies.entries()){const article=$('#thread-replies').querySelector(`[data-reply-id="${reply.id}"]`);if(article){article.querySelector('.message-body').textContent=reply.body;renderVotes(article,reply);rewards.decorate(article,reply);const replyList=$('#thread-replies');if(replyList.children[replyIndex]!==article)replyList.insertBefore(article,replyList.children[replyIndex]||null);if(thread.deletedAt!==null)article.querySelectorAll('button').forEach(b=>b.disabled=true);}}
+      for(const [replyIndex,reply] of thread.replies.entries()){const article=$('#thread-replies').querySelector(`[data-reply-id="${reply.id}"]`);if(article){article.querySelector('.message-body').textContent=reply.body;renderVotes(article,reply);rewards.decorate(article,reply);lifecycle.decorate(article,reply,thread);const replyList=$('#thread-replies');if(replyList.children[replyIndex]!==article)replyList.insertBefore(article,replyList.children[replyIndex]||null);if(thread.deletedAt!==null)article.querySelectorAll('button').forEach(b=>b.disabled=true);}}
       if(!document.hidden&&thread.deletedAt===null){await api('/api/questions/'+id+'/read',{revision:thread.revision});await loadNotifications();}
-    }catch(error){if(current===epoch){await failure(error,'#thread-status');if(error.httpStatus===404){debate.stop();revision=0;$('#replies-title').textContent='Replies';$('#thread-category').textContent='';$('#admin-thread-actions').hidden=true;moderated=null;$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();$('#reply-form').hidden=true;}}}
+    }catch(error){if(current===epoch){await failure(error,'#thread-status');if(error.httpStatus===404){lifecycle.clock($('#thread-clock'),null);$('#one-answer-note').hidden=true;status('#thread-status','This conversation has closed or is no longer available.');debate.stop();revision=0;$('#replies-title').textContent='Replies';$('#thread-category').textContent='';$('#admin-thread-actions').hidden=true;moderated=null;$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();$('#reply-form').hidden=true;}}}
   }
   async function openThread(id,fromAdmin=false){
     adminThread=fromAdmin;if(fromAdmin)backView='admin';
     if(!fromAdmin&&['mine','inbox','notifications'].includes(view))backView=view;
-    shell('thread');threadId=id;$('#admin-thread-actions').hidden=true;$('#reply-form').hidden=false;$('#reply-form').reset();status('#reply-status');status('#thread-status','Loading conversation…');$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();
+    shell('thread');globe.show();lifecycle.clock($('#thread-clock'),null);threadId=id;$('#admin-thread-actions').hidden=true;$('#reply-form').hidden=false;$('#reply-form').reset();status('#reply-status');status('#thread-status','Loading conversation…');$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();
     $('#back-to-questions').textContent=backView==='admin'?'Back to Admin Dashboard':backView==='notifications'?'Back to Notifications':backView==='mine'?'Back to My Questions':'Back to Questions for You';
     await loadThread();if(view==='thread')$('#thread-title').focus();
   }
@@ -140,7 +145,7 @@ export function createConversations({api,onProfile,onExpired}) {
 
   async function loadAdmin(background=false){
     if(identity?.role!=='admin'||view!=='admin')return;const current=epoch;
-    if(!background)status('#admin-status','Loading conversations…');
+    lifecycle.loadAccepted();if(!background)status('#admin-status','Loading conversations…');
     try{const result=await api('/api/admin/conversations?state='+adminState+'&page='+adminPage+'&search='+encodeURIComponent(adminSearch));if(current!==epoch)return;adminPage=result.page;adminPages=result.pages;status('#admin-status');const next=JSON.stringify(result);if(signature===next)return;signature=next;
       $('#admin-stats').replaceChildren();for(const [key,label]of [['members','Members'],['active','Active conversations'],['deleted','Deleted conversations'],['replies','Active replies']]){const card=node('div');card.append(node('dt',label),node('dd',result.stats[key]));$('#admin-stats').append(card);}
       $('#admin-list').replaceChildren();for(const item of result.questions){const button=node('button',undefined,'question-row');button.type='button';button.append(node('h2',item.title),node('p',item.excerpt.split('\n').slice(1).join('\n').trim()),node('p','By '+item.author+' · '+date(item.createdAt)+' · '+item.replyCount+(item.replyCount===1?' reply':' replies'),'muted'),node('p',item.categories.map(t=>t.name).join(' · '),'question-meta'));if(item.deletedAt!==null)button.append(node('p','Deleted '+date(item.deletedAt),'muted'));button.addEventListener('click',()=>openThread(item.id,true));$('#admin-list').append(button);}if(!result.questions.length)$('#admin-list').append(node('p','No conversations found.','empty-state'));
@@ -162,7 +167,7 @@ export function createConversations({api,onProfile,onExpired}) {
   });
   async function loadNotifications(){
     if(!identity)return;const owner=identity.address,current=epoch;
-    try{const result=await api('/api/notifications?page='+notificationPage);if(identity?.address!==owner)return;sounds.update(result.sequence);$('#notification-count').textContent=result.unread;$('#notifications-button').setAttribute('aria-label','Notifications, '+result.unread+' unread');if(view!=='notifications'||current!==epoch)return;status('#notifications-status');notificationThrough=result.throughId;notificationPage=result.page;notificationPages=result.pages;$('#notifications-read-all').disabled=!result.unread;
+    try{const result=await api('/api/notifications?page='+notificationPage);if(identity?.address!==owner)return;sounds.update(result.sequence);$('#notification-count').textContent=result.unread;$('#notifications-button').classList.toggle('unread-pulse',result.unread>0);$('#notifications-button').setAttribute('aria-label','Notifications, '+result.unread+' unread');if(view!=='notifications'||current!==epoch)return;status('#notifications-status');notificationThrough=result.throughId;notificationPage=result.page;notificationPages=result.pages;$('#notifications-read-all').disabled=!result.unread;
       const next=JSON.stringify(result);if(next===notificationSignature)return;notificationSignature=next;$('#notifications-list').replaceChildren();for(const item of result.notifications){const row=node('div',undefined,'notification-row'+(item.readAt===null?' unread-row':'')),open=node('button');open.type='button';open.append(node('strong',item.actor+(item.kind==='question'?' asked a question':' replied')),node('span',item.title),node('span',date(item.createdAt)+(item.readAt===null?' · Unread':'')));open.addEventListener('click',()=>openThread(item.questionId));row.append(open);if(item.readAt===null){const read=node('button','Mark as read','text-button');read.type='button';read.addEventListener('click',async()=>{try{await api('/api/notifications/read',{id:item.id});await loadNotifications();}catch(error){await failure(error,'#notifications-status');}});row.append(read);}$('#notifications-list').append(row);}if(!result.notifications.length)$('#notifications-list').append(node('p','No notifications yet.','empty-state'));$('#notifications-page').textContent='Page '+result.page+' of '+result.pages;$('#notifications-prev').disabled=result.page<=1;$('#notifications-next').disabled=result.page>=result.pages;
     }catch(error){if(identity?.address===owner){if(error.httpStatus===401)await failure(error,'#notifications-status');else if(view==='notifications')status('#notifications-status','Notifications could not be refreshed. Please try again.',true);}}
   }
@@ -181,5 +186,5 @@ export function createConversations({api,onProfile,onExpired}) {
     }catch(error){if(current===epoch)await failure(error,'#wallet-status');}finally{if(current===epoch)$('#wallet-refresh').disabled=false;}
   }
   $('#wallet-refresh').addEventListener('click',loadWallet);$('#wallet-profile').addEventListener('click',onProfile);
-  return {clear,setAccount(account){identity=account;sounds.setAccount(account);rewards.setAccount(account);$('#wallet-button').hidden=!account;},openProfile(){if(identity)shell('profile');},setIdentity(account,profile,openInbox=false){identity=account;sounds.setAccount(account);rewards.setAccount(account);$('#admin-nav').hidden=account.role!=='admin';$('#notifications-button').hidden=false;loadNotifications();$('#member-nav').hidden=false;$('#ask-question').hidden=false;$('#member-name').hidden=false;$('#member-name').textContent=profile.nickname;if(openInbox){if(account.role==='admin')showAdmin();else ask();}}};
+  return {clear,setAccount(account){if(identity?.address!==account?.address)lifecycle.clear();identity=account;sounds.setAccount(account);rewards.setAccount(account);$('#wallet-button').hidden=!account;},openProfile(){if(identity)shell('profile');},setIdentity(account,profile,openInbox=false){identity=account;globe.setAccount(account);sounds.setAccount(account);rewards.setAccount(account);$('#admin-nav').hidden=account.role!=='admin';$('#notifications-button').hidden=false;loadNotifications();$('#member-nav').hidden=false;$('#ask-question').hidden=false;$('#member-name').hidden=false;$('#member-name').textContent=profile.nickname;if(openInbox){if(account.role==='admin')showAdmin();else ask();}}};
 }

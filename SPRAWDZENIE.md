@@ -136,3 +136,20 @@ Saldo obok Weekly Ranking, odświeżane co 30 sekund. Procent względem pierwsze
 
 ## 0.8.3 — Conversation cards
 Question and answers connected by a red-to-blue neural path. Separate labelled cards; desktop and 390px mobile checked without horizontal overflow. 63 tests passed.
+
+## 0.8.4 — reward pool emphasis
+Right-aligned navigation card with larger cyan balance and subtle red/blue background. 63 tests passed; admin navigation checked on desktop and 390px width.
+
+## 0.8.5 — token price colour
+Removed visible period suffix; comparison period retained in tooltip. Price and percentage share green/up, red/down, neutral/flat classes. 63 tests passed.
+
+## 0.9.0 — 7 dni i Accepted answers
+73/73 testów: podpis autora, związanie sesji/odpowiedzi/wersji, idempotencja, ochrona API admina, brak dostępu po zamknięciu, termin dokładnie po 7 dniach, upvotes/remis/0 głosów/brak odpowiedzi/moderacja, trwałość po restarcie, zachowanie gwiazdek, blokada spóźnionej płatnej edycji i progi kolorów zegara. Testy płatności są symulowane.
+Przeglądarka: testowe konto podpisało akceptację przez atrapę Pelagus z jednorazowym portfelem; pytanie zniknęło z My Questions, wpis pojawił się w Accepted answers z adresem. Widok desktop i 390px bez poziomego przewijania i bez błędów konsoli. Cena widoczna na czerwono przy spadku, bez dopisku since launch. Podglądy question-deadline-preview.png i accepted-answers-preview.png. Nie używano rzeczywistych środków ani podpisu użytkownika. Nie publikowano na Render.
+
+
+### Wersja 0.10.0 — globus i nieprzeczytane wiadomości
+Nieprzeczytane pytania, odpowiedzi i nowe powiadomienia delikatnie pulsują czerwienią. W otwartej rozmowie oznaczenie New znika po 7 sekundach widoczności odpowiedzi. Ustawienie ograniczenia ruchu wyłącza pulsowanie.
+Obok Conversation jest wolno obracający się globus z animowanym powiększeniem na pełny ekran, listą krajów i przełącznikiem obrotu. Kraje są przybliżeniem z IP; udział na mapie jest dobrowolny, domyślnie wyłączony. Serwer przechowuje kraj i czas obecności, nie zapisuje IP w danych globusa i nie wysyła go do usług zewnętrznych. API zwraca wyłącznie zliczenia krajów, bez nazw i portfeli. Obecność wygasa po 65 sekundach, odświeżanie co 25 sekund. Maksymalnie 100 promieni, pełne liczby w legendzie; osoby w tym samym kraju dzielą punkt. Przy braku lokalizacji nie rysujemy fikcyjnych połączeń.
+Lokalna baza IP: https://github.com/sapics/ip-location-db (user-country, PDDL 1.0). Aktualizacja: python local-app/update-geo-data.py. Pliki geo-data muszą być wdrożone razem z aplikacją; source.json zawiera źródła i sumy kontrolne. Zaufanie do X-Forwarded-For włączone automatycznie wyłącznie przy RENDER=true; lokalnie używany jest adres połączenia. Dane służą wizualizacji, nigdy nadawaniu uprawnień.
+Granice i punkty krajów: Natural Earth 110m, public domain (https://www.naturalearthdata.com/about/terms-of-use/), źródło https://github.com/nvkelso/natural-earth-vector/blob/master/geojson/ne_110m_admin_0_countries.geojson. Testowy globus można uruchomić przez QA_GLOBE_DEMO=1 w test/preview.mjs; lokalizacje w tym podglądzie są symulowane i oddzielone od prawdziwej bazy.

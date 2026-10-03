@@ -1,3 +1,4 @@
+import {QUESTION_LIFETIME} from './lifecycle.mjs';
 import {randomUUID} from 'node:crypto';
 import {id as hashEvent} from 'quais';
 import {NS_TOKEN} from './neuron-token.mjs';
@@ -14,10 +15,10 @@ export function nsUnits(value){
 export const transferData=(recipient,units)=>'0xa9059cbb'+recipient.slice(2).toLowerCase().padStart(64,'0')+BigInt(units).toString(16).padStart(64,'0');
 export function initPayments(db){db.exec(`CREATE TABLE IF NOT EXISTS payment_intents(id TEXT PRIMARY KEY,payer TEXT NOT NULL,reply_id INTEGER NOT NULL REFERENCES replies(id),action TEXT NOT NULL,recipient TEXT NOT NULL,units TEXT NOT NULL,body TEXT NOT NULL,reply_version INTEGER NOT NULL,start_block TEXT NOT NULL,created_at INTEGER NOT NULL,tx_hash TEXT UNIQUE,completed_at INTEGER);
  CREATE INDEX IF NOT EXISTS payment_owner ON payment_intents(payer,completed_at);`);}
-export function createPayments(db,fetcher=fetch){
+export function createPayments(db,fetcher=fetch,clock=null){
   async function rpc(method,params){try{const response=await fetcher('https://rpc.quai.network/cyprus1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method,params}),signal:AbortSignal.timeout(12000)});if(!response.ok)throw Error();const data=await response.json();if(data.error)throw Error();return data.result;}catch{throw fail(502,'Quai Network is unavailable. Keep your transaction hash and check again.');}}
   async function head(){const chain=await rpc('quai_chainId',[]);if(chain!=='0x9')throw fail(502,'Quai Mainnet could not be verified.');const block=await rpc('quai_blockNumber',[]);if(typeof block!=='string'||!/^0x[0-9a-f]+$/i.test(block))throw fail(502,'Invalid Quai block.');return BigInt(block);}
-  function reply(account,replyId){requireProfile(db,account);const row=db.prepare('SELECT * FROM replies WHERE id=? AND deleted_at IS NULL').get(replyId);if(!row)throw fail(404,'This answer is no longer available.');allowed(db,row.question_id,account);return row;}
+  function reply(account,replyId){requireProfile(db,account);const row=db.prepare('SELECT * FROM replies WHERE id=? AND deleted_at IS NULL').get(replyId);if(!row)throw fail(404,'This answer is no longer available.');const question=allowed(db,row.question_id,account);if(clock&&question.created_at+QUESTION_LIFETIME<=clock())throw fail(409,'This conversation has expired. Keep any payment hash for the administrator.');return row;}
   function output(row){return {id:row.id,action:row.action,recipient:row.recipient,units:row.units,replyId:row.reply_id,body:row.body,completed:row.completed_at!==null,transaction:{from:row.payer,to:NS_TOKEN.address,value:'0x0',data:transferData(row.recipient,row.units)}};}
   return {
     async prepare(account,input,now){
@@ -59,7 +60,7 @@ export function createPayments(db,fetcher=fetch){
         if(latest.completed_at!==null){if(latest.tx_hash!==hash)throw fail(409,'Payment already completed.');db.exec('COMMIT');return {ok:true,action:intent.action};}
         if(db.prepare('SELECT 1 FROM payment_intents WHERE tx_hash=?').get(hash))throw fail(409,'This transaction has already been used.');
         if(intent.action!=='tip'){
-          const answer=reply(account,intent.reply_id);
+          let answer;try{answer=reply(account,intent.reply_id);}catch(error){if(error.status===404||error.status===409)throw fail(409,'This conversation closed before the answer change was confirmed. Keep your transaction hash and contact the administrator. Do not pay again.');throw error;}
           if(answer.author!==intent.payer||answer.version!==intent.reply_version)throw fail(409,'The answer changed after payment preparation. Keep your transaction hash and contact the administrator.');
           if(intent.action==='edit'){db.prepare('UPDATE replies SET body=?,edited_at=?,version=version+1 WHERE id=?').run(intent.body,now,answer.id);db.prepare('DELETE FROM reply_votes WHERE reply_id=?').run(answer.id);}
           else db.prepare('UPDATE replies SET deleted_at=?,version=version+1 WHERE id=?').run(now,answer.id);

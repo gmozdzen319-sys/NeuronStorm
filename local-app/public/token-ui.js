@@ -13,10 +13,11 @@ export function createTokenUI({api,onExpired}){
     try{const data=await api('/api/token/market'),price=Number(data.priceUsd),change=data.changePercent;
       $('#ns-price').textContent=new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumSignificantDigits:2,maximumSignificantDigits:5}).format(price)+' USD';
       const sign=change>0?'▲ +':change<0?'▼ −':'↔ ';
-      $('#ns-change').textContent=change===null?'Change unavailable':sign+Math.abs(change).toFixed(2)+'% ('+data.period+')';
+      $('#ns-change').textContent=change===null?'Change unavailable':sign+Math.abs(change).toFixed(2)+'%';
       $('#ns-change').className=change===null?'':change>0?'price-up':change<0?'price-down':'price-flat';
-      $('.token-price-line').title='Source: Quainance · Pool '+data.pool+' · Checked '+new Date(data.checkedAt).toLocaleString();
-    }catch{$('#ns-price').textContent='Price unavailable';$('#ns-change').textContent='';$('#ns-change').className='';$('.token-price-line').title='Quainance market data could not be refreshed.';}
+      $('#ns-price').className=$('#ns-change').className;
+      $('.token-price-line').title='Change period: '+data.period+' · Source: Quainance · Pool '+data.pool+' · Checked '+new Date(data.checkedAt).toLocaleString();
+    }catch{$('#ns-price').textContent='Price unavailable';$('#ns-change').textContent='';$('#ns-change').className='';$('#ns-price').className='';$('.token-price-line').title='Quainance market data could not be refreshed.';}
   }
   refreshMarket();setInterval(()=>{if(!document.hidden)refreshMarket();},60000);
   $('#ns-balance').addEventListener('click',()=>$('#wallet-button').click());

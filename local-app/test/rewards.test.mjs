@@ -1,3 +1,4 @@
+import {expireQuestions,QUESTION_LIFETIME} from '../lifecycle.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {id} from 'quais';
@@ -55,4 +56,13 @@ test('answer tip totals include only verified tips, preserve exact decimals and 
   const pair=net2.paid(second),hash='0x'+'cc'.repeat(32);pair.receipt.transactionHash=hash;pair.tx.hash=hash;
   await payments2.confirm(c,{id:second.id,txHash:hash},now);
   assert.equal(total().tipTotal,'3.500000000000000001');assert.equal(total().tipCount,2);
+});
+
+test('a paid edit confirmed after expiry cannot change the archived winner',async t=>{
+  const {db,reply,question,now}=fixture(t),net=network();let time=now;const payments=createPayments(db,net.fetch,()=>time);
+  const intent=await payments.prepare(b,{replyId:reply,action:'edit',body:'Late edit'},time);net.paid(intent);time=now+QUESTION_LIFETIME;
+  expireQuestions(db,time);
+  await assert.rejects(payments.confirm(b,{id:intent.id,txHash:net.hash},time),e=>e.status===409&&/Do not pay again/.test(e.message));
+  assert.equal(db.prepare('SELECT answer_body FROM accepted_answers WHERE question_id=?').get(question).answer_body,'First answer');
+  assert.equal(db.prepare('SELECT body FROM replies WHERE id=?').get(reply).body,'First answer');
 });

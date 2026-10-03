@@ -1,3 +1,5 @@
+import {initGlobe,globeData,clientIp,lookupCountry} from './geography.mjs';
+import {expireQuestions,acceptedAnswers} from './lifecycle.mjs';
 import {initPayments,createPayments,REWARD_ADDRESS} from './payments.mjs';
 import {initCommunity,presence,ranking,rewardGrowth} from './community.mjs';
 import {initActions,prepareAction,submitAction} from './actions.mjs';
@@ -23,7 +25,7 @@ const hash = (value) => createHash('sha256').update(value).digest('hex');
 const cookies = (req) => Object.fromEntries((req.headers.cookie || '').split(';').map(v => v.trim().split('=')));
 const failure = (status, message) => Object.assign(new Error(message), { status });
 
-export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin = 'http://localhost:3000', now = Date.now, tokenFetch = fetch, marketFetch = fetch, paymentFetch = fetch } = {}) {
+export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin = 'http://localhost:3000', now = Date.now, tokenFetch = fetch, marketFetch = fetch, paymentFetch = fetch, geoLookup=lookupCountry, trustProxy=process.env.RENDER==='true' } = {}) {
   if (database !== ':memory:') mkdirSync(dirname(database), { recursive: true });
   const runningVersion=JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version;
   const db = new DatabaseSync(database);
@@ -37,8 +39,8 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
   initThreads(db);
   initActions(db);
   initDebate(db);
-  initPayments(db);initCommunity(db);
-  const payments=createPayments(db,paymentFetch);
+  initPayments(db);initCommunity(db);initGlobe(db);
+  const payments=createPayments(db,paymentFetch,now);
   db.exec('CREATE TABLE IF NOT EXISTS token_confirmations(address TEXT PRIMARY KEY REFERENCES accounts(address), contract TEXT NOT NULL, confirmed_at INTEGER NOT NULL)');
   const tokenConfirmed=address=>!!db.prepare('SELECT 1 FROM token_confirmations WHERE address=? AND contract=?').get(address.toLowerCase(),NS_TOKEN.address);
   const readMarket=createMarketReader(marketFetch);
@@ -84,6 +86,8 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         db.prepare('DELETE FROM challenges WHERE expires<=?').run(now());
         db.prepare('DELETE FROM sessions WHERE expires<=?').run(now());
       }
+      if(path.startsWith('/api/'))expireQuestions(db,now());
+      if(path==='/api/globe'&&['GET','POST'].includes(req.method))return json(200,globeData(db,account(req),clientIp(req,trustProxy),req.method==='POST'?await body(req):null,now(),geoLookup));
       if(path==='/api/presence'&&req.method==='POST'){
         const input=await body(req);let visitor=cookies(req).ns_visitor;
         if(!visitor||!/^[a-f0-9]{64}$/.test(visitor))visitor=token();
@@ -108,6 +112,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
       if(['/api/notifications/read','/api/notifications/read-all'].includes(path)&&req.method==='POST')return json(200,readNotifications(db,account(req),await body(req),path.endsWith('read-all'),now()));
       if(path.startsWith('/api/admin/')){
         const current=account(req);requireAdmin(db,current);
+        if(path==='/api/admin/accepted'&&req.method==='GET')return json(200,acceptedAnswers(db,new URL(req.url,origin).searchParams));
         if(path==='/api/admin/members'&&req.method==='GET'){
           const params=new URL(req.url,origin).searchParams,page=Number(params.get('page')||1),search=(params.get('search')||'').trim();
           if(!Number.isSafeInteger(page)||page<1||page>100000||search.length>100)throw failure(400,'Invalid member search.');
@@ -117,23 +122,25 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         }
         if(path==='/api/admin/conversations'&&req.method==='GET')return json(200,adminList(db,current,new URL(req.url,origin).searchParams));
         const route=path.match(/^\/api\/admin\/conversations\/([a-f0-9-]{36})(?:\/(delete|restore))?$/);
-        if(route){if(!route[2]&&req.method==='GET')return json(200,adminThread(db,current,route[1]));if(route[2]&&req.method==='POST')return json(200,moderateThread(db,current,route[1],route[2],await body(req),now()));}
+        if(route){if(!route[2]&&req.method==='GET')return json(200,{...adminThread(db,current,route[1]),serverTime:now()});if(route[2]&&req.method==='POST')return json(200,moderateThread(db,current,route[1],route[2],await body(req),now()));}
         throw failure(405,'This administration request is not supported.');
       }
       if(path==='/api/stats'&&req.method==='GET'){
-        return json(200,{stats:{members:db.prepare('SELECT count(*) AS n FROM accounts').get().n,topics:db.prepare('SELECT count(*) AS n FROM categories').get().n,questions:db.prepare('SELECT count(*) AS n FROM questions WHERE deleted_at IS NULL').get().n,replies:db.prepare('SELECT count(*) AS n FROM replies r JOIN questions q ON q.id=r.question_id WHERE q.deleted_at IS NULL AND r.deleted_at IS NULL').get().n}});
+        return json(200,{stats:{members:db.prepare('SELECT count(*) AS n FROM accounts').get().n,topics:db.prepare('SELECT count(*) AS n FROM categories').get().n,questions:db.prepare('SELECT count(*) AS n FROM questions WHERE deleted_at IS NULL AND closed_at IS NULL').get().n,replies:db.prepare('SELECT count(*) AS n FROM replies r JOIN questions q ON q.id=r.question_id WHERE q.deleted_at IS NULL AND q.closed_at IS NULL AND r.deleted_at IS NULL').get().n}});
       }
       if(path==='/api/questions'){
         const current=account(req);
-        if(req.method==='GET')return json(200,{questions:listQuestions(db,current,new URL(req.url,origin).searchParams.get('view')||'inbox')});
+        if(req.method==='GET')return json(200,{questions:listQuestions(db,current,new URL(req.url,origin).searchParams.get('view')||'inbox'),serverTime:now()});
         if(req.method==='POST')return json(201,submitAction(db,current,hash(cookies(req).ns_session||''),path,await body(req),now()));
       }
+      const acceptanceRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/accept$/);
+      if(acceptanceRoute&&req.method==='POST')return json(200,submitAction(db,account(req),hash(cookies(req).ns_session||''),path,await body(req),now()));
       const voteRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/replies\/(\d+)\/vote$/);
       if(voteRoute&&req.method==='POST')return json(200,voteOnReply(db,account(req),voteRoute[1],Number(voteRoute[2]),await body(req),now()));
       const threadRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})(?:\/(replies|read))?$/);
       if(threadRoute){
         const current=account(req),[,id,action]=threadRoute;
-        if(!action&&req.method==='GET')return json(200,{thread:readThread(db,current,id)});
+        if(!action&&req.method==='GET')return json(200,{thread:readThread(db,current,id),serverTime:now()});
         if(action==='replies'&&req.method==='POST')return json(201,submitAction(db,current,hash(cookies(req).ns_session||''),path,await body(req),now()));
         if(action==='read'&&req.method==='POST')return json(200,markThreadRead(db,current,id,await body(req)));
       }
@@ -187,12 +194,13 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
       }
       if (path === '/api/logout' && req.method === 'POST') {
         const current = cookies(req);
+        const departing=account(req);if(departing)db.prepare('DELETE FROM globe_presence WHERE address=?').run(departing.address.toLowerCase());
         if (current.ns_session) db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(current.ns_session));
         if (current.ns_challenge) db.prepare('DELETE FROM challenges WHERE browser_hash=?').run(hash(current.ns_challenge));
         res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0)]);
         return json(200, { ok: true });
       }
-      const files = { '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
+      const files = { '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });
@@ -205,6 +213,9 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
       return json(error.status || 500, { error: error.status ? error.message : 'Server error. Please try again.' });
     }
   });
+  let expiryTimer;
+  server.on('listening',()=>{expireQuestions(db,now());expiryTimer=setInterval(()=>{try{expireQuestions(db,now());}catch(error){console.error('Question expiry failed:',error.message);}},10000);expiryTimer.unref();});
+  server.on('close',()=>clearInterval(expiryTimer));
   return { server, db };
 }
 

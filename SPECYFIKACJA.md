@@ -135,3 +135,17 @@ Ranking aktualnego tygodnia UTC (poniedziałek 00:00) wyliczany z bieżących up
 Obecność odświeżana co 25 s, wygasa po 65 s; zielony licznik agreguje aktywne konta (bez powielania kart/kont) i anonimowe przeglądarki. Pomarańczowy = unikalne przeglądarki odwiedzające stronę w tygodniu UTC, szacunek, bez fingerprintingu/IP. Losowy identyfikator HttpOnly, przechowywany po hashu; statystyki tygodniowe zachowane do 8 tygodni. Błędy odczytu nie są pokazywane jako zero.
 Logo: filtr SVG w renderowaniu ustawia przezroczystość ciemnych pikseli; oryginalny PNG pozostaje nietknięty.
 Źródło integracji przelewów: https://www.pelaguswallet.io/docs (quai_sendTransaction), lokalne źródła quais provider-jsonrpc.js / format.js. Testy transakcji używają wyłącznie symulowanych portfeli, receiptów i pamięciowej bazy.
+
+## 0.9.0 — czas pytań i zaakceptowane odpowiedzi
+
+Każde pytanie ma termin created_at + 7 × 24 h, także istniejące pytania. Zegar w wątku i na listach jest synchronizowany z czasem serwera. Kolory: zielony powyżej 3 dni, żółty do 3 dni, pomarańczowy do 24 godzin, czerwony do 6 godzin. Serwer zamyka zaległe tematy przy uruchomieniu, co 10 sekund i przed obsługą API; po uśpieniu hostingu nadrabia zamknięcia przed udostępnieniem danych.
+
+Autor pytania może zaakceptować cudzą odpowiedź przyciskiem Best answer · Accept. Dialog opisuje nieodwracalne zamknięcie w interfejsie, a jednorazowy podpis personal_sign obejmuje pytanie, ID i wersję odpowiedzi oraz jej treść, domenę, sesję i termin. Serwer odrzuca cudze podpisy, inną sesję, odpowiedź zmienioną lub usuniętą oraz wybór po terminie. Powtórzenie poprawnego żądania zwraca wynik bez duplikatu. To podpis wiadomości, nie przelew.
+
+Przy upływie terminu system wybiera najwięcej upvotes spośród nieusuniętych odpowiedzi innych niż własna autora pytania. Remis (także 0 upvotes) rozstrzyga najwcześniejsza odpowiedź, potem ID. Brak odpowiedzi oznacza zamknięcie bez zwycięzcy. Pytania ukryte przez moderatora nie otrzymują automatycznego zwycięzcy.
+
+Zamknięcie usuwa temat, odpowiedzi, Debate i powiadomienia z dostępu użytkowników i z bieżących list administratora. Nie usuwa fizycznie rekordów wymaganych do gwiazdek, rankingów i rozliczania płatności. Nie można przywrócić zamkniętego tematu przez moderację. Tabela accepted_answers zachowuje niezmienny zapis pytania i wybranej odpowiedzi, nazw, adresu odbiorcy, liczby upvotes i sposobu wyboru. Widok Accepted answers dostępny wyłącznie administratorowi jest kompaktowy, stronicowany, z rozwijaniem pełnych treści. Wypłaty NS nadal wykonuje administrator ręcznie; wybór nie oznacza wypłaconej nagrody.
+
+Nowe płatne zmiany i tipy nie są przygotowywane dla zamkniętych tematów. Potwierdzenie już wysłanego tipa nadal może zostać zapisane. Jeśli płatna edycja/usunięcie dotrze po zamknięciu, nie zmienia archiwalnego wyniku; użytkownik zachowuje hash i kontaktuje się z administratorem, bez ponownego przelewu. Wymagana trwała baza SQLite na hostingu.
+
+Cena NS i procent są zielone przy wzroście, czerwone przy spadku i neutralne przy braku zmiany. Okres porównania pozostaje w podpowiedzi, bez widocznego dopisku since launch.

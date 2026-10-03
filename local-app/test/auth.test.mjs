@@ -643,3 +643,40 @@ test('member wallet directory is admin-only and public ranking never reveals add
  const result=await f.request('/api/admin/members',undefined,admin);assert.equal(result.status,200);assert.equal(result.data.members.length,2);assert.ok(result.data.members.every(m=>/^0x/.test(m.address)));
  const ranking=await f.request('/api/ranking',undefined,{Cookie:''});assert.equal(ranking.status,200);assert.ok(!JSON.stringify(ranking.data).includes('0x'));
 });
+
+test('accepted answers API is private and signed author acceptance closes every member route',async t=>{
+  let time=Date.now();const f=await fixture(t,{now:()=>time}),a=newWallet(),r=newWallet();
+  const ah=await createMember(f,a,'Asker',['Lighting']),rh=await createMember(f,r,'Expert',['Lighting']);
+  const categoryId=(await f.request('/api/categories',undefined,ah)).data.categories.work[0].id;
+  const id=(await f.request('/api/questions',{categoryId,body:'Choose a lamp'},ah)).data.id;
+  await f.request('/api/questions/'+id+'/replies',{body:'Warm task lighting'},rh);
+  const reply=(await f.request('/api/questions/'+id,undefined,ah)).data.thread.replies[0],path='/api/questions/'+id+'/accept';
+  assert.equal((await f.request('/api/admin/accepted',undefined,ah)).status,403);
+  assert.equal((await f.request('/api/admin/accepted',undefined,{Cookie:''})).status,401);
+  assert.equal((await f.request('/api/actions/challenge',{path,payload:{replyId:reply.id,version:1}},rh)).status,403);
+  const challenge=(await f.request('/api/actions/challenge',{path,payload:{replyId:reply.id,version:1}},ah)).data;
+  const signed={actionId:challenge.id,signature:await a.signMessage(challenge.message)};
+  assert.equal((await f.request(path,signed,ah)).status,200);
+  assert.equal((await f.request(path,signed,ah)).status,200);
+  assert.equal((await f.request('/api/questions/'+id,undefined,rh)).status,404);
+  assert.equal((await f.request('/api/questions/'+id+'/debate',undefined,rh)).status,404);
+  assert.equal((await f.request('/api/questions/'+id+'/replies/'+reply.id+'/vote',{value:1},ah)).status,404);
+  assert.equal((await f.request('/api/questions?view=mine',undefined,ah)).data.questions.length,0);
+  assert.equal((await f.request('/api/notifications',undefined,ah)).data.notifications.length,0);
+  const token=randomBytes(32).toString('hex');f.db.prepare('INSERT INTO accounts VALUES(?,?)').run(ADMIN,time);f.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(token).digest('hex'),ADMIN,time+60000);
+  const adminHeaders={Cookie:'ns_session='+token};await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true},adminHeaders);await f.request('/api/profile',{nickname:'Admin',work:['Administration'],hobbies:[]},adminHeaders);
+  const accepted=await f.request('/api/admin/accepted',undefined,adminHeaders);assert.equal(accepted.status,200);assert.equal(accepted.data.answers[0].question,'Choose a lamp');assert.equal(accepted.data.answers[0].answer,'Warm task lighting');assert.equal(accepted.data.answers[0].walletAddress,r.address.toLowerCase());
+  assert.equal((await f.request('/api/admin/conversations',undefined,adminHeaders)).data.questions.length,0);
+});
+test('HTTP request catches overdue questions after downtime before showing or changing them',async t=>{
+  let time=Date.now();const f=await fixture(t,{now:()=>time}),a=newWallet(),r=newWallet();
+  const ah=await createMember(f,a,'Asker',['Lighting']),rh=await createMember(f,r,'Expert',['Lighting']);
+  const categoryId=(await f.request('/api/categories',undefined,ah)).data.categories.work[0].id;
+  const id=(await f.request('/api/questions',{categoryId,body:'Expires in seven days'},ah)).data.id;
+  await f.request('/api/questions/'+id+'/replies',{body:'Automatic winner'},rh);
+  const deadline=time+7*86400000;assert.equal((await f.request('/api/questions/'+id,undefined,ah)).data.thread.expiresAt,deadline);
+  time=deadline;f.db.prepare('UPDATE sessions SET expires=?').run(time+60000);
+  const result=await f.request('/api/questions?view=mine',undefined,ah);assert.equal(result.status,200);assert.equal(result.data.questions.length,0);
+  assert.equal((await f.request('/api/questions/'+id,undefined,ah)).status,404);
+  assert.equal(f.db.prepare('SELECT selection FROM accepted_answers WHERE question_id=?').get(id).selection,'automatic');
+});

@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import {initLifecycle,QUESTION_LIFETIME} from './lifecycle.mjs';
 import {formatBalance} from './holdings.mjs';
 const fail=(status,message)=>Object.assign(new Error(message),{status});
 export function initThreads(db){
@@ -8,7 +9,7 @@ export function initThreads(db){
     CREATE TABLE IF NOT EXISTS replies(id INTEGER PRIMARY KEY,question_id TEXT NOT NULL REFERENCES questions(id),author TEXT NOT NULL REFERENCES profiles(address),body TEXT NOT NULL,created_at INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS replies_question ON replies(question_id,id);
     CREATE TABLE IF NOT EXISTS question_reads(question_id TEXT NOT NULL REFERENCES questions(id),address TEXT NOT NULL REFERENCES accounts(address),revision INTEGER NOT NULL,PRIMARY KEY(question_id,address));`);
-  for(const [name,type] of [['deleted_at','INTEGER'],['edited_at','INTEGER'],['version','INTEGER NOT NULL DEFAULT 1']])if(!db.prepare('PRAGMA table_info(replies)').all().some(c=>c.name===name))db.exec(`ALTER TABLE replies ADD COLUMN ${name} ${type}`);
+  for(const [name,type] of [['posted_revision','INTEGER'],['deleted_at','INTEGER'],['edited_at','INTEGER'],['version','INTEGER NOT NULL DEFAULT 1']])if(!db.prepare('PRAGMA table_info(replies)').all().some(c=>c.name===name))db.exec(`ALTER TABLE replies ADD COLUMN ${name} ${type}`);
   db.exec(`CREATE TABLE IF NOT EXISTS answer_slots(question_id TEXT NOT NULL REFERENCES questions(id),author TEXT NOT NULL REFERENCES accounts(address),PRIMARY KEY(question_id,author));INSERT OR IGNORE INTO answer_slots SELECT question_id,author FROM replies;`);
   db.exec(`CREATE TABLE IF NOT EXISTS question_categories(question_id TEXT NOT NULL REFERENCES questions(id),category_id INTEGER NOT NULL REFERENCES categories(id),PRIMARY KEY(question_id,category_id));
     INSERT OR IGNORE INTO question_categories SELECT id,category_id FROM questions;`);
@@ -20,6 +21,8 @@ export function initThreads(db){
     CREATE INDEX IF NOT EXISTS questions_deleted ON questions(deleted_at);`);
   db.exec(`CREATE TABLE IF NOT EXISTS notifications(id INTEGER PRIMARY KEY,address TEXT NOT NULL REFERENCES accounts(address),question_id TEXT NOT NULL REFERENCES questions(id),actor TEXT NOT NULL REFERENCES accounts(address),kind TEXT NOT NULL CHECK(kind IN ('question','reply')),revision INTEGER NOT NULL,created_at INTEGER NOT NULL,read_at INTEGER,UNIQUE(address,question_id,revision));
     CREATE INDEX IF NOT EXISTS notifications_address ON notifications(address,id);`);
+  db.exec('UPDATE replies SET posted_revision=1+(SELECT count(*) FROM replies older WHERE older.question_id=replies.question_id AND older.id<=replies.id) WHERE posted_revision IS NULL');
+  initLifecycle(db);
 }
 function topics(db,id){return db.prepare('SELECT c.id,c.name,c.kind FROM categories c JOIN question_categories qc ON qc.category_id=c.id WHERE qc.question_id=? ORDER BY c.kind,c.name').all(id);}
 function message(value,max){if(typeof value!=='string'||!value.trim()||value.trim().length>max)throw fail(400,`Enter a message between 1 and ${max} characters.`);return value.trim();}
@@ -29,7 +32,7 @@ export function requireProfile(db,account){
 }
 export function allowed(db,id,account,includeDeleted=false){
   const q=db.prepare('SELECT * FROM questions WHERE id=?').get(id);
-  if(!q||(q.deleted_at!==null&&!(includeDeleted&&account.role==='admin'))||(account.role!=='admin'&&!db.prepare('SELECT 1 FROM question_participants WHERE question_id=? AND address=?').get(id,account.address.toLowerCase())))throw fail(404,'This conversation was not found.');
+  if(!q||q.closed_at!==null||(q.deleted_at!==null&&!(includeDeleted&&account.role==='admin'))||(account.role!=='admin'&&!db.prepare('SELECT 1 FROM question_participants WHERE question_id=? AND address=?').get(id,account.address.toLowerCase())))throw fail(404,'This conversation was not found.');
   return q;
 }
 export function createQuestion(db,account,input,now){
@@ -59,14 +62,15 @@ export function listQuestions(db,account,view){
     (SELECT count(*) FROM replies r WHERE r.question_id=q.id AND r.deleted_at IS NULL) AS replyCount,
     COALESCE((SELECT revision FROM question_reads qr WHERE qr.question_id=q.id AND qr.address=?),0) AS readRevision
     FROM questions q JOIN profiles p ON p.address=q.author JOIN categories c ON c.id=q.category_id
-    WHERE q.deleted_at IS NULL AND (${view==='mine'?'q.author=?':account.role==='admin'?'1=1':'EXISTS(SELECT 1 FROM question_participants qp WHERE qp.question_id=q.id AND qp.address=? AND qp.is_recipient=1)'}) ORDER BY q.updated_at DESC,q.id`).all(...(view==='inbox'&&account.role==='admin'?[address]:[address,address]));
-  return rows.map(({body,revision,readRevision,...row})=>({...row,categories:topics(db,row.id),title:body.split('\n')[0].slice(0,110),excerpt:body.slice(0,220),unread:revision>readRevision}));
+    WHERE q.deleted_at IS NULL AND q.closed_at IS NULL AND (${view==='mine'?'q.author=?':account.role==='admin'?'1=1':'EXISTS(SELECT 1 FROM question_participants qp WHERE qp.question_id=q.id AND qp.address=? AND qp.is_recipient=1)'}) ORDER BY q.updated_at DESC,q.id`).all(...(view==='inbox'&&account.role==='admin'?[address]:[address,address]));
+  return rows.map(({body,revision,readRevision,...row})=>({...row,expiresAt:row.createdAt+QUESTION_LIFETIME,categories:topics(db,row.id),title:body.split('\n')[0].slice(0,110),excerpt:body.slice(0,220),unread:revision>readRevision}));
 }
 export function readThread(db,account,id,includeDeleted=false){
   requireProfile(db,account);const q=allowed(db,id,account,includeDeleted);
   const category=db.prepare('SELECT name,kind FROM categories WHERE id=?').get(q.category_id);
   const author=db.prepare('SELECT nickname FROM profiles WHERE address=?').get(q.author).nickname;
-  const replies=db.prepare(`SELECT r.id,r.body,r.created_at AS createdAt,r.edited_at AS editedAt,r.version,r.author AS walletAddress,p.nickname AS author,
+  const readRevision=db.prepare('SELECT revision FROM question_reads WHERE question_id=? AND address=?').get(id,account.address.toLowerCase())?.revision||0;
+  const replies=db.prepare(`SELECT r.posted_revision AS postedRevision,r.id,r.body,r.created_at AS createdAt,r.edited_at AS editedAt,r.version,r.author AS walletAddress,p.nickname AS author,
     (SELECT count(*) FROM reply_votes v WHERE v.reply_id=r.id AND v.value=1) AS upvotes,
     (SELECT count(*) FROM reply_votes v WHERE v.reply_id=r.id AND v.value=-1) AS downvotes,
     COALESCE((SELECT value FROM reply_votes v WHERE v.reply_id=r.id AND v.voter=?),0) AS myVote,
@@ -76,11 +80,11 @@ export function readThread(db,account,id,includeDeleted=false){
   for(const payment of db.prepare("SELECT p.reply_id,p.units FROM payment_intents p JOIN replies r ON r.id=p.reply_id WHERE r.question_id=? AND p.action='tip' AND p.completed_at IS NOT NULL").all(id)){
     const total=tips.get(payment.reply_id)||{units:0n,count:0};total.units+=BigInt(payment.units);total.count++;tips.set(payment.reply_id,total);
   }
-  for(const reply of replies){const total=tips.get(reply.id)||{units:0n,count:0};reply.tipUnits=String(total.units);reply.tipTotal=formatBalance(String(total.units),18);reply.tipCount=total.count;}
-  return {canReply:!db.prepare('SELECT 1 FROM answer_slots WHERE question_id=? AND author=?').get(id,account.address.toLowerCase()),id,body:q.body,author,deletedAt:q.deleted_at,categories:topics(db,id),category:category.name,categoryKind:category.kind,createdAt:q.created_at,revision:q.revision,replies:replies.map(({walletAddress,...r})=>account.role==='admin'?{...r,walletAddress}:r),recipientCount:db.prepare('SELECT count(*) AS n FROM question_participants WHERE question_id=? AND is_recipient=1').get(id).n};
+  for(const reply of replies){const total=tips.get(reply.id)||{units:0n,count:0};reply.unread=reply.postedRevision>readRevision&&reply.canVote===1;delete reply.postedRevision;reply.tipUnits=String(total.units);reply.tipTotal=formatBalance(String(total.units),18);reply.tipCount=total.count;}
+  return {unread:readRevision===0&&q.author!==account.address.toLowerCase(),expiresAt:q.created_at+QUESTION_LIFETIME,canAccept:q.author===account.address.toLowerCase(),canReply:!db.prepare('SELECT 1 FROM answer_slots WHERE question_id=? AND author=?').get(id,account.address.toLowerCase()),id,body:q.body,author,deletedAt:q.deleted_at,categories:topics(db,id),category:category.name,categoryKind:category.kind,createdAt:q.created_at,revision:q.revision,replies:replies.map(({walletAddress,...r})=>account.role==='admin'?{...r,walletAddress}:r),recipientCount:db.prepare('SELECT count(*) AS n FROM question_participants WHERE question_id=? AND is_recipient=1').get(id).n};
 }
 export function voteOnReply(db,account,id,replyId,input,now=Date.now()){
-  requireProfile(db,account);allowed(db,id,account);
+  requireProfile(db,account);const question=allowed(db,id,account);if(question.created_at+QUESTION_LIFETIME<=now)throw fail(409,'This conversation has expired.');
   const reply=db.prepare('SELECT author FROM replies WHERE id=? AND question_id=? AND deleted_at IS NULL').get(replyId,id);
   if(!reply)throw fail(404,'This reply was not found.');
   const voter=account.address.toLowerCase();
@@ -91,9 +95,9 @@ export function voteOnReply(db,account,id,replyId,input,now=Date.now()){
   return {ok:true};
 }
 export function replyToThread(db,account,id,input,now){
-  requireProfile(db,account);allowed(db,id,account);const body=message(input.body,2000);
+  requireProfile(db,account);const question=allowed(db,id,account);if(question.created_at+QUESTION_LIFETIME<=now)throw fail(409,'This conversation has expired.');const body=message(input.body,2000);
   db.exec('SAVEPOINT thread_write');
-  try{if(db.prepare('SELECT 1 FROM answer_slots WHERE question_id=? AND author=?').get(id,account.address.toLowerCase()))throw fail(409,'You can post only one answer to this question. Use Debate for discussion.');db.prepare('INSERT INTO answer_slots VALUES(?,?)').run(id,account.address.toLowerCase());db.prepare('INSERT INTO replies(question_id,author,body,created_at) VALUES(?,?,?,?)').run(id,account.address.toLowerCase(),body,now);db.prepare('UPDATE questions SET revision=revision+1,updated_at=? WHERE id=?').run(now,id);db.prepare("INSERT INTO notifications(address,question_id,actor,kind,revision,created_at) SELECT qp.address,q.id,?,'reply',q.revision,? FROM question_participants qp JOIN questions q ON q.id=qp.question_id WHERE q.id=? AND qp.address<>?").run(account.address.toLowerCase(),now,id,account.address.toLowerCase());db.exec('RELEASE thread_write');return {ok:true};}catch(error){db.exec('ROLLBACK TO thread_write; RELEASE thread_write');throw error;}
+  try{if(db.prepare('SELECT 1 FROM answer_slots WHERE question_id=? AND author=?').get(id,account.address.toLowerCase()))throw fail(409,'You can post only one answer to this question. Use Debate for discussion.');db.prepare('INSERT INTO answer_slots VALUES(?,?)').run(id,account.address.toLowerCase());db.prepare('INSERT INTO replies(question_id,author,body,created_at,posted_revision) VALUES(?,?,?,?,?)').run(id,account.address.toLowerCase(),body,now,question.revision+1);db.prepare('UPDATE questions SET revision=revision+1,updated_at=? WHERE id=?').run(now,id);db.prepare("INSERT INTO notifications(address,question_id,actor,kind,revision,created_at) SELECT qp.address,q.id,?,'reply',q.revision,? FROM question_participants qp JOIN questions q ON q.id=qp.question_id WHERE q.id=? AND qp.address<>?").run(account.address.toLowerCase(),now,id,account.address.toLowerCase());db.exec('RELEASE thread_write');return {ok:true};}catch(error){db.exec('ROLLBACK TO thread_write; RELEASE thread_write');throw error;}
 }
 export function markThreadRead(db,account,id,input){
   requireProfile(db,account);const q=allowed(db,id,account);

@@ -1,3 +1,4 @@
+import {acceptanceCandidate,acceptAnswer,QUESTION_LIFETIME} from './lifecycle.mjs';
 import {randomBytes} from 'node:crypto';
 import {verifyMessage} from 'quais';
 import {requireProfile,allowed,createQuestion,replyToThread} from './threads.mjs';
@@ -10,11 +11,13 @@ export function prepareAction(db,account,session,path,input,origin,now){
   requireProfile(db,account);
   if(typeof path!=='string')throw fail(400,'Choose a question or reply to sign.');
   const reply=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/replies$/);
-  if(path!=='/api/questions'&&!reply)throw fail(400,'Choose a question or reply to sign.');
+  const accepting=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/accept$/);
+  if(path!=='/api/questions'&&!reply&&!accepting)throw fail(400,'Choose a question or reply to sign.');
   const limit=reply?2000:4000;
-  if(typeof input?.body!=='string'||!input.body.trim()||input.body.trim().length>limit)throw fail(400,`Enter a message between 1 and ${limit} characters.`);
-  const payload={body:input.body.trim()};let context;
-  if(reply){const question=allowed(db,reply[1],account);context=`Question ID: ${question.id}\nQuestion: ${question.body}`;}
+  if(!accepting&&(typeof input?.body!=='string'||!input.body.trim()||input.body.trim().length>limit))throw fail(400,`Enter a message between 1 and ${limit} characters.`);
+  const payload=accepting?{replyId:input?.replyId,version:input?.version}:{body:input.body.trim()};let context;
+  if(accepting){const {q,r}=acceptanceCandidate(db,account,accepting[1],payload.replyId,payload.version,now);context=`Question ID: ${q.id}\nQuestion: ${q.body}\nAnswer ID: ${r.id}\nAnswer version: ${r.version}\nAnswer: ${r.body}\n\nI accept this as the best, satisfactory answer. Close this conversation and send the question and selected answer to the administrator for manual reward review. This cannot be undone. No payment is authorized.`;}
+  else if(reply){const question=allowed(db,reply[1],account);if(question.created_at+QUESTION_LIFETIME<=now)throw fail(409,'This conversation has expired.');context=`Question ID: ${question.id}\nQuestion: ${question.body}`;}
   else{
     const raw=input.categoryIds??[input.categoryId];
     if(!Array.isArray(raw)||!raw.length||raw.length>100||raw.some(id=>!Number.isSafeInteger(id)))throw fail(400,'Choose at least one existing topic (up to 100).');
@@ -24,7 +27,7 @@ export function prepareAction(db,account,session,path,input,origin,now){
     context='Topics: '+topics.map((topic,i)=>`${topic.name} (${topic.kind}, #${payload.categoryIds[i]})`).join(', ');
   }
   const id=randomBytes(32).toString('hex'),expires=now+300000;
-  const message=`Neuron Storm — ${reply?'post reply':'send question'}\n\nWebsite: ${origin}\nWallet: ${account.address}\n${context}\n\nMessage:\n${payload.body}\n\nThis signature authorizes only this message. No transaction or transfer of funds.\nOne-time code: ${id}\nExpires at: ${new Date(expires).toISOString()}`;
+  const message=`Neuron Storm — ${accepting?'accept best answer':reply?'post reply':'send question'}\n\nWebsite: ${origin}\nWallet: ${account.address}\n${context}\n\nMessage:\n${accepting?'Accept and close the conversation.':payload.body}\n\nThis signature authorizes only this message. No transaction or transfer of funds.\nOne-time code: ${id}\nExpires at: ${new Date(expires).toISOString()}`;
   db.prepare('DELETE FROM signed_actions WHERE expires<? AND (completed IS NULL OR completed<?)').run(now,now-86400000);
   db.prepare('INSERT INTO signed_actions(id,address,session_hash,path,payload,message,expires) VALUES(?,?,?,?,?,?,?)').run(id,account.address.toLowerCase(),session,path,JSON.stringify(payload),message,expires);
   return {id,message};
@@ -40,12 +43,13 @@ export function submitAction(db,account,session,path,input,now){
   if(row.result)return JSON.parse(row.result);
   if(row.expires<=now)throw fail(409,'This signing request expired. Please sign the message again.');
   const payload=JSON.parse(row.payload),reply=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/replies$/);
+  const accepting=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/accept$/);
   if(reply)allowed(db,reply[1],account);
   db.exec('BEGIN IMMEDIATE');
   try{
     // Also cover accidental repeat submissions from a second tab/new challenge.
     const previous=db.prepare('SELECT result FROM signed_actions WHERE address=? AND path=? AND payload=? AND completed>? AND result IS NOT NULL ORDER BY completed DESC LIMIT 1').get(row.address,path,row.payload,now-120000);
-    const result=previous?JSON.parse(previous.result):reply?replyToThread(db,account,reply[1],payload,now):createQuestion(db,account,payload,now);
+    const result=previous?JSON.parse(previous.result):accepting?acceptAnswer(db,account,accepting[1],payload,now):reply?replyToThread(db,account,reply[1],payload,now):createQuestion(db,account,payload,now);
     db.prepare('UPDATE signed_actions SET result=?,completed=? WHERE id=?').run(JSON.stringify(result),now,row.id);
     db.exec('COMMIT');return result;
   }catch(error){db.exec('ROLLBACK');throw error;}
