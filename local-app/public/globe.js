@@ -34,9 +34,10 @@ export function createGlobe({api,getAccount}){
   async function loadMap(){if(loaded)return;loaded=true;try{const response=await fetch('/world-map.json');if(!response.ok)throw Error();const result=await response.json();map=result.countries.map(c=>({...c,lines:c.rings.map(r=>r.map(([lon,lat])=>spherePoint(lat,lon)))}));countries=new Map(map.map(c=>[c.code,c]));text();rebuild();draw();}catch{loaded=false;$('#globe-status').textContent='The globe map could not be loaded.';}}
   function projection(p,cx,cy,r){const c=Math.cos(angle),s=Math.sin(angle),x=p[0]*c+p[2]*s,z=p[2]*c-p[0]*s,tilt=.15,y=p[1]*Math.cos(tilt)-z*Math.sin(tilt),depth=p[1]*Math.sin(tilt)+z*Math.cos(tilt);return [cx+x*r,cy-y*r,depth];}
   function render(canvas,time){
-    const rect=canvas.getBoundingClientRect();if(rect.width<1||rect.height<1)return;const dpr=Math.min(devicePixelRatio||1,2),w=rect.width,h=rect.height;
+    // Layout dimensions stay stable during transitions in mobile wallet WebViews.
+    const w=canvas.clientWidth,h=canvas.clientHeight;if(w<1||h<1)return;const dpr=Math.min(devicePixelRatio||1,2);
     if(canvas.width!==Math.round(w*dpr)||canvas.height!==Math.round(h*dpr)){canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);}
-    const ctx=canvas.getContext('2d');ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
+    const ctx=canvas.getContext('2d');if(!ctx)return;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
     const r=Math.min(w,h)*.37,cx=w/2,cy=h/2;const gradient=ctx.createRadialGradient(cx-r*.4,cy-r*.3,0,cx,cy,r);gradient.addColorStop(0,'rgba(40,128,166,.09)');gradient.addColorStop(.8,'rgba(8,35,53,.13)');gradient.addColorStop(1,'rgba(52,190,221,.15)');ctx.fillStyle=gradient;ctx.strokeStyle='#64daff55';ctx.lineWidth=1;ctx.beginPath();ctx.arc(cx,cy,r,0,TAU);ctx.fill();ctx.stroke();
     function line(points,color,width=1){ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();let drawing=false;for(const p of points){const [x,y,z]=projection(p,cx,cy,r);if(z<0){drawing=false;continue;}if(drawing)ctx.lineTo(x,y);else ctx.moveTo(x,y);drawing=true;}ctx.stroke();}
     for(let lat=-60;lat<=60;lat+=30){const points=[];for(let lon=-180;lon<=180;lon+=4)points.push(spherePoint(lat,lon));line(points,'#4bbad521',.65);}
@@ -48,17 +49,40 @@ export function createGlobe({api,getAccount}){
       if(canvas===large){ctx.font='11px system-ui';ctx.fillText(mine?'You · '+label(code):label(code),x+8,y-8);}
     }
   }
-  function draw(time=performance.now()){if(!document.hidden){if(dialog.open)render(large,time);else if(miniVisible)render(mini,time);}}
-  function loop(time){frame=0;if(document.hidden||(!miniVisible&&!dialog.open)||paused||reduced.matches){last=0;draw(time);return;}if(last){angle+=Math.min(time-last,60)*.000035;}last=time;draw(time);frame=requestAnimationFrame(loop);}
+  function draw(time=performance.now()){if(!document.hidden){if(dialog.hasAttribute('open'))render(large,time);else if(miniVisible)render(mini,time);}}
+  function loop(time){frame=0;if(document.hidden||(!miniVisible&&!dialog.hasAttribute('open'))||paused||reduced.matches){last=0;draw(time);return;}if(last){angle+=Math.min(time-last,60)*.000035;}last=time;draw(time);frame=requestAnimationFrame(loop);}
   function wake(){if(!frame){last=0;frame=requestAnimationFrame(loop);}}
   new IntersectionObserver(entries=>{miniVisible=entries[0].isIntersecting;if(miniVisible){loadMap();wake();}}).observe(trigger);
   new ResizeObserver(()=>{draw();wake();}).observe(large);new ResizeObserver(()=>{draw();wake();}).observe(mini);
-  trigger.addEventListener('click',()=>{const from=trigger.getBoundingClientRect();dialog.showModal();loadMap();refresh();draw();wake();if(!reduced.matches)dialog.animate([{opacity:0,transform:`translate(${from.x+from.width/2-innerWidth/2}px,${from.y+from.height/2-innerHeight/2}px) scale(.16)`},{opacity:1,transform:'translate(0,0) scale(1)'}],{duration:520,easing:'cubic-bezier(.2,.8,.2,1)'});});
-  $('#globe-close').addEventListener('click',()=>dialog.close());dialog.addEventListener('close',()=>{trigger.focus({preventScroll:true});wake();});
+  let openingAnimation=null;
+  function resizeGlobe(){
+    const height=Math.round(window.visualViewport?.height||window.innerHeight);
+    dialog.style.setProperty('--globe-viewport-height',height+'px');
+    requestAnimationFrame(()=>{draw();wake();});
+  }
+  function afterClose(){openingAnimation?.cancel();openingAnimation=null;document.documentElement.classList.remove('globe-modal-open');trigger.focus({preventScroll:true});wake();}
+  function closeGlobe(){if(!dialog.hasAttribute('open'))return;if(typeof dialog.close==='function')dialog.close();else{dialog.removeAttribute('open');afterClose();}}
+  trigger.addEventListener('click',()=>{
+    if(dialog.hasAttribute('open'))return;
+    resizeGlobe();
+    if(typeof dialog.showModal==='function')dialog.showModal();else dialog.setAttribute('open','');
+    dialog.scrollTop=0;document.documentElement.classList.add('globe-modal-open');
+    $('#globe-close').focus({preventScroll:true});loadMap();refresh();
+    // Do not transform the dialog: iOS/Android WebViews can lose its canvas layer.
+    if(!reduced.matches&&typeof dialog.animate==='function'){
+      openingAnimation=dialog.animate([{opacity:0},{opacity:1}],{duration:240,easing:'ease-out'});
+      openingAnimation.onfinish=()=>{openingAnimation=null;resizeGlobe();};
+    }
+    resizeGlobe();
+  });
+  $('#globe-close').addEventListener('click',closeGlobe);dialog.addEventListener('close',afterClose);
+  dialog.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();closeGlobe();}});
+  window.addEventListener('resize',resizeGlobe);window.visualViewport?.addEventListener('resize',resizeGlobe);
+  large.addEventListener('contextrestored',()=>{draw();wake();});
   $('#globe-share').addEventListener('change',async()=>{const checkbox=$('#globe-share');if(busy){checkbox.checked=!!data?.enabled;return;}checkbox.disabled=true;await refresh({enabled:checkbox.checked,active:!document.hidden});checkbox.disabled=false;});
   function motion(){paused=paused||reduced.matches;$('#globe-motion').textContent=paused?'Resume rotation':'Pause rotation';$('#globe-motion').setAttribute('aria-pressed',String(paused));wake();}
   $('#globe-motion').addEventListener('click',()=>{paused=!paused;motion();});reduced.addEventListener('change',()=>{paused=reduced.matches;motion();});motion();
-  document.addEventListener('visibilitychange',()=>{refresh();wake();});setInterval(()=>{if(!document.hidden)refresh();},25000);
-  function setAccount(account){const next=account?.address||null;if(next===owner)return;owner=next;epoch++;data=null;paths=[];dialog.close();$('#globe-countries').replaceChildren();$('#globe-count').textContent='';$('#globe-location').textContent='';$('#globe-share').checked=false;draw();if(next){loadMap();refresh();}}
+  document.addEventListener('visibilitychange',()=>{refresh();resizeGlobe();wake();});setInterval(()=>{if(!document.hidden)refresh();},25000);
+  function setAccount(account){const next=account?.address||null;if(next===owner)return;owner=next;epoch++;data=null;paths=[];closeGlobe();$('#globe-countries').replaceChildren();$('#globe-count').textContent='';$('#globe-location').textContent='';$('#globe-share').checked=false;draw();if(next){loadMap();refresh();}}
   return {setAccount,show(){loadMap();refresh();wake();},clear(){setAccount(null);}};
 }
