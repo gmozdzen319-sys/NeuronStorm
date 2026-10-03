@@ -1,10 +1,11 @@
+import {bindGlobeGestures,clampZoom} from './globe-controls.js';
 const TAU=Math.PI*2;
 export function spherePoint(lat,lon){const a=lat*Math.PI/180,b=lon*Math.PI/180;return [Math.cos(a)*Math.sin(b),Math.sin(a),Math.cos(a)*Math.cos(b)];}
 export function createGlobe({api,getAccount}){
   const $=s=>document.querySelector(s),mini=$('#globe-mini'),large=$('#globe-large'),dialog=$('#globe-dialog'),trigger=$('#globe-open');
   const reduced=matchMedia('(prefers-reduced-motion: reduce)');
   let map=[],countries=new Map(),data=null,owner=null,epoch=0,busy=false,paused=reduced.matches,angle=-.25,frame=0,last=0,miniVisible=false,loaded=false;
-  let paths=[];
+  let paths=[],tilt=.15,zoomLevel=1;
   const label=code=>countries.get(code)?.name||code;
   const point=code=>{const c=countries.get(code);return c?spherePoint(c.lat,c.lon):null;};
   function rebuild(){
@@ -32,13 +33,13 @@ export function createGlobe({api,getAccount}){
     finally{busy=false;}
   }
   async function loadMap(){if(loaded)return;loaded=true;try{const response=await fetch('/world-map.json');if(!response.ok)throw Error();const result=await response.json();map=result.countries.map(c=>({...c,lines:c.rings.map(r=>r.map(([lon,lat])=>spherePoint(lat,lon)))}));countries=new Map(map.map(c=>[c.code,c]));text();rebuild();draw();}catch{loaded=false;$('#globe-status').textContent='The globe map could not be loaded.';}}
-  function projection(p,cx,cy,r){const c=Math.cos(angle),s=Math.sin(angle),x=p[0]*c+p[2]*s,z=p[2]*c-p[0]*s,tilt=.15,y=p[1]*Math.cos(tilt)-z*Math.sin(tilt),depth=p[1]*Math.sin(tilt)+z*Math.cos(tilt);return [cx+x*r,cy-y*r,depth];}
+  function projection(p,cx,cy,r){const c=Math.cos(angle),s=Math.sin(angle),x=p[0]*c+p[2]*s,z=p[2]*c-p[0]*s,y=p[1]*Math.cos(tilt)-z*Math.sin(tilt),depth=p[1]*Math.sin(tilt)+z*Math.cos(tilt);return [cx+x*r,cy-y*r,depth];}
   function render(canvas,time){
     // Layout dimensions stay stable during transitions in mobile wallet WebViews.
     const w=canvas.clientWidth,h=canvas.clientHeight;if(w<1||h<1)return;const dpr=Math.min(devicePixelRatio||1,2);
     if(canvas.width!==Math.round(w*dpr)||canvas.height!==Math.round(h*dpr)){canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);}
     const ctx=canvas.getContext('2d');if(!ctx)return;ctx.setTransform(dpr,0,0,dpr,0,0);ctx.clearRect(0,0,w,h);
-    const r=Math.min(w,h)*.37,cx=w/2,cy=h/2;const gradient=ctx.createRadialGradient(cx-r*.4,cy-r*.3,0,cx,cy,r);gradient.addColorStop(0,'rgba(40,128,166,.09)');gradient.addColorStop(.8,'rgba(8,35,53,.13)');gradient.addColorStop(1,'rgba(52,190,221,.15)');ctx.fillStyle=gradient;ctx.strokeStyle='#64daff55';ctx.lineWidth=1;ctx.beginPath();ctx.arc(cx,cy,r,0,TAU);ctx.fill();ctx.stroke();
+    const r=Math.min(w,h)*.37*(canvas===large?zoomLevel:1),cx=w/2,cy=h/2;const gradient=ctx.createRadialGradient(cx-r*.4,cy-r*.3,0,cx,cy,r);gradient.addColorStop(0,'rgba(40,128,166,.09)');gradient.addColorStop(.8,'rgba(8,35,53,.13)');gradient.addColorStop(1,'rgba(52,190,221,.15)');ctx.fillStyle=gradient;ctx.strokeStyle='#64daff55';ctx.lineWidth=1;ctx.beginPath();ctx.arc(cx,cy,r,0,TAU);ctx.fill();ctx.stroke();
     function line(points,color,width=1){ctx.strokeStyle=color;ctx.lineWidth=width;ctx.beginPath();let drawing=false;for(const p of points){const [x,y,z]=projection(p,cx,cy,r);if(z<0){drawing=false;continue;}if(drawing)ctx.lineTo(x,y);else ctx.moveTo(x,y);drawing=true;}ctx.stroke();}
     for(let lat=-60;lat<=60;lat+=30){const points=[];for(let lon=-180;lon<=180;lon+=4)points.push(spherePoint(lat,lon));line(points,'#4bbad521',.65);}
     for(let lon=-180;lon<180;lon+=30){const points=[];for(let lat=-90;lat<=90;lat+=4)points.push(spherePoint(lat,lon));line(points,'#4bbad521',.65);}
@@ -60,7 +61,7 @@ export function createGlobe({api,getAccount}){
     dialog.style.setProperty('--globe-viewport-height',height+'px');
     requestAnimationFrame(()=>{draw();wake();});
   }
-  function afterClose(){openingAnimation?.cancel();openingAnimation=null;document.documentElement.classList.remove('globe-modal-open');trigger.focus({preventScroll:true});wake();}
+  function afterClose(){clearGestures();openingAnimation?.cancel();openingAnimation=null;document.documentElement.classList.remove('globe-modal-open');trigger.focus({preventScroll:true});wake();}
   function closeGlobe(){if(!dialog.hasAttribute('open'))return;if(typeof dialog.close==='function')dialog.close();else{dialog.removeAttribute('open');afterClose();}}
   trigger.addEventListener('click',()=>{
     if(dialog.hasAttribute('open'))return;
@@ -82,6 +83,21 @@ export function createGlobe({api,getAccount}){
   $('#globe-share').addEventListener('change',async()=>{const checkbox=$('#globe-share');if(busy){checkbox.checked=!!data?.enabled;return;}checkbox.disabled=true;await refresh({enabled:checkbox.checked,active:!document.hidden});checkbox.disabled=false;});
   function motion(){paused=paused||reduced.matches;$('#globe-motion').textContent=paused?'Resume rotation':'Pause rotation';$('#globe-motion').setAttribute('aria-pressed',String(paused));wake();}
   $('#globe-motion').addEventListener('click',()=>{paused=!paused;motion();});reduced.addEventListener('change',()=>{paused=reduced.matches;motion();});motion();
+  function userControl(){paused=true;motion();}
+  function updateZoom(){
+    $('#globe-zoom-level').textContent=Math.round(zoomLevel*100)+'%';
+    $('#globe-zoom-out').disabled=zoomLevel<=.65;$('#globe-zoom-in').disabled=zoomLevel>=3;draw();
+  }
+  function changeZoom(factor){zoomLevel=clampZoom(zoomLevel*factor);updateZoom();}
+  function resetView(){angle=-.25;tilt=.15;zoomLevel=1;updateZoom();}
+  const clearGestures=bindGlobeGestures(large,{
+    rotate(dx,dy){angle=(angle+dx)%TAU;tilt=(tilt+dy)%TAU;draw();},
+    zoom:changeZoom,interact:userControl,reset:resetView
+  });
+  $('#globe-zoom-in').addEventListener('click',()=>{userControl();changeZoom(1.2);});
+  $('#globe-zoom-out').addEventListener('click',()=>{userControl();changeZoom(1/1.2);});
+  $('#globe-reset').addEventListener('click',()=>{userControl();resetView();});
+  updateZoom();
   document.addEventListener('visibilitychange',()=>{refresh();resizeGlobe();wake();});setInterval(()=>{if(!document.hidden)refresh();},25000);
   function setAccount(account){const next=account?.address||null;if(next===owner)return;owner=next;epoch++;data=null;paths=[];closeGlobe();$('#globe-countries').replaceChildren();$('#globe-count').textContent='';$('#globe-location').textContent='';$('#globe-share').checked=false;draw();if(next){loadMap();refresh();}}
   return {setAccount,show(){loadMap();refresh();wake();},clear(){setAccount(null);}};

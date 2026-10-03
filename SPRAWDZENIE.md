@@ -163,3 +163,6 @@ wallet_watchAsset nie jest wymienione w dokumentacji Blip. Próba importu nie je
 
 ### 0.11.1 — mobilny globus
 Zastąpiono transformację dialogu krótkim przenikaniem; rozmiar canvas pochodzi z clientWidth/clientHeight. Ponowne rysowanie po otwarciu, zmianie visualViewport i powrocie do aplikacji, wysokość z fallbackiem vh. Alternatywne otwarcie dla starszych WebView bez showModal. 79/79 testów; w przeglądarce sprawdzono pełny ekran 390x844, zmianę na 844x390 i zamknięcie. Nie odtworzono na fizycznym urządzeniu użytkownika — potrzebne potwierdzenie po wdrożeniu.
+
+### 0.12.0 — sterowanie globusem
+Pełny ekran: przeciąganie jednym palcem lub myszą obraca globus w dwóch osiach; dwa palce i kółko myszy zmieniają zoom 65–300%. Przyciski +/−, procent powiększenia, Reset view. Klawiatura: strzałki, +/−, 0 lub Home. Ręczna interakcja zatrzymuje automatyczny obrót, Resume rotation wznawia go. Gesty przechwytuje wyłącznie canvas; pozostała część okna pozostaje przewijalna. Zachowana poprawka mobilnego renderowania z 0.11.1. Testy: 81/81, w tym pinch, przejście z dwóch palców na jeden, anulowanie gestu, limity zoomu. Browser QA 390px: przyciski, przeciąganie, strzałki i reset; brak błędów konsoli. Gest dwóch palców sprawdzony testem zdarzeń, bez fizycznego telefonu.
