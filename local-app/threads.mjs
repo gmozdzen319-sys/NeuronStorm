@@ -35,6 +35,14 @@ export function allowed(db,id,account,includeDeleted=false){
   if(!q||q.closed_at!==null||(q.deleted_at!==null&&!(includeDeleted&&account.role==='admin'))||(account.role!=='admin'&&!db.prepare('SELECT 1 FROM question_participants WHERE question_id=? AND address=?').get(id,account.address.toLowerCase())))throw fail(404,'This conversation was not found.');
   return q;
 }
+export function previewQuestion(db,account,input){
+  requireProfile(db,account);const body=message(input.body,4000),raw=input.categoryIds??[input.categoryId];
+  if(!Array.isArray(raw)||!raw.length||raw.length>100||raw.some(id=>!Number.isSafeInteger(id)||!db.prepare('SELECT 1 FROM categories WHERE id=?').get(id)))throw fail(400,'Choose 1–100 existing topics.');
+  const categoryIds=[...new Set(raw)],marks=categoryIds.map(()=>'?').join(',');
+  const recipientCount=db.prepare(`SELECT count(DISTINCT address) AS n FROM profile_categories WHERE category_id IN (${marks}) AND address<>?`).get(...categoryIds,account.address.toLowerCase()).n;
+  if(!recipientCount)throw fail(409,'No other members currently have these topics. Choose another topic.');
+  return {body,categoryIds,recipientCount,topics:db.prepare(`SELECT name FROM categories WHERE id IN (${marks}) ORDER BY kind,name`).all(...categoryIds).map(r=>r.name)};
+}
 export function createQuestion(db,account,input,now){
   requireProfile(db,account);
   const body=message(input.body,4000),raw=input.categoryIds??[input.categoryId],author=account.address.toLowerCase();
@@ -80,7 +88,7 @@ export function readThread(db,account,id,includeDeleted=false){
   for(const payment of db.prepare("SELECT p.reply_id,p.units FROM payment_intents p JOIN replies r ON r.id=p.reply_id WHERE r.question_id=? AND p.action='tip' AND p.completed_at IS NOT NULL").all(id)){
     const total=tips.get(payment.reply_id)||{units:0n,count:0};total.units+=BigInt(payment.units);total.count++;tips.set(payment.reply_id,total);
   }
-  for(const reply of replies){const total=tips.get(reply.id)||{units:0n,count:0};reply.unread=reply.postedRevision>readRevision&&reply.canVote===1;delete reply.postedRevision;reply.tipUnits=String(total.units);reply.tipTotal=formatBalance(String(total.units),18);reply.tipCount=total.count;}
+  for(const reply of replies){reply.savedVersion=db.prepare('SELECT version FROM saved_answers WHERE owner=? AND reply_id=?').get(account.address.toLowerCase(),reply.id)?.version||null;const total=tips.get(reply.id)||{units:0n,count:0};reply.unread=reply.postedRevision>readRevision&&reply.canVote===1;delete reply.postedRevision;reply.tipUnits=String(total.units);reply.tipTotal=formatBalance(String(total.units),18);reply.tipCount=total.count;}
   return {unread:readRevision===0&&q.author!==account.address.toLowerCase(),expiresAt:q.created_at+QUESTION_LIFETIME,canAccept:q.author===account.address.toLowerCase(),canReply:!db.prepare('SELECT 1 FROM answer_slots WHERE question_id=? AND author=?').get(id,account.address.toLowerCase()),id,body:q.body,author,deletedAt:q.deleted_at,categories:topics(db,id),category:category.name,categoryKind:category.kind,createdAt:q.created_at,revision:q.revision,replies:replies.map(({walletAddress,...r})=>account.role==='admin'?{...r,walletAddress}:r),recipientCount:db.prepare('SELECT count(*) AS n FROM question_participants WHERE question_id=? AND is_recipient=1').get(id).n};
 }
 export function voteOnReply(db,account,id,replyId,input,now=Date.now()){

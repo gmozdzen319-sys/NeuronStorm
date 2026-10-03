@@ -42,6 +42,7 @@ export function createPayments(db,fetcher=fetch,clock=null){
       const intent=db.prepare('SELECT * FROM payment_intents WHERE id=? AND payer=?').get(input.id,account.address.toLowerCase());if(!intent)throw fail(404,'Payment request not found.');
       const hash=input.txHash.toLowerCase();
       if(intent.completed_at!==null){if(intent.tx_hash!==hash)throw fail(409,'This request already has a different payment.');return {ok:true,action:intent.action};}
+      if(db.prepare('SELECT 1 FROM reward_receipts WHERE tx_hash=?').get(hash))throw fail(409,'This transaction has already been used.');
       const used=db.prepare('SELECT id FROM payment_intents WHERE tx_hash=?').get(hash);if(used&&used.id!==intent.id)throw fail(409,'This transaction has already been used.');
       const currentBlock=await head();const [receipt,tx]=await Promise.all([rpc('quai_getTransactionReceipt',[hash]),rpc('quai_getTransactionByHash',[hash])]);
       if(!receipt||!tx)throw fail(409,'Transaction pending. Check again without sending another payment.');
@@ -58,6 +59,7 @@ export function createPayments(db,fetcher=fetch,clock=null){
       try{
         const latest=db.prepare('SELECT * FROM payment_intents WHERE id=?').get(intent.id);
         if(latest.completed_at!==null){if(latest.tx_hash!==hash)throw fail(409,'Payment already completed.');db.exec('COMMIT');return {ok:true,action:intent.action};}
+        if(db.prepare('SELECT 1 FROM reward_receipts WHERE tx_hash=?').get(hash))throw fail(409,'This transaction has already been used.');
         if(db.prepare('SELECT 1 FROM payment_intents WHERE tx_hash=?').get(hash))throw fail(409,'This transaction has already been used.');
         if(intent.action!=='tip'){
           let answer;try{answer=reply(account,intent.reply_id);}catch(error){if(error.status===404||error.status===409)throw fail(409,'This conversation closed before the answer change was confirmed. Keep your transaction hash and contact the administrator. Do not pay again.');throw error;}

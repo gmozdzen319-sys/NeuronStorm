@@ -31,3 +31,5 @@
 - Zatwierdzone 0.11.0: Blip na smartfonach obok Pelagus, oficjalny deep link i provider. Zachowaj serwerowe podpisy i weryfikację płatności. Portfel Blip jest osobny dla origin; nie scalać kont. Brak automatycznego finansowania. Import NS: przy unsupported instrukcja ręczna i jawne potwierdzenie użytkownika.
 
 - Zatwierdzone 0.13.0: ciągłe prywatne archiwum wszystkich formalnych pytań i odpowiedzi, eksport jednego TXT wyłącznie administratorowi; zachowuj nowe wersje po edycji, usunięciu i zamknięciu. Historia w trwałej bazie SQLite. Nie obejmuje Debate.
+
+- Zatwierdzone 0.14.0: priorytet pytań bez odpowiedzi; prywatne Saved Answers zachowane po zamknięciu; admin potwierdza hash ręcznej nagrody z puli (3 potwierdzenia NS), potem prywatne powiadomienie; zgłoszenia treści do admina; podgląd pytania przed podpisem; liczba kont w dziedzinach przy rejestracji i pytaniu. Bez odznak ekspertów. Nie wykonuj realnych wypłat; dowód transferu i ochrona przed ponownym użyciem hasha obowiązkowe.

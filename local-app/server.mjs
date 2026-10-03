@@ -1,3 +1,5 @@
+import {initMemberTools,library,reportContent,adminReports} from './member-tools.mjs';
+import {createRewardConfirmation} from './reward-confirmation.mjs';
 import {initArchive,archiveText} from './archive.mjs';
 import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
@@ -19,7 +21,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getAddress, verifyMessage, isQuaiAddress } from 'quais';
 import { initProfiles, readProfile, readCategories, saveProfile } from './profiles.mjs';
-import { initThreads, listQuestions, readThread, markThreadRead, voteOnReply } from './threads.mjs';
+import { initThreads, listQuestions, readThread, previewQuestion, markThreadRead, voteOnReply } from './threads.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 export const ADMIN = '0x00198C77e2cce7C839A34aF8C54Eb82106862640'.toLowerCase();
@@ -41,9 +43,11 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
   initProfiles(db);
   initThreads(db);
   initArchive(db);
+  initMemberTools(db);
   initActions(db);
   initDebate(db);
   initPayments(db);initCommunity(db);initGlobe(db);
+  const confirmReward=createRewardConfirmation(db,paymentFetch);
   const payments=createPayments(db,paymentFetch,now);
   db.exec('CREATE TABLE IF NOT EXISTS token_confirmations(address TEXT PRIMARY KEY REFERENCES accounts(address), contract TEXT NOT NULL, confirmed_at INTEGER NOT NULL)');
   const tokenConfirmed=address=>!!db.prepare('SELECT 1 FROM token_confirmations WHERE address=? AND contract=?').get(address.toLowerCase(),NS_TOKEN.address);
@@ -91,6 +95,9 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         db.prepare('DELETE FROM sessions WHERE expires<=?').run(now());
       }
       if(path.startsWith('/api/'))expireQuestions(db,now());
+      if(path==='/api/library'&&['GET','POST'].includes(req.method))return json(200,library(db,account(req),req.method==='POST'?await body(req):null,new URL(req.url,origin).searchParams,now()));
+      if(path==='/api/reports'&&req.method==='POST')return json(200,reportContent(db,account(req),await body(req),now()));
+      if(path==='/api/questions/preview'&&req.method==='POST')return json(200,previewQuestion(db,account(req),await body(req)));
       if(path==='/api/globe'&&['GET','POST'].includes(req.method))return json(200,globeData(db,account(req),clientIp(req,trustProxy),req.method==='POST'?await body(req):null,now(),geoLookup));
       if(path==='/api/presence'&&req.method==='POST'){
         const input=await body(req);let visitor=cookies(req).ns_visitor;
@@ -117,6 +124,8 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
       if(path.startsWith('/api/admin/')){
         const current=account(req);requireAdmin(db,current);
         if(path==='/api/admin/archive.txt'&&req.method==='GET'){res.setHeader('Content-Type','text/plain; charset=utf-8');res.setHeader('Content-Disposition','attachment; filename="neuron-storm-history.txt"');await pipeline(Readable.from(archiveText(db)),res);return;}
+        if(path==='/api/admin/reports'&&['GET','POST'].includes(req.method))return json(200,adminReports(db,current,req.method==='POST'?await body(req):null,new URL(req.url,origin).searchParams,now()));
+        if(path==='/api/admin/rewards/confirm'&&req.method==='POST')return json(200,await confirmReward(current,await body(req),now()));
         if(path==='/api/admin/accepted'&&req.method==='GET')return json(200,acceptedAnswers(db,new URL(req.url,origin).searchParams));
         if(path==='/api/admin/members'&&req.method==='GET'){
           const params=new URL(req.url,origin).searchParams,page=Number(params.get('page')||1),search=(params.get('search')||'').trim();
@@ -205,7 +214,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0)]);
         return json(200, { ok: true });
       }
-      const files = { '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
+      const files = { '/member-tools.js':['public/member-tools.js','text/javascript'], '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });

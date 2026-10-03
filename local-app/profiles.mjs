@@ -37,8 +37,8 @@ export function readProfile(db, address) {
   return { ...profile, points, work: selected.filter(c => c.kind === 'work').map(({id,name})=>({id,name})), hobbies: selected.filter(c => c.kind === 'hobbies').map(({id,name})=>({id,name})) };
 }
 export function readCategories(db,availableOnly=false) {
-  const rows = db.prepare(`SELECT id,kind,name FROM categories c ${availableOnly?'WHERE EXISTS(SELECT 1 FROM profile_categories pc WHERE pc.category_id=c.id)':''} ORDER BY name COLLATE NOCASE,id`).all();
-  return { work: rows.filter(c=>c.kind==='work').map(({id,name})=>({id,name})), hobbies: rows.filter(c=>c.kind==='hobbies').map(({id,name})=>({id,name})) };
+  const rows=db.prepare(`SELECT c.id,c.kind,c.name,(SELECT count(*) FROM profile_categories pc WHERE pc.category_id=c.id) AS memberCount FROM categories c ${availableOnly?'WHERE EXISTS(SELECT 1 FROM profile_categories pc WHERE pc.category_id=c.id)':''} ORDER BY c.name COLLATE NOCASE,c.id`).all();
+  return {work:rows.filter(c=>c.kind==='work').map(({kind,...c})=>c),hobbies:rows.filter(c=>c.kind==='hobbies').map(({kind,...c})=>c)};
 }
 export function saveProfile(db, address, input, now) {
   const nickname = text(input.nickname, 'Nickname', 40, true);

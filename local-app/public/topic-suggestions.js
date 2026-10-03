@@ -17,12 +17,12 @@ export function createTopicSuggestions(input,list,getNames){
     Object.assign(list.style,{left:box.left+'px',top:box.top+'px',width:box.width+'px',maxHeight:box.height+'px'});
     if(box.upward)list.style.top=(rect.top-6-Math.min(box.height,list.scrollHeight+2))+'px';
   }
-  function choose(index){if(!matches[index])return;input.value=matches[index];close();input.focus({preventScroll:true});}
+  function choose(index){if(!matches[index])return;input.value=matches[index].name;close();input.focus({preventScroll:true});}
   function refresh(){
     if(document.activeElement!==input)return;
     const query=input.value.normalize('NFKC').trim().toLocaleLowerCase();
-    matches=getNames().filter(name=>name.normalize('NFKC').toLocaleLowerCase().includes(query)).slice(0,50);active=-1;list.replaceChildren();input.removeAttribute('aria-activedescendant');
-    matches.forEach((name,index)=>{const option=document.createElement('div');option.id=list.id+'-'+index;option.setAttribute('role','option');option.setAttribute('aria-selected','false');option.textContent=name;option.addEventListener('pointerdown',e=>e.preventDefault());option.addEventListener('click',()=>choose(index));list.append(option);});
+    matches=getNames().filter(({name})=>name.normalize('NFKC').toLocaleLowerCase().includes(query)).slice(0,50);active=-1;list.replaceChildren();input.removeAttribute('aria-activedescendant');
+    matches.forEach(({name,memberCount},index)=>{const option=document.createElement('div');option.id=list.id+'-'+index;option.setAttribute('role','option');option.setAttribute('aria-selected','false');option.textContent=name+' · '+memberCount+(memberCount===1?' member':' members');option.addEventListener('pointerdown',e=>e.preventDefault());option.addEventListener('click',()=>choose(index));list.append(option);});
     list.hidden=!matches.length;input.setAttribute('aria-expanded',String(!!matches.length));position();
   }
   input.addEventListener('input',refresh);input.addEventListener('focus',refresh);input.addEventListener('blur',close);
