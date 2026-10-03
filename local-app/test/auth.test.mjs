@@ -145,7 +145,7 @@ test('malformed JSON values do not create accounts', async t => {
   assert.equal(f.db.prepare('SELECT count(*) AS n FROM accounts').get().n,0);
 });
 test('missing wallet and refused signature leave user unauthenticated', async () => {
-  await assert.rejects(authenticate(undefined,()=>assert.fail()), /Pelagus was not detected/);
+  await assert.rejects(authenticate(undefined,()=>assert.fail()), /No supported wallet detected/);
   let verified=false;
   const provider={request:async ({method})=>{if(method==='quai_requestAccounts'||method==='quai_accounts') return [wallet.address]; throw Object.assign(new Error('rejected'),{code:4001});}};
   await assert.rejects(authenticate(provider,async path=>{if(path==='/api/verify') verified=true; return {id:'test',message:'test'};}));

@@ -1,3 +1,4 @@
+import {getWalletProvider,isBlip,walletName,blipLink} from './wallet-provider.js';
 import {startNeuronBackground} from './neuron-background.js';
 startNeuronBackground();
 import {createTokenUI} from './token-ui.js';
@@ -10,7 +11,7 @@ let currentAccount = null, profile = null, catalog = { work: [], hobbies: [] }, 
 let tokenSetupRequired=false, neuronToken=null;
 let profileRevision = 0, saving = false, loading = false;
 const key = name => name.normalize('NFKC').replace(/\s/gu, '').toLowerCase();
-function resetConnection() { connectedAddress = null; login.textContent = 'Sign in with Pelagus'; }
+function resetConnection() { connectedAddress = null; login.textContent = 'Sign in with '+walletName(); }
 async function api(path, data) {
   const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST', credentials: 'same-origin', headers: data === undefined ? {} : { 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data) });
   const result = await response.json();
@@ -134,8 +135,8 @@ login.addEventListener('click',async()=>{
   if(busy)return;busy=true;login.disabled=true;
   const attempt=++generation;
   try {
-    if(!connectedAddress){notice('Confirm the connection in Pelagus…');connectedAddress=await connectWallet(window.pelagus);login.textContent='Sign message & continue';notice('Wallet connected. You are not signed in yet. Click “Sign message & continue” to confirm your account with a one-time signature.');return;}
-    const result=await signIn(window.pelagus,connectedAddress,api,notice);
+    if(!connectedAddress){notice('Confirm the connection in '+walletName()+'…');connectedAddress=await connectWallet(getWalletProvider());login.textContent='Sign message & continue';notice('Wallet connected. You are not signed in yet. Click “Sign message & continue” to confirm your account with a one-time signature.');return;}
+    const result=await signIn(getWalletProvider(),connectedAddress,api,notice);
     if(attempt!==generation){await api('/api/logout',{});return;}
     resetConnection();notice();await renderSession(result.account);
   }catch(error){resetConnection();notice(walletError(error),true);}
@@ -152,12 +153,21 @@ async function walletChanged(){
   try{await api('/api/logout',{});await renderSession(null);notice('Your wallet connection has changed. Please sign in again.');}
   catch{await renderSession(null);notice('Unable to end the session. Start the local server and click Sign out.',true);logout.hidden=false;}
 }
-window.pelagus?.on?.('accountsChanged',walletChanged);window.pelagus?.on?.('disconnect',walletChanged);window.pelagus?.on?.('chainChanged',walletChanged);
+getWalletProvider()?.on?.('accountsChanged',walletChanged);getWalletProvider()?.on?.('disconnect',walletChanged);getWalletProvider()?.on?.('chainChanged',walletChanged);
 async function refresh(){
   if(busy||saving||loading)return;
   try{const result=await api('/api/session');const expired=currentAccount&&!result.account;await renderSession(result.account);if(expired)notice('Your session has expired. Please sign in again.',true);}
   catch{notice('Unable to reach the local server. Start Neuron Storm and refresh this page.',true);}
   finally{login.disabled=false;}
+}
+const blipOpen=$('#open-blip');
+blipOpen.href=blipLink(location.origin)||blipLink('https://neuronstorm.onrender.com');
+blipOpen.hidden=isBlip(getWalletProvider());
+$('#blip-info').hidden=!isBlip(getWalletProvider());
+resetConnection();
+if(isBlip(getWalletProvider())){
+  const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let node;
+  while(node=walker.nextNode())if(node.parentElement.tagName!=='SCRIPT'&&!node.parentElement.closest('#blip-info'))node.textContent=node.textContent.replaceAll('Pelagus','Blip').replaceAll('PELAGUS','BLIP');
 }
 const conversations=createConversations({api,onProfile:async()=>{if(!profile){conversations.openProfile();showEditor();return;}if(profile){profileNotice();showProfile();await refreshPoints();}},onExpired:async()=>{await renderSession(null);notice('Your session has expired. Please sign in again.',true);}});
 const tokenUI=createTokenUI({api,onExpired:()=>renderSession(null)});
@@ -172,9 +182,9 @@ setInterval(()=>{if(!document.hidden)refreshPoints();},5000);
 
 $('#add-ns').addEventListener('click',async()=>{
   const owner=currentAccount?.address,revision=profileRevision;if(!owner||!neuronToken)return;
-  const button=$('#add-ns');button.disabled=true;$('#token-setup-status').textContent='Check Pelagus to add Neuron Storm…';$('#token-confirm-area').hidden=true;$('#token-visible').checked=false;$('#confirm-ns').disabled=true;
-  try{await addNeuronToken(window.pelagus,owner,neuronToken);if(revision!==profileRevision||currentAccount?.address!==owner)return;$('#token-setup-status').textContent='Request sent to Pelagus. Confirm below once NS is visible in your wallet.';$('#token-confirm-area').hidden=false;}
-  catch(error){if(revision===profileRevision)$('#token-setup-status').textContent=error.message||'Unable to add NS. Please try again.';}finally{button.disabled=false;}
+  const button=$('#add-ns');button.disabled=true;$('#token-setup-status').textContent='Check '+walletName()+' to add Neuron Storm…';$('#token-confirm-area').hidden=true;$('#token-visible').checked=false;$('#confirm-ns').disabled=true;
+  try{await addNeuronToken(getWalletProvider(),owner,neuronToken);if(revision!==profileRevision||currentAccount?.address!==owner)return;$('#token-setup-status').textContent='Request sent to '+walletName()+'. Confirm below once NS is visible in your wallet.';$('#token-confirm-area').hidden=false;}
+  catch(error){if(revision===profileRevision){$('#token-setup-status').textContent=error.message||'Unable to add NS. Please try again.';if(error.manualImport)$('#token-confirm-area').hidden=false;}}finally{button.disabled=false;}
 });
 $('#token-visible').addEventListener('change',()=>{$('#confirm-ns').disabled=!$('#token-visible').checked;});
 $('#confirm-ns').addEventListener('click',async()=>{

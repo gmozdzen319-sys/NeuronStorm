@@ -1,3 +1,4 @@
+import {getWalletProvider,isBlip,walletName,blipLink} from './wallet-provider.js';
 const TREASURY='0x001d5bE0940145De0c2c1D851b99f33968DED764';
 export function createRewardsUI(api,getAccount,onChanged){
   const $=s=>document.querySelector(s),dialog=$('#payment-dialog');let selection=null,pending=null,owner=null,busy=false,memberPage=1,memberPages=1;
@@ -5,7 +6,7 @@ export function createRewardsUI(api,getAccount,onChanged){
   const message=text=>$('#payment-status').textContent=text;
   function store(value,address=owner){try{if(value)localStorage.setItem('ns-payment:'+address,JSON.stringify(value));else localStorage.removeItem('ns-payment:'+address);}catch{}if(owner===address){pending=value;$('#pending-payment').hidden=!pending;}}
   function setAccount(account){const next=account?.address.toLowerCase()||null;if(owner===next)return;owner=next;pending=null;dialog.close();$('#member-wallet-list').replaceChildren();try{pending=owner?JSON.parse(localStorage.getItem('ns-payment:'+owner)||'null'):null;}catch{}$('#pending-payment').hidden=!pending;$('#payment-hash').value=pending?.txHash||'';}
-  function restore(){if(!pending)return;$('#payment-discard').hidden=false;selection=null;$('#payment-title').textContent='Pending NS payment';$('#payment-explanation').textContent='Check your existing transaction. Do not pay again. If Pelagus did not return a hash, copy it from the wallet activity.';$('#payment-recipient').textContent=pending.recipient||'';for(const id of ['#tip-amount','#tip-amount-label','#edit-answer','#edit-answer-label'])$(id).hidden=true;$('#payment-send').hidden=true;$('#payment-check').hidden=false;$('#payment-hash-label').hidden=false;$('#payment-hash').hidden=false;$('#payment-hash').value=pending.txHash||'';message('');if(!dialog.open)dialog.showModal();}
+  function restore(){if(!pending)return;$('#payment-discard').hidden=false;selection=null;$('#payment-title').textContent='Pending NS payment';$('#payment-explanation').textContent='Check your existing transaction. Do not pay again. If your wallet did not return a hash, copy it from the wallet activity.';$('#payment-recipient').textContent=pending.recipient||'';for(const id of ['#tip-amount','#tip-amount-label','#edit-answer','#edit-answer-label'])$(id).hidden=true;$('#payment-send').hidden=true;$('#payment-check').hidden=false;$('#payment-hash-label').hidden=false;$('#payment-hash').hidden=false;$('#payment-hash').value=pending.txHash||'';message('');if(!dialog.open)dialog.showModal();}
   function open(action,reply){
     if(pending){restore();return;}$('#payment-discard').hidden=true;selection={action,reply};$('#payment-title').textContent=action==='tip'?'Tip '+reply.author:action==='edit'?'Edit answer · 1 NS':'Delete answer · 1 NS';
     $('#payment-explanation').textContent=action==='tip'?'Send NS directly to this answer’s author.':action==='edit'?'Send 1 NS to the reward pool to update this answer. All existing ratings on this answer will be cleared.':'Send 1 NS to the reward pool to delete this answer. Its stars will no longer count. You will not be able to post another answer to this question.';
@@ -13,7 +14,7 @@ export function createRewardsUI(api,getAccount,onChanged){
     $('#payment-recipient').textContent=action==='tip'?'Recipient: '+reply.author:'Reward pool: '+TREASURY;$('#payment-send').hidden=false;$('#payment-check').hidden=true;$('#payment-hash').hidden=true;$('#payment-hash-label').hidden=true;message('');dialog.showModal();
   }
   async function check(){
-    if(!pending||busy)return;const address=owner,record={...pending,txHash:$('#payment-hash').value.trim()||pending.txHash};if(!/^0x[0-9a-f]{64}$/i.test(record.txHash||'')){message('Copy the transaction hash from Pelagus to check this payment.');return;}
+    if(!pending||busy)return;const address=owner,record={...pending,txHash:$('#payment-hash').value.trim()||pending.txHash};if(!/^0x[0-9a-f]{64}$/i.test(record.txHash||'')){message('Copy the transaction hash from your wallet to check this payment.');return;}
     store(record);busy=true;$('#payment-check').disabled=true;message('Checking Quai Network…');
     try{await api('/api/payments/confirm',{id:record.id,txHash:record.txHash});store(null,address);if(owner===address){message('Payment confirmed.');dialog.close();await onChanged();}}
     catch(error){if(owner===address)message(error.message);}finally{busy=false;$('#payment-check').disabled=false;}
@@ -21,17 +22,17 @@ export function createRewardsUI(api,getAccount,onChanged){
   $('#payment-form').addEventListener('submit',async event=>{
     event.preventDefault();if(busy||pending||!selection)return;busy=true;$('#payment-send').disabled=true;const address=owner;
     try{
-      const provider=window.pelagus;if(!provider?.request)throw Error('Open this page with Pelagus installed.');
-      const accounts=await provider.request({method:'quai_accounts',params:[]});if(accounts?.[0]?.toLowerCase()!==address)throw Error('Select your signed-in account in Pelagus.');
-      if(BigInt(await provider.request({method:'quai_chainId',params:[]}))!==9n)throw Error('Select Quai Mainnet in Pelagus.');
+      const provider=getWalletProvider();if(!provider?.request)throw Error('Open this page with your wallet installed.');
+      const accounts=await provider.request({method:'quai_accounts',params:[]});if(accounts?.[0]?.toLowerCase()!==address)throw Error('Select your signed-in account in your wallet.');
+      if(BigInt(await provider.request({method:'quai_chainId',params:[]}))!==9n)throw Error('Select Quai Mainnet in your wallet.');
       const intent=await api('/api/payments/prepare',{replyId:selection.reply.id,action:selection.action,amount:$('#tip-amount').value.trim(),body:$('#edit-answer').value});
       if(owner!==address)throw Error('Your session changed. Sign in again.');
-      const current=await provider.request({method:'quai_accounts',params:[]});if(current?.[0]?.toLowerCase()!==address)throw Error('Your Pelagus account changed.');
-      const record={id:intent.id,recipient:intent.recipient,txHash:null};store(record,address);restore();message('Approve the NS transfer in Pelagus.');
+      const current=await provider.request({method:'quai_accounts',params:[]});if(current?.[0]?.toLowerCase()!==address)throw Error('Your your wallet account changed.');
+      const record={id:intent.id,recipient:intent.recipient,txHash:null};store(record,address);restore();message('Approve the NS transfer in your wallet.');
       const txHash=await provider.request({method:'quai_sendTransaction',params:[intent.transaction]});
-      if(typeof txHash!=='string'||!/^0x[0-9a-f]{64}$/i.test(txHash))throw Error('Check Pelagus activity and enter the transaction hash. Do not pay again.');
+      if(typeof txHash!=='string'||!/^0x[0-9a-f]{64}$/i.test(txHash))throw Error('Check your wallet activity and enter the transaction hash. Do not pay again.');
       store({...record,txHash},address);if(owner===address){$('#payment-hash').value=txHash;message('Transfer submitted. Check payment after 3 network confirmations.');}
-    }catch(error){if(owner===address)message(error.message||'The wallet request did not complete. Check Pelagus activity.');}
+    }catch(error){if(owner===address)message(error.message||'The wallet request did not complete. Check your wallet activity.');}
     finally{busy=false;$('#payment-send').disabled=false;}
   });
   setInterval(()=>{if(pending?.txHash&&!document.hidden)check();},8000);
