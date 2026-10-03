@@ -1,3 +1,6 @@
+import {initArchive,archiveText} from './archive.mjs';
+import {Readable} from 'node:stream';
+import {pipeline} from 'node:stream/promises';
 import {initGlobe,globeData,clientIp,lookupCountry} from './geography.mjs';
 import {expireQuestions,acceptedAnswers} from './lifecycle.mjs';
 import {initPayments,createPayments,REWARD_ADDRESS} from './payments.mjs';
@@ -37,6 +40,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
     CREATE INDEX IF NOT EXISTS challenges_expiry ON challenges(expires);`);
   initProfiles(db);
   initThreads(db);
+  initArchive(db);
   initActions(db);
   initDebate(db);
   initPayments(db);initCommunity(db);initGlobe(db);
@@ -112,6 +116,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
       if(['/api/notifications/read','/api/notifications/read-all'].includes(path)&&req.method==='POST')return json(200,readNotifications(db,account(req),await body(req),path.endsWith('read-all'),now()));
       if(path.startsWith('/api/admin/')){
         const current=account(req);requireAdmin(db,current);
+        if(path==='/api/admin/archive.txt'&&req.method==='GET'){res.setHeader('Content-Type','text/plain; charset=utf-8');res.setHeader('Content-Disposition','attachment; filename="neuron-storm-history.txt"');await pipeline(Readable.from(archiveText(db)),res);return;}
         if(path==='/api/admin/accepted'&&req.method==='GET')return json(200,acceptedAnswers(db,new URL(req.url,origin).searchParams));
         if(path==='/api/admin/members'&&req.method==='GET'){
           const params=new URL(req.url,origin).searchParams,page=Number(params.get('page')||1),search=(params.get('search')||'').trim();
@@ -200,7 +205,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0)]);
         return json(200, { ok: true });
       }
-      const files = { '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
+      const files = { '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });
@@ -209,6 +214,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
       }
       return json(404, { error: 'Page not found.' });
     } catch (error) {
+      if(res.headersSent||res.destroyed){if(!res.destroyed)res.destroy();return;}
       if (!error.status) console.error('Request failed:', error.message);
       return json(error.status || 500, { error: error.status ? error.message : 'Server error. Please try again.' });
     }

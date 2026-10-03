@@ -29,3 +29,5 @@
 - Zatwierdzone 0.10.0: subtelne pulsowanie nieprzeczytanych elementów, globus krajów osób online z dobrowolnym udziałem i pełnym ekranem. Lokalna baza IP, bez wysyłania IP poza serwer, bez dokładnych pozycji i identyfikacji osób w API globusa.
 
 - Zatwierdzone 0.11.0: Blip na smartfonach obok Pelagus, oficjalny deep link i provider. Zachowaj serwerowe podpisy i weryfikację płatności. Portfel Blip jest osobny dla origin; nie scalać kont. Brak automatycznego finansowania. Import NS: przy unsupported instrukcja ręczna i jawne potwierdzenie użytkownika.
+
+- Zatwierdzone 0.13.0: ciągłe prywatne archiwum wszystkich formalnych pytań i odpowiedzi, eksport jednego TXT wyłącznie administratorowi; zachowuj nowe wersje po edycji, usunięciu i zamknięciu. Historia w trwałej bazie SQLite. Nie obejmuje Debate.

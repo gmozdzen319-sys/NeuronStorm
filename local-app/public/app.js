@@ -1,3 +1,4 @@
+import {createTopicSuggestions} from './topic-suggestions.js';
 import {getWalletProvider,isBlip,walletName,blipLink} from './wallet-provider.js';
 import {startNeuronBackground} from './neuron-background.js';
 startNeuronBackground();
@@ -21,6 +22,7 @@ async function api(path, data) {
 function notice(message = '', error = false) { status.textContent = message; status.classList.toggle('error', error); }
 function profileNotice(message = '', type = '') { const target=$('#profile-status'); target.textContent=message; target.className=type; }
 function showProfile() {
+  for(const control of Object.values(topicSuggestions))control.close();
   $('#token-setup').hidden=true;
   conversations.openProfile();
   $('#profile-eyebrow').textContent='YOUR CORNER OF NEURON STORM';
@@ -45,12 +47,8 @@ function renderSelected(kind) {
   }
   $('#'+kind+'-empty').hidden=!!selected[kind].length;$('#'+kind+'-add').disabled=selected[kind].length>=4;
 }
-function fillOptions() {
-  for(const kind of ['work','hobbies']) {
-    const list=$('#'+kind+'-options');list.replaceChildren();
-    for(const {name} of catalog[kind]){const option=document.createElement('option');option.value=name;list.append(option);}
-  }
-}
+const topicSuggestions={};
+function fillOptions(){for(const control of Object.values(topicSuggestions))control.refresh();}
 function showEditor() {
   $('#token-setup').hidden=!tokenSetupRequired;
   if(tokenSetupRequired){form.hidden=true;$('#profile-view').hidden=true;$('#profile-title').textContent='Welcome to Neuron Storm';$('#profile-intro').textContent='One more step before creating your profile.';return;}
@@ -90,6 +88,7 @@ async function renderSession(account) {
   if(changed) {await loadProfile();if(!profile)$('#profile-title').focus();}
 }
 function addTopic(kind) {
+  topicSuggestions[kind]?.close();
   const input=$('#'+kind+'-input'), name=input.value.trim().replace(/\s+/gu,' ');
   if(!name){profileNotice('Enter a topic or choose one from the suggestions.','error');input.focus();return false;}
   if(name.length>60){profileNotice('Topic names must be 60 characters or fewer.','error');input.focus();return false;}
@@ -99,6 +98,7 @@ function addTopic(kind) {
   selected[kind].push(canonical);input.value='';renderSelected(kind);profileNotice();input.focus();return true;
 }
 for(const kind of ['work','hobbies']) {
+  topicSuggestions[kind]=createTopicSuggestions($('#'+kind+'-input'),$('#'+kind+'-options'),()=>selected[kind].length>=4?[]:catalog[kind].filter(item=>!selected[kind].some(name=>key(name)===key(item.name))).map(item=>item.name));
   $('#'+kind+'-add').addEventListener('click',()=>addTopic(kind));
   $('#'+kind+'-input').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();addTopic(kind);}});
 }
