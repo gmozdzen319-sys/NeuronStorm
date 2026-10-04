@@ -509,18 +509,13 @@ test('public statistics match signed-in totals without exposing private resource
   assert.deepEqual((await f.request('/api/stats',undefined,anonymous)).data,publicStats.data);
 });
 
-test('registration requires an authenticated explicit NS confirmation and persists it',async t=>{
- const f=await fixture(t);assert.equal((await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true})).status,401);
+test('registration creates a profile after signature without token import or confirmation',async t=>{
+ const f=await fixture(t);assert.equal((await f.request('/api/profile',profileInput)).status,401);
  const c=await f.challenge();await f.request('/api/verify',{id:c.id,signature:await wallet.signMessage(c.message)});
- assert.equal((await f.request('/api/profile')).data.tokenSetupRequired,true);
- assert.equal((await f.request('/api/profile',profileInput)).status,409);
- assert.equal((await f.request('/api/token/confirm',{contract:other.address,confirmed:true})).status,400);
- assert.equal((await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:false})).status,400);
- assert.equal((await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true},{Origin:'https://evil.example'})).status,403);
- await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true});
- assert.equal((await f.request('/api/profile',profileInput)).status,200);
  assert.equal((await f.request('/api/profile')).data.tokenSetupRequired,false);
- assert.equal(f.db.prepare('SELECT count(*) AS n FROM token_confirmations').get().n,1);
+ assert.equal((await f.request('/api/profile',profileInput)).status,200);
+ assert.equal(f.db.prepare('SELECT count(*) AS n FROM token_confirmations').get().n,0);
+ assert.equal((await f.request('/api/profile')).data.profile.nickname,profileInput.nickname.trim());
 });
 test('NS balance uses session address and on-chain calls only; public supply exposes no balances',async t=>{
  const calls=[];const f=await fixture(t,{tokenFetch:async(url,options)=>{calls.push(JSON.parse(options.body));return mockTokenFetch(url,options);}});

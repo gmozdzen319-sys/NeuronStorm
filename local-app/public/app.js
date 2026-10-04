@@ -3,13 +3,12 @@ import {getWalletProvider,isBlip,walletName,blipLink} from './wallet-provider.js
 import {startNeuronBackground} from './neuron-background.js';
 startNeuronBackground();
 import {createTokenUI} from './token-ui.js';
-import { connectWallet, signIn, walletError, addNeuronToken } from './wallet.js';
+import { connectWallet, signIn, walletError } from './wallet.js';
 import { createConversations } from './conversations.js';
 const $ = selector => document.querySelector(selector);
 const login = $('#login'), logout = $('#logout'), status = $('#status'), form = $('#profile-form');
 let busy = false, generation = 0, connectedAddress = null;
 let currentAccount = null, profile = null, catalog = { work: [], hobbies: [] }, selected = { work: [], hobbies: [] };
-let tokenSetupRequired=false, neuronToken=null;
 let profileRevision = 0, saving = false, loading = false;
 const key = name => name.normalize('NFKC').replace(/\s/gu, '').toLowerCase();
 function resetConnection() { connectedAddress = null; login.textContent = 'Sign in with '+walletName(); }
@@ -23,7 +22,6 @@ function notice(message = '', error = false) { status.textContent = message; sta
 function profileNotice(message = '', type = '') { const target=$('#profile-status'); target.textContent=message; target.className=type; }
 function showProfile() {
   for(const control of Object.values(topicSuggestions))control.close();
-  $('#token-setup').hidden=true;
   conversations.openProfile();
   $('#profile-eyebrow').textContent='YOUR CORNER OF NEURON STORM';
   $('#profile-title').textContent='My Profile';
@@ -50,8 +48,6 @@ function renderSelected(kind) {
 const topicSuggestions={};
 function fillOptions(){for(const control of Object.values(topicSuggestions))control.refresh();}
 function showEditor() {
-  $('#token-setup').hidden=!tokenSetupRequired;
-  if(tokenSetupRequired){form.hidden=true;$('#profile-view').hidden=true;$('#profile-title').textContent='Welcome to Neuron Storm';$('#profile-intro').textContent='One more step before creating your profile.';return;}
   $('#profile-eyebrow').textContent=profile?'KEEP YOUR PROFILE UP TO DATE':'MAKE YOURSELF AT HOME';
   $('#profile-title').textContent=profile?'Edit your profile':'Create your profile';
   $('#profile-intro').textContent='A little about you and the topics you care about.';
@@ -71,7 +67,7 @@ async function loadProfile() {
   try {
     const [saved,topics]=await Promise.all([api('/api/profile'),api('/api/categories')]);
     if(revision!==profileRevision)return;
-    profile=saved.profile;tokenSetupRequired=saved.tokenSetupRequired;neuronToken=saved.token;catalog=topics.categories;profileNotice();
+    profile=saved.profile;catalog=topics.categories;profileNotice();
     if(profile)conversations.setIdentity(currentAccount,profile,true);else showEditor();
   } catch(error) {
     if(revision!==profileRevision)return;
@@ -84,7 +80,7 @@ async function renderSession(account) {
   currentAccount=account;conversations.setAccount(account);tokenUI.setAccount(account);
   login.hidden=!!account;logout.hidden=!account;if(changed||!account)$('#landing').hidden=!!account;if(changed||!account)$('#profile-area').hidden=!account;
   $('#address').textContent=account?.address||'';$('#role').textContent=account?.role==='admin'?'Administrator':'';
-  if(!account){tokenSetupRequired=false;neuronToken=null;$('#token-setup').hidden=true;$('#token-confirm-area').hidden=true;$('#token-visible').checked=false;$('#confirm-ns').disabled=true;$('#token-setup-status').textContent='';conversations.clear();profileRevision++;loading=false;profile=null;selected={work:[],hobbies:[]};form.reset();form.hidden=true;$('#profile-view').hidden=true;for(const kind of ['work','hobbies']){$('#saved-'+kind).replaceChildren();$('#'+kind+'-selected').replaceChildren();}$('#saved-nickname').textContent='';$('#saved-name').textContent='';profileNotice();return;}
+  if(!account){conversations.clear();profileRevision++;loading=false;profile=null;selected={work:[],hobbies:[]};form.reset();form.hidden=true;$('#profile-view').hidden=true;for(const kind of ['work','hobbies']){$('#saved-'+kind).replaceChildren();$('#'+kind+'-selected').replaceChildren();}$('#saved-nickname').textContent='';$('#saved-name').textContent='';profileNotice();return;}
   if(changed) {await loadProfile();if(!profile)$('#profile-title').focus();}
 }
 function addTopic(kind) {
@@ -110,7 +106,7 @@ $('#edit-profile').addEventListener('click',async()=>{
 $('#cancel-edit').addEventListener('click',()=>{profileNotice();showProfile();});
 $('#retry-profile').addEventListener('click',loadProfile);
 form.addEventListener('submit',async event=>{
-  event.preventDefault();if(saving||tokenSetupRequired)return;
+  event.preventDefault();if(saving)return;
   profileNotice();
   const nickname=$('#nickname').value.trim();
   $('#nickname').setAttribute('aria-invalid',String(!nickname));
@@ -132,7 +128,9 @@ form.addEventListener('submit',async event=>{
   }
 });
 login.addEventListener('click',async()=>{
-  if(busy)return;busy=true;login.disabled=true;
+  if(busy)return;
+  if(!getWalletProvider()?.request){resetConnection();notice('Install Pelagus from its official website, then return here and refresh the page to sign in.');$('#wallet-install').hidden=false;window.location.assign('https://www.pelaguswallet.io/');return;}
+  $('#wallet-install').hidden=true;busy=true;login.disabled=true;
   const attempt=++generation;
   try {
     if(!connectedAddress){notice('Confirm the connection in '+walletName()+'…');connectedAddress=await connectWallet(getWalletProvider());login.textContent='Sign message & continue';notice('Wallet connected. You are not signed in yet. Click “Sign message & continue” to confirm your account with a one-time signature.');return;}
@@ -179,15 +177,3 @@ async function refreshPoints(){
   try{const result=await api('/api/profile');if(current!==profileRevision||!result.profile)return;profile.points=result.profile.points;$('#saved-points').textContent='★ '+profile.points+(profile.points===1?' star':' stars');}catch(error){if(error.httpStatus===401)await refresh();}
 }
 setInterval(()=>{if(!document.hidden)refreshPoints();},5000);
-
-$('#add-ns').addEventListener('click',async()=>{
-  const owner=currentAccount?.address,revision=profileRevision;if(!owner||!neuronToken)return;
-  const button=$('#add-ns');button.disabled=true;$('#token-setup-status').textContent='Check '+walletName()+' to add Neuron Storm…';$('#token-confirm-area').hidden=true;$('#token-visible').checked=false;$('#confirm-ns').disabled=true;
-  try{await addNeuronToken(getWalletProvider(),owner,neuronToken);if(revision!==profileRevision||currentAccount?.address!==owner)return;$('#token-setup-status').textContent='Request sent to '+walletName()+'. Confirm below once NS is visible in your wallet.';$('#token-confirm-area').hidden=false;}
-  catch(error){if(revision===profileRevision){$('#token-setup-status').textContent=error.message||'Unable to add NS. Please try again.';if(error.manualImport)$('#token-confirm-area').hidden=false;}}finally{button.disabled=false;}
-});
-$('#token-visible').addEventListener('change',()=>{$('#confirm-ns').disabled=!$('#token-visible').checked;});
-$('#confirm-ns').addEventListener('click',async()=>{
-  if(!$('#token-visible').checked||!currentAccount||!neuronToken)return;const owner=currentAccount.address,revision=profileRevision;$('#confirm-ns').disabled=true;
-  try{await api('/api/token/confirm',{contract:neuronToken.address,confirmed:true});if(revision!==profileRevision||currentAccount?.address!==owner)return;tokenSetupRequired=false;showEditor();$('#nickname').focus();}catch(error){if(revision===profileRevision){$('#token-setup-status').textContent=error.message;$('#confirm-ns').disabled=false;}}
-});

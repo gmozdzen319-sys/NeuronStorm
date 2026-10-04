@@ -89,3 +89,27 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 .archive-download{display:inline-flex;align-items:center;margin-top:6px;text-decoration:none;min-height:44px}
 
 .topic-member-count{margin-left:auto;color:#8bb9c9;white-space:nowrap;font-size:11px}.awaiting-answer{border-color:#317d8f}.awaiting-badge{font-size:11px;color:#8be1e6;background:#12313b;padding:5px 9px;border-radius:12px}.awaiting-urgent{border-color:#df7178}.awaiting-urgent .awaiting-badge{color:#ffb7bd;background:#431b29}.member-answer-actions{display:flex;gap:18px;align-items:center;margin-top:14px;flex-wrap:wrap}.report-content{margin:10px 0;font-size:12px}.saved-answer{padding:22px;border:1px solid #305367;background:#0c1923;border-radius:12px;margin:20px 0}.saved-answer h2{font-size:18px}.saved-answer p,.report-card p{white-space:pre-wrap;overflow-wrap:anywhere}.saved-answer small{color:#8cb8cb}.report-card{border-bottom:1px solid #284958;padding:14px 0;font-size:13px}.report-card summary{cursor:pointer;color:#9ee2eb}#report-form label{display:block;margin:15px 0 8px}#report-form select,#report-form textarea{width:100%;padding:12px;background:#0a1823;color:#eaf3ff;border:1px solid #3b6277;border-radius:7px;font:inherit}#question-preview-body{max-height:35vh;overflow:auto;padding:16px;background:#101f2b;border-radius:8px}.accepted-card form input{display:block;width:100%;margin:10px 0;padding:10px;background:#0b1823;color:#def6ff;border:1px solid #385c70;border-radius:6px}.accepted-card form p{font-size:11px}
+
+/* Keep the review readable even on narrow screens and short viewports. */
+#question-preview-dialog{box-sizing:border-box;width:min(680px,calc(100% - 24px));max-height:calc(100vh - 24px);max-height:calc(100dvh - 24px);overscroll-behavior:contain}
+#question-preview-dialog h2{margin-top:0;font-size:24px}
+#question-preview-body{min-height:180px;max-height:45vh;max-height:45dvh;line-height:1.7}
+#question-preview-dialog .form-actions{gap:12px}
+#question-preview-topics{overflow-wrap:anywhere}
+.admin-reports-link{display:flex;gap:14px;align-items:center;border-color:#438199;margin-bottom:20px;color:#8de8ff}
+.admin-reports-link span{font-size:12px;color:#a7bdce}
+#reports-view .accepted-section{margin-top:12px}
+@media(max-width:620px){#question-preview-dialog{padding:20px 18px;border-radius:16px}#question-preview-body{min-height:220px;max-height:none;overflow:visible;font-size:16px}#question-preview-dialog .form-actions{padding-top:16px}#question-preview-dialog .form-actions button{min-height:46px;width:100%}.admin-reports-link{flex-wrap:wrap}}
+
+.question-filters{display:grid;grid-template-columns:2fr 1fr 1fr 1fr;gap:12px;margin:24px 0}.question-filters label{font-size:12px;color:#9bb9c9}.question-filters input,.question-filters select{display:block;width:100%;min-height:44px;margin-top:7px;padding:10px;background:#0d1c27;border:1px solid #335366;border-radius:8px;color:#eaf4ff;font:inherit}.block-member{margin:12px 0;color:#d89dad}.blocked-member{display:flex;justify-content:space-between;align-items:center;gap:15px;padding:18px 0;border-bottom:1px solid #284452}#draft-status{margin-bottom:8px}@media(max-width:700px){.question-filters{grid-template-columns:1fr 1fr}.question-filters label:first-child{grid-column:1/-1}}
+
+/* Comfortable payment sheet on phones, including the pending-payment state. */
+#payment-dialog{box-sizing:border-box;width:min(620px,calc(100% - 24px));max-height:calc(100vh - 24px);max-height:calc(100dvh - 24px);overscroll-behavior:contain}
+#payment-form{min-width:0;width:100%;margin:0}
+#payment-title{font-size:26px;line-height:1.25;margin:0 0 20px}
+#payment-form label{display:block;margin:18px 0 9px;color:#a9d6e8;font-size:14px}
+#payment-form input,#payment-form textarea{box-sizing:border-box;width:100%;min-height:50px;font:inherit;font-size:16px;line-height:1.5;padding:13px;border:1px solid #426b83;border-radius:9px;background:#08151f;color:#eff7ff}
+#payment-form #tip-amount{font-size:24px;min-height:60px;color:#78e1ff}
+#payment-explanation{font-size:16px;line-height:1.65}#payment-recipient{font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+#payment-form .form-actions{gap:12px}#payment-form .form-actions button{min-height:48px}
+@media(max-width:620px){#payment-dialog{width:calc(100% - 16px);max-width:none;padding:24px 20px;min-height:min(520px,calc(100dvh - 24px));border-radius:18px}#payment-form .form-actions{flex-direction:column;align-items:stretch}#payment-form .form-actions button{width:100%;font-size:16px}#payment-form .field-hint{font-size:13px;line-height:1.65}#edit-answer{min-height:180px}}

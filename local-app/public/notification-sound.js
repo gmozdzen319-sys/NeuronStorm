@@ -24,5 +24,5 @@ export function createNotificationSound(button){
   button.addEventListener('click',()=>{muted=!muted;try{localStorage.setItem('ns-notification-muted',String(muted));}catch{}render();if(muted)context?.suspend().catch(()=>{});else unlock();});
   window.addEventListener('storage',event=>{if(event.key==='ns-notification-muted'){muted=event.newValue==='true';render();if(muted)context?.suspend().catch(()=>{});}});
   render();
-  return {setAccount(account){const next=account?.address.toLowerCase()||null;if(next!==owner){owner=next;sequence=null;}button.hidden=!owner;},update(next){if(!owner)return;const result=advanceSequence(sequence,next);sequence=result.sequence;play(result.count);}};
+  return {notify(){if(owner)play(1);},setAccount(account){const next=account?.address.toLowerCase()||null;if(next!==owner){owner=next;sequence=null;}button.hidden=!owner;},update(next){if(!owner)return;const result=advanceSequence(sequence,next);sequence=result.sequence;play(result.count);}};
 }
