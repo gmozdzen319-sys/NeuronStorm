@@ -48,10 +48,10 @@ export async function connectWallet(provider) {
     return accounts[0];
   });
 }
-export async function signIn(provider, address, api, progress = () => {}) {
+export async function signIn(provider, address, api, progress = () => {}, acceptance = {}) {
   const selected = await atStage('account', () => provider.request({ method: 'quai_accounts', params: [] }));
   if (selected?.[0]?.toLowerCase() !== address.toLowerCase()) throw new Error('The account has changed. Please start signing in again.');
-  const challenge = await atStage('challenge', () => api('/api/challenge', { address }));
+  const challenge = await atStage('challenge', () => api('/api/challenge', { address, termsAccepted:acceptance.accepted===true,termsHash:acceptance.hash }));
   progress('Sign the sign-in message in '+walletName(provider)+'…');
   // Confirmed against Pelagus personal_sign and quais JsonRpcSigner.signMessage.
   const bytes = new TextEncoder().encode(challenge.message);

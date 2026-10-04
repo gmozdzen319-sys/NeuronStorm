@@ -14,6 +14,7 @@ export function library(db,account,input,params=new URLSearchParams(),now=Date.n
  if(input.action==='remove'){db.prepare('DELETE FROM saved_answers WHERE owner=? AND reply_id=?').run(owner,input.replyId);return {ok:true};}
  if(input.action!=='save')throw fail(400,'Choose save or remove.');
  const r=db.prepare('SELECT r.*,p.nickname FROM replies r JOIN profiles p ON p.address=r.author WHERE r.id=? AND r.deleted_at IS NULL').get(input.replyId);if(!r)throw fail(404,'Answer unavailable.');const q=allowed(db,r.question_id,account);
+ if(q.author!==owner)throw fail(403,'Only the question author can save answers to this question.');
  if(r.version!==input.version)throw fail(409,'This answer changed. Refresh before saving.');
  db.prepare('INSERT INTO saved_answers VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(owner,reply_id) DO UPDATE SET question=excluded.question,answer=excluded.answer,author=excluded.author,version=excluded.version,saved_at=excluded.saved_at').run(owner,r.id,q.id,q.body,r.body,r.nickname,r.version,now);return {ok:true};
 }

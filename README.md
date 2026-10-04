@@ -13,7 +13,7 @@ Cały interfejs strony jest po angielsku; komunikacja z użytkownikiem pozostaje
 5. Zapisany profil otwiera się jako **My Profile**, z przyciskiem **Edit profile**.
 
 Pelagus potwierdza dostęp podpisem wiadomości, bez transakcji. Użytkownik potwierdził działanie poprzedniej wersji logowania; nowy formularz wymaga końcowej próby w jego przeglądarce.
-Przeglądarka podglądu Codex nie ma Pelagus.
+Przeglądarka testowa nie ma Pelagus.
 
 Po ponownym uruchomieniu komputera uruchom `Uruchom Neuron Storm.ps1` przez PowerShell.
 Alternatywnie: Node 24+, `node local-app/server.mjs` w folderze projektu.
@@ -145,3 +145,14 @@ Bez punktu 6 / odznak. Testy 90/90: snapshoty, prywatność, preview bez zapisu,
 - Kliknięcie Sign in bez wykrytego portfela otwiera https://www.pelaguswallet.io/ w tej samej karcie, aby działało bez popupów. Obecny Pelagus/Blip zachowuje dwuetapowe logowanie. Oficjalny adres sprawdzony na stronie Pelagus i stronie portfeli Quai.
 - Tip NS i Pending NS payment: szerokie okno mobilne, duże pole kwoty, czcionka minimum 16px w polach, przyciski minimum 48px i przewijanie w niskim oknie. Otwarcie nie uruchamia klawiatury automatycznie.
 - Zgodnie z końcową decyzją użytkownika NIE ma dodawania plików ani endpointów uploadu. Archiwum i Saved Answers pozostają tekstowe.
+
+
+### 0.16.0 — projekt regulaminu i akceptacja podpisem
+- Publiczne `/terms` i `/privacy`, czytelne na telefonie, zawierają angielski projekt dokumentów.
+- `local-app/legal-config.json` pozostaje `published: false`: brakuje rzeczywistych danych operatora, kraju, kontaktu i daty obowiązywania. Projekt NIE jest aktywnym regulaminem; obecne logowanie nadal działa. Nie publikować jako gotowego dokumentu prawnego.
+- Przed aktywacją uzupełnić dane operatora, dostosować dokumenty do jego jurysdykcji oraz zweryfikować retencję, transfery danych i wymagania dotyczące cookies. Projekt zakłada pełnoletnich użytkowników. Po zatwierdzeniu ustawić datę, wersję i `published: true`, następnie zrestartować serwer.
+- Przy aktywnym regulaminie każde logowanie (także pierwsza rejestracja) wymaga niezaznaczonego domyślnie checkboxa przed podpisem w Pelagus/Blip. Podpis zawiera wersję, linki i SHA-256 dokładnej treści obu dokumentów. Brak zgody lub nieaktualny hash blokują challenge; zmiana regulaminu unieważnia wcześniejszy challenge.
+- Dopiero zweryfikowany podpis zapisuje akceptację w SQLite razem z kontem/sesją. `legal_documents` przechowuje niezmienny snapshot, `legal_acceptances` pierwszy dowód dla konta i wersji treści. Dane nie są publicznie udostępniane.
+- Istniejące sesje nie są automatycznie wylogowywane. Kolejne logowanie wymaga aktualnej akceptacji. Zmieniając dokumenty, zwiększyć również ich wersję i datę, nie tylko numer aplikacji.
+
+Zasady rozwoju projektu: `CONTRIBUTING.md`. Skrypt uruchamiania korzysta z Node.js dostepnego w PATH.

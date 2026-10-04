@@ -1,3 +1,4 @@
+import {loadLegal} from '../legal.mjs';
 import {NS_TOKEN} from '../neuron-token.mjs';
 import {mockTokenFetch} from './token-fixture.mjs';
 // Isolated UI QA only: disposable wallets, in-memory database, no user data.
@@ -6,7 +7,7 @@ import {Wallet,isQuaiAddress,id as eventId} from 'quais';
 import {createApp,ADMIN} from '../server.mjs';
 let paymentHeight=100n;const paymentTransactions=new Map();
 const mockPaymentFetch=async(url,options)=>{const {method,params}=JSON.parse(options.body);const saved=paymentTransactions.get(params[0]);const result=method==='quai_chainId'?'0x9':method==='quai_blockNumber'?'0x'+paymentHeight.toString(16):method==='quai_getTransactionReceipt'?saved?.receipt||null:method==='quai_getTransactionByHash'?saved?.tx||null:method==='quai_getBlockByNumber'?{hash:'0x'+'bb'.repeat(32)}:null;return {ok:true,json:async()=>({result})};};
-const origin='http://127.0.0.1:43127';const {server,db}=createApp({database:':memory:',origin,...(process.env.QA_GLOBE_DEMO==='1'?{trustProxy:true,geoLookup:()=> 'GB'}:{}),paymentFetch:mockPaymentFetch,tokenFetch:mockTokenFetch,holdingsFetch:async url=>({ok:true,json:async()=>({status:'1',result:url.searchParams.get('action')==='balance'?'125012345678901234567':[{name:'Demo token (test data)',symbol:'DEMO',type:'ERC-20',contractAddress:'0x0000000000000000000000000000000000000001',balance:'25000000',decimals:'6'}]})})});
+const origin='http://127.0.0.1:43127';const {server,db}=createApp({legal:loadLegal({published:false,version:'QA'}),database:':memory:',origin,...(process.env.QA_GLOBE_DEMO==='1'?{trustProxy:true,geoLookup:()=> 'GB'}:{}),paymentFetch:mockPaymentFetch,tokenFetch:mockTokenFetch,holdingsFetch:async url=>({ok:true,json:async()=>({status:'1',result:url.searchParams.get('action')==='balance'?'125012345678901234567':[{name:'Demo token (test data)',symbol:'DEMO',type:'ERC-20',contractAddress:'0x0000000000000000000000000000000000000001',balance:'25000000',decimals:'6'}]})})});
 await new Promise(resolve=>server.listen(43127,'127.0.0.1',resolve));
 const sessions={},addresses={},wallets={};
 for(const [actor,nickname,topic]of [['author','Morgan','Cooking'],['alex','Alex','Electrical work'],['sam','Sam','Electrical work'],['outsider','Taylor','Gardening'],['newcomer','New member','Books']]){

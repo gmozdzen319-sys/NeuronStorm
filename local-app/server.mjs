@@ -1,3 +1,4 @@
+import {loadLegal,initLegal,legalPage} from './legal.mjs';
 import {blocks,remindDeadlines} from './contact-preferences.mjs';
 import {initMemberTools,library,reportContent,adminReports} from './member-tools.mjs';
 import {createRewardConfirmation} from './reward-confirmation.mjs';
@@ -31,7 +32,7 @@ const hash = (value) => createHash('sha256').update(value).digest('hex');
 const cookies = (req) => Object.fromEntries((req.headers.cookie || '').split(';').map(v => v.trim().split('=')));
 const failure = (status, message) => Object.assign(new Error(message), { status });
 
-export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin = 'http://localhost:3000', now = Date.now, tokenFetch = fetch, marketFetch = fetch, paymentFetch = fetch, geoLookup=lookupCountry, trustProxy=process.env.RENDER==='true' } = {}) {
+export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin = 'http://localhost:3000', now = Date.now, tokenFetch = fetch, marketFetch = fetch, paymentFetch = fetch, geoLookup=lookupCountry, trustProxy=process.env.RENDER==='true', legal=loadLegal() } = {}) {
   if (database !== ':memory:') mkdirSync(dirname(database), { recursive: true });
   const runningVersion=JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version;
   const db = new DatabaseSync(database);
@@ -41,6 +42,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
     CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY, address TEXT NOT NULL REFERENCES accounts(address), expires INTEGER NOT NULL);
     CREATE INDEX IF NOT EXISTS sessions_expiry ON sessions(expires);
     CREATE INDEX IF NOT EXISTS challenges_expiry ON challenges(expires);`);
+  initLegal(db,legal);
   initProfiles(db);
   initThreads(db);
   initArchive(db);
@@ -95,6 +97,8 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         db.prepare('DELETE FROM challenges WHERE expires<=?').run(now());
         db.prepare('DELETE FROM sessions WHERE expires<=?').run(now());
       }
+      if(req.method==='GET'&&path==='/api/legal')return json(200,{published:legal.published,version:legal.version,hash:legal.hash});
+      if(req.method==='GET'&&['/terms','/privacy'].includes(path)){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return res.end(legalPage(legal,path==='/terms'?'terms':'privacy'));}
       if(path.startsWith('/api/'))maintain();
       if(path==='/api/blocks'&&['GET','POST'].includes(req.method))return json(200,blocks(db,account(req),req.method==='POST'?await body(req):null));
       if(path==='/api/library'&&['GET','POST'].includes(req.method))return json(200,library(db,account(req),req.method==='POST'?await body(req):null,new URL(req.url,origin).searchParams,now()));
@@ -177,11 +181,12 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         let address;
         try { address = getAddress(input.address); } catch { throw failure(400, 'Invalid wallet address.'); }
         if (!isQuaiAddress(address)) throw failure(400, 'Select a QUAI account in Pelagus.');
+        if(legal.published&&(input.termsAccepted!==true||input.termsHash!==legal.hash))throw failure(400,'Read and accept the current Terms of Use before signing.');
         const id = token(), browser = token(), issued = now(), expires = issued + 300000;
-        const message = `Neuron Storm — sign in\n\nWebsite: ${origin}\nWallet address: ${address}\n\nThis signature confirms access to your Neuron Storm account.\nIt does not authorize a transaction or transfer of funds.\n\nOne-time code: ${id}\nIssued at: ${new Date(issued).toISOString()}\nExpires at: ${new Date(expires).toISOString()}`;
+        const message = `Neuron Storm — sign in\n\nWebsite: ${origin}\nWallet address: ${address}\n\nThis signature confirms access to your Neuron Storm account.\nIt does not authorize a transaction or transfer of funds.${legal.published?`\n\nI am at least 18 and agree to the Neuron Storm Terms of Use, version ${legal.version}.\nI have been provided with the Privacy Notice.\nTerms: ${origin}/terms\nPrivacy: ${origin}/privacy\nDocument SHA-256: ${legal.hash}`:''}\n\nOne-time code: ${id}\nIssued at: ${new Date(issued).toISOString()}\nExpires at: ${new Date(expires).toISOString()}`;
         const previous = cookies(req).ns_challenge;
         if (previous) db.prepare('DELETE FROM challenges WHERE browser_hash=?').run(hash(previous));
-        db.prepare('INSERT INTO challenges VALUES(?,?,?,?,?)').run(id, hash(browser), address.toLowerCase(), message, expires);
+        db.prepare('INSERT INTO challenges(id,browser_hash,address,message,expires,legal_hash) VALUES(?,?,?,?,?,?)').run(id, hash(browser), address.toLowerCase(), message, expires,legal.published?legal.hash:null);
         res.setHeader('Set-Cookie', cookie('ns_challenge', browser, 300));
         return json(200, { id, message });
       }
@@ -192,6 +197,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         // DELETE RETURNING atomically consumes the challenge, including failed signature attempts.
         const challenge = db.prepare('DELETE FROM challenges WHERE id=? AND browser_hash=? AND expires>? RETURNING *').get(id, hash(browser), now());
         if (!challenge) throw failure(401, 'This challenge has expired or has already been used. Please sign in again.');
+        if(legal.published&&challenge.legal_hash!==legal.hash)throw failure(409,'The Terms of Use have changed. Read them and sign in again.');
         let recovered;
         try { recovered = verifyMessage(challenge.message, signature).toLowerCase(); } catch { throw failure(401, 'The signature could not be verified.'); }
         if (recovered !== challenge.address) throw failure(401, 'The signature does not match the selected account.');
@@ -199,6 +205,7 @@ export function createApp({ database = join(root, 'data', 'auth.sqlite'), origin
         db.exec('BEGIN IMMEDIATE');
         try {
           db.prepare('INSERT OR IGNORE INTO accounts VALUES(?,?)').run(recovered, now());
+          if(challenge.legal_hash)db.prepare('INSERT OR IGNORE INTO legal_acceptances VALUES(?,?,?,?,?)').run(recovered,challenge.legal_hash,now(),challenge.message,signature);
           const old = cookies(req).ns_session;
           if (old) db.prepare('DELETE FROM sessions WHERE token_hash=?').run(hash(old));
           db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(hash(session), recovered, now() + 28800000);

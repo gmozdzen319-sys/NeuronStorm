@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'Stop'
-$nodePath = Join-Path $env:USERPROFILE '.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin/node.exe'
-if (-not (Test-Path -LiteralPath $nodePath)) { $nodePath = (Get-Command node -ErrorAction Stop).Source }
+$nodeCommand = Get-Command node -ErrorAction SilentlyContinue
+if (-not $nodeCommand) { throw 'Zainstaluj Node.js 24 lub nowszy i dodaj go do PATH.' }
+$nodePath = $nodeCommand.Source
 $appDirectory = Join-Path $PSScriptRoot 'local-app'
 try {
   $response = Invoke-WebRequest 'http://localhost:3000/api/session' -TimeoutSec 2

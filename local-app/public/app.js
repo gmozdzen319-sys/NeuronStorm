@@ -7,11 +7,12 @@ import { connectWallet, signIn, walletError } from './wallet.js';
 import { createConversations } from './conversations.js';
 const $ = selector => document.querySelector(selector);
 const login = $('#login'), logout = $('#logout'), status = $('#status'), form = $('#profile-form');
+let legalInfo=null;
 let busy = false, generation = 0, connectedAddress = null;
 let currentAccount = null, profile = null, catalog = { work: [], hobbies: [] }, selected = { work: [], hobbies: [] };
 let profileRevision = 0, saving = false, loading = false;
 const key = name => name.normalize('NFKC').replace(/\s/gu, '').toLowerCase();
-function resetConnection() { connectedAddress = null; login.textContent = 'Sign in with '+walletName(); }
+function resetConnection() { connectedAddress = null;legalInfo=null;$('#terms-acceptance').hidden=true;$('#accept-terms').checked=false; login.textContent = 'Sign in with '+walletName(); }
 async function api(path, data) {
   const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST', credentials: 'same-origin', headers: data === undefined ? {} : { 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data) });
   const result = await response.json();
@@ -127,14 +128,16 @@ form.addEventListener('submit',async event=>{
     saving=false;form.querySelectorAll('input,button').forEach(el=>el.disabled=false);$('#save-profile').textContent=profile?'Save changes':'Save profile';
   }
 });
+$('#terms-continue').addEventListener('click',()=>login.click());
 login.addEventListener('click',async()=>{
   if(busy)return;
   if(!getWalletProvider()?.request){resetConnection();notice('Install Pelagus from its official website, then return here and refresh the page to sign in.');$('#wallet-install').hidden=false;window.location.assign('https://www.pelaguswallet.io/');return;}
   $('#wallet-install').hidden=true;busy=true;login.disabled=true;
   const attempt=++generation;
   try {
-    if(!connectedAddress){notice('Confirm the connection in '+walletName()+'…');connectedAddress=await connectWallet(getWalletProvider());login.textContent='Sign message & continue';notice('Wallet connected. You are not signed in yet. Click “Sign message & continue” to confirm your account with a one-time signature.');return;}
-    const result=await signIn(getWalletProvider(),connectedAddress,api,notice);
+    if(!connectedAddress){notice('Confirm the connection in '+walletName()+'…');connectedAddress=await connectWallet(getWalletProvider());legalInfo=await api('/api/legal');$('#terms-acceptance').hidden=!legalInfo.published;$('#accept-terms').checked=false;$('#terms-version').textContent=legalInfo.version;login.textContent='Sign message & continue';notice('Wallet connected. You are not signed in yet. Click “Sign message & continue” to confirm your account with a one-time signature.');return;}
+    if(legalInfo?.published&&!$('#accept-terms').checked){notice('Read and accept the Terms of Use before signing.',true);$('#accept-terms').focus();return;}
+    const result=await signIn(getWalletProvider(),connectedAddress,api,notice,{accepted:$('#accept-terms').checked,hash:legalInfo?.hash});
     if(attempt!==generation){await api('/api/logout',{});return;}
     resetConnection();notice();await renderSession(result.account);
   }catch(error){resetConnection();notice(walletError(error),true);}

@@ -15,13 +15,13 @@ Wynik: 14/14 automatycznych testów zakończonych powodzeniem.
 - Podanie adresu administratora ani pola role nie daje uprawnień bez właściwego podpisu.
 - Testy adaptera sprawdzają brak portfela, odmowę podpisu, zmianę konta i kodowanie UTF-8.
 
-Ręczne sprawdzenie w przeglądarce Codex:
+Ręczne sprawdzenie w przeglądarce testowej:
 - Strona oraz dostarczony obraz logo wyświetlają się poprawnie na dużym ekranie i przy szerokości 390 px.
 - Przycisk obsługuje klawiaturę; próba logowania bez portfela pokazuje czytelny komunikat.
 - Brak błędów JavaScript w odczytanym dzienniku przeglądarki.
 - Podgląd lokalny: http://localhost:3000, odpowiedź HTTP 200.
 
-Ograniczenie: przeglądarka Codex nie ma Pelagus. Test adaptera korzysta z kontrolowanego providera i prawdziwych podpisów testowych, ale NIE zastępuje próby z rozszerzeniem użytkownika.
+Ograniczenie: przeglądarka testowa nie ma Pelagus. Test adaptera korzysta z kontrolowanego providera i prawdziwych podpisów testowych, ale NIE zastępuje próby z rozszerzeniem użytkownika.
 Nie wykonano podpisu portfelem użytkownika. Nie potwierdzono jeszcze działania konkretnej zainstalowanej wersji Pelagus.
 Nie wysłano transakcji. Nie publikowano strony. Pełna zgodność przyszłych funkcji Quai nie jest przedmiotem tego etapu.
 
@@ -200,3 +200,7 @@ Validation: 90/90 tests. Browser QA at 390x844 and 390x520: readable multiline p
 - Zgodnie z końcową decyzją użytkownika NIE ma dodawania plików ani endpointów uploadu. Archiwum i Saved Answers pozostają tekstowe.
 
 Weryfikacja: 92/92 testy. Testy prywatności blokad, obustronnego doboru odbiorców, jednorazowych przypomnień, rejestracji bez NS i istniejących podpisów/płatności. Przeglądarka: rejestracja testowa bez importu NS, szkic po reloadzie, filtry, blokada/odblokowanie, pamięć wyciszenia, brak inputu plikowego. Tip i Pending NS payment na 390x844 oraz 390x520, bez rzeczywistych przelewów. Automatyczne przejście do oficjalnej strony Pelagus potwierdzone. Screenshot: tip-mobile-preview.png. Bez publikacji na Render.
+
+0.16.0 (projekt regulaminu): 96/96 testow. Nowe testy sprawdzaja brak zgody, stary hash, bledny podpis, jednorazowosc challenge, zapis dowodu i snapshotu po weryfikacji. Podglad 390x844: akceptacja domyslnie odznaczona, klikniecie kontynuacji bez zgody blokuje podpis, Terms/Privacy bez przewijania poziomego. QA w pamieci, bez prawdziwych podpisow. Regulamin nieaktywny do uzupelnienia danych operatora.
+
+0.16.1: zapis odpowiedzi tylko przez autora pytania; test odbiorcy, autora odpowiedzi i administratora w cudzym pytaniu. Przegladarka: Morgan zapisuje odpowiedz w My Questions (Saved), Alex widzi tylko Report. Testy regulaminu uzywaja wolnego portu zamiast stalego.

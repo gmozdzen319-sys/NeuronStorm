@@ -1,3 +1,4 @@
+import {loadLegal} from '../legal.mjs';
 import {NS_TOKEN,createNeuronReader} from '../neuron-token.mjs';
 import {addNeuronToken,createSignedSender} from '../public/wallet.js';
 import {mockTokenFetch} from './token-fixture.mjs';
@@ -41,7 +42,7 @@ const testSigners=new Map();
 function newWallet() { let w; do { w = new Wallet(randomBytes(32).toString('hex')); } while (!isQuaiAddress(w.address)); testSigners.set(w.address.toLowerCase(),w); return w; }
 const wallet = newWallet(), other = newWallet();
 async function fixture(t, extra = {}) {
-  const app = createApp({ database: ':memory:', tokenFetch:mockTokenFetch, ...extra });
+  const app = createApp({ legal:loadLegal({published:false,version:'QA'}), database: ':memory:', tokenFetch:mockTokenFetch, ...extra });
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${app.server.address().port}`;
   t.after(async () => { await new Promise(resolve => app.server.close(resolve)); app.db.close(); });

@@ -24,6 +24,24 @@ test('saved answers are private, version-checked copies surviving edits and clos
  assert.equal(library(db,accounts[0],null).items[0].answer,'Visit the coast.');assert.throws(()=>library(db,accounts[2],{...save,version:2}),e=>e.status===404);
  library(db,accounts[2],{action:'remove',replyId:reply.id});assert.equal(library(db,accounts[0],null).total,1);library(db,accounts[0],{action:'remove',replyId:reply.id});assert.equal(library(db,accounts[0],null).total,0);
 });
+test('only the question author can save answers, including when another participant is administrator',t=>{
+ const {db,accounts,q,reply,ids,now}=fixture(t);
+ const save={action:'save',replyId:reply.id,version:1};
+ for(const participant of [accounts[1],accounts[2]]){
+  assert.equal(readThread(db,participant,q).canSaveAnswers,false);
+  assert.throws(()=>library(db,participant,save),e=>e.status===403);
+ }
+ assert.equal(readThread(db,accounts[0],q).canSaveAnswers,true);
+ library(db,accounts[0],save);
+ const own=createQuestion(db,accounts[2],{categoryIds:ids,body:'A member-owned question'},now).id;
+ replyToThread(db,accounts[1],own,{body:'Another answer'},now+1);
+ const answer=readThread(db,accounts[2],own).replies[0];
+ assert.equal(readThread(db,accounts[0],own).canSaveAnswers,false);
+ assert.throws(()=>library(db,accounts[0],{...save,replyId:answer.id}),e=>e.status===403);
+ library(db,accounts[2],{...save,replyId:answer.id});
+ assert.equal(library(db,accounts[2],null).total,1);
+ assert.equal(db.prepare('SELECT count(*) n FROM saved_answers').get().n,2);
+});
 test('reports require conversation access, retain snapshots and deduplicate; review is admin-only',t=>{const {db,accounts,q,reply}=fixture(t),input={questionId:q,replyId:reply.id,reason:'spam',details:'Repeated promotion'};
  assert.throws(()=>reportContent(db,accounts[3],input),e=>e.status===404);reportContent(db,accounts[2],input);reportContent(db,accounts[2],input);
  assert.throws(()=>adminReports(db,accounts[2],null,new URLSearchParams()),e=>e.status===403);const data=adminReports(db,accounts[0],null,new URLSearchParams());assert.equal(data.total,1);assert.equal(data.items[0].answer,'Visit the coast.');adminReports(db,accounts[0],{id:data.items[0].id});assert.ok(adminReports(db,accounts[0],null,new URLSearchParams()).items[0].resolvedAt);

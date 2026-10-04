@@ -35,3 +35,7 @@
 - Zatwierdzone 0.14.0: priorytet pytań bez odpowiedzi; prywatne Saved Answers zachowane po zamknięciu; admin potwierdza hash ręcznej nagrody z puli (3 potwierdzenia NS), potem prywatne powiadomienie; zgłoszenia treści do admina; podgląd pytania przed podpisem; liczba kont w dziedzinach przy rejestracji i pytaniu. Bez odznak ekspertów. Nie wykonuj realnych wypłat; dowód transferu i ochrona przed ponownym użyciem hasha obowiązkowe.
 
 - Zatwierdzone 0.15.0: szkic pytania na urządzeniu, wyszukiwanie/filtry pytań, lokalne wyciszenie Debate, prywatne jednorazowe przypomnienie autora w ostatnich 24h i blokady kont (nowe dostarczenia/direct replies oraz Debate; wspólna formalna historia zostaje). Rejestracja NIE wymaga importu NS ani oświadczenia. Brak wykrytego portfela przy logowaniu otwiera oficjalną stronę https://www.pelaguswallet.io/. Użytkownik wycofał załączniki: nie dodawaj uploadów. Mobilne okna tipów mają duże pola i przyciski.
+
+- 0.16.0 w przygotowaniu: angielskie Terms of Use i Privacy Notice oraz akceptacja związana z podpisem logowania i wersją treści po stronie serwera. Regulamin pozostaje DRAFT/published:false do uzupełnienia danych operatora i prawa właściwego; nie wymyślaj tożsamości, kontaktu ani jurysdykcji. Nie podpisuj regulaminu za użytkownika.
+
+- 0.16.1: Save answer tylko dla autora pytania, sprawdzane w UI i API. Administrator nie ma wyjatku dla cudzych pytan. Wczesniej zapisane kopie pozostaja prywatne; bez automatycznego kasowania historii.
