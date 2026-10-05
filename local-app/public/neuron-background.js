@@ -2,7 +2,7 @@ export function startNeuronBackground(){
   const canvas=document.querySelector('#neuron-background'),ctx=canvas?.getContext('2d');
   if(!ctx)return;
   const reduced=matchMedia('(prefers-reduced-motion: reduce)');
-  let width=0,height=0,frame=0,last=0,time=0,points=[],edges=[];
+  let width=0,height=0,frame=0,last=0,time=0,points=[],edges=[],sparks=[],nextSpark=4+Math.random()*8;
   function resize(){
     width=innerWidth;height=innerHeight;
     const ratio=Math.min(devicePixelRatio||1,1.5);
@@ -13,11 +13,22 @@ export function startNeuronBackground(){
       points.push({u:col/(cols-1),v:row/(rows-1),phase:Math.sin(index*17.3)*Math.PI,depth:.4+.6*(.5+.5*Math.sin(index*7.9))});
       if(col)edges.push([index-1,index]);if(row)edges.push([index-cols,index]);if(row&&col&&(row+col)%2===0)edges.push([index-cols-1,index]);
     }
+    sparks=[];
     draw();
   }
   function draw(){
     ctx.clearRect(0,0,width,height);
     const positions=points.map(p=>({x:p.u*width+Math.sin(p.phase*5)*width*.018+Math.sin(time*.09+p.phase)*9,y:(p.v+.11*Math.sin(p.u*6+time*.035+p.v*2)+Math.sin(p.phase*3)*.035)*height+Math.cos(time*.07+p.phase)*6}));
+    sparks=sparks.filter(s=>time<s.start+s.duration);
+    if(!reduced.matches&&!document.hidden&&time>=nextSpark&&sparks.length===0){
+      const candidates=positions.map((p,i)=>({ ...p,i })).filter(p=>p.x>20&&p.x<width-20&&p.y>20&&p.y<height-20);
+      const count=Math.min(1+Math.floor(Math.random()*3),candidates.length);
+      for(let n=0;n<count;n++){
+        const [point]=candidates.splice(Math.floor(Math.random()*candidates.length),1);
+        sparks.push({index:point.i,start:time+Math.random()*2,duration:5+Math.random()*3});
+      }
+      nextSpark=time+16+Math.random()*14;
+    }
     const glow=Math.pow(.5+.5*Math.sin(time*Math.PI/32),8);
     edges.forEach(([a,b])=>{
       const p=points[a],start=positions[a],end=positions[b];
@@ -29,6 +40,14 @@ export function startNeuronBackground(){
     points.forEach((p,i)=>{
       const {x,y}=positions[i],color=p.u<.45?'255,100,112':'55,198,255',alpha=(.09+.14*Math.abs(p.u-.5)*2)*p.depth;
       ctx.fillStyle=`rgba(${color},${alpha+glow*.09})`;ctx.beginPath();ctx.arc(x,y,1+p.depth,0,Math.PI*2);ctx.fill();
+      const spark=sparks.find(s=>s.index===i),progress=spark?(time-spark.start)/spark.duration:-1;
+      const strength=progress>0&&progress<1?Math.sin(Math.PI*progress)**2:0;
+      if(strength>0){
+        const radius=20+12*strength,halo=ctx.createRadialGradient(x,y,0,x,y,radius);
+        halo.addColorStop(0,`rgba(${color},${strength*.48})`);halo.addColorStop(.3,`rgba(${color},${strength*.16})`);halo.addColorStop(1,`rgba(${color},0)`);
+        ctx.fillStyle=halo;ctx.fillRect(x-radius,y-radius,radius*2,radius*2);
+        ctx.fillStyle=`rgba(${color},${strength*.85})`;ctx.beginPath();ctx.arc(x,y,2+strength*1.4,0,Math.PI*2);ctx.fill();
+      }
       if(i%13===0){const halo=ctx.createRadialGradient(x,y,0,x,y,13);halo.addColorStop(0,`rgba(${color},${.07+glow*.05})`);halo.addColorStop(1,`rgba(${color},0)`);ctx.fillStyle=halo;ctx.fillRect(x-13,y-13,26,26);}
     });
   }
