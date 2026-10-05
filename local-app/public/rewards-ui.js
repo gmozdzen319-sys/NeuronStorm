@@ -1,3 +1,4 @@
+import {points,renderRanking,roundOptions} from './reputation-ui.js';
 import {getWalletProvider,isBlip,walletName,blipLink} from './wallet-provider.js';
 const TREASURY='0x001d5bE0940145De0c2c1D851b99f33968DED764';
 export function createRewardsUI(api,getAccount,onChanged){
@@ -5,7 +6,7 @@ export function createRewardsUI(api,getAccount,onChanged){
   const el=(tag,text)=>{const n=document.createElement(tag);n.textContent=text;return n;};
   const message=text=>$('#payment-status').textContent=text;
   function store(value,address=owner){try{if(value)localStorage.setItem('ns-payment:'+address,JSON.stringify(value));else localStorage.removeItem('ns-payment:'+address);}catch{}if(owner===address){pending=value;$('#pending-payment').hidden=!pending;}}
-  function setAccount(account){const next=account?.address.toLowerCase()||null;if(owner===next)return;owner=next;pending=null;dialog.close();$('#member-wallet-list').replaceChildren();try{pending=owner?JSON.parse(localStorage.getItem('ns-payment:'+owner)||'null'):null;}catch{}$('#pending-payment').hidden=!pending;$('#payment-hash').value=pending?.txHash||'';}
+  function setAccount(account){const next=account?.address.toLowerCase()||null;if(owner===next)return;owner=next;pending=null;rankRequest++;$('#ranking-list').replaceChildren();$('#ranking-me').textContent='';dialog.close();$('#member-wallet-list').replaceChildren();try{pending=owner?JSON.parse(localStorage.getItem('ns-payment:'+owner)||'null'):null;}catch{}$('#pending-payment').hidden=!pending;$('#payment-hash').value=pending?.txHash||'';}
   function showPayment(){document.activeElement?.blur();if(!dialog.open)dialog.showModal();$('#payment-title').focus({preventScroll:true});dialog.scrollTop=0;}
   function restore(){if(!pending)return;$('#payment-discard').hidden=false;selection=null;$('#payment-title').textContent='Pending NS payment';$('#payment-explanation').textContent='Check your existing transaction. Do not pay again. If your wallet did not return a hash, copy it from the wallet activity.';$('#payment-recipient').textContent=pending.recipient||'';for(const id of ['#tip-amount','#tip-amount-label','#edit-answer','#edit-answer-label'])$(id).hidden=true;$('#payment-send').hidden=true;$('#payment-check').hidden=false;$('#payment-hash-label').hidden=false;$('#payment-hash').hidden=false;$('#payment-hash').value=pending.txHash||'';message('');showPayment();}
   function open(action,reply){
@@ -52,7 +53,12 @@ export function createRewardsUI(api,getAccount,onChanged){
     }
   }
   let rankRequest=0;
-  async function loadRanking(){const current=++rankRequest;$('#ranking-status').textContent='Loading ranking…';try{const result=await api('/api/ranking?category='+$('#ranking-category').value);if(current!==rankRequest)return;const picker=$('#ranking-category'),chosen=picker.value;picker.replaceChildren(new Option('All fields','0'));for(const c of result.categories)picker.append(new Option(c.name+' · '+(c.kind==='work'?'Work & Education':'Hobbies & Interests'),c.id));picker.value=chosen;$('#ranking-period').textContent=new Date(result.weekStart).toLocaleDateString('en-GB',{timeZone:'UTC'})+' – '+new Date(result.weekEnd-1).toLocaleDateString('en-GB',{timeZone:'UTC'})+' · resets Monday, 00:00 UTC';const list=$('#ranking-list');list.replaceChildren();result.rows.forEach((row,i)=>{const card=el('article','');card.className='ranking-row';card.append(el('strong',`${i+1}. ${row.nickname}`),el('span',`★ ${row.stars}`),el('span',`${row.activity} activity · ${row.answers} answers · ${row.questions} questions`));if(row.address){const wallet=el('code',row.address);wallet.className='address';card.append(wallet);}list.append(card);});if(!result.rows.length)list.append(el('p','No activity in this field this week yet.'));$('#ranking-status').textContent='';}catch(error){if(current===rankRequest)$('#ranking-status').textContent=error.message;}}
+  async function loadRanking(){const current=++rankRequest;$('#ranking-status').textContent='Loading ranking…';try{
+const result=await api('/api/ranking?category='+$('#ranking-category').value+'&limit='+$('#ranking-limit').value+($('#ranking-round').value?'&round='+$('#ranking-round').value:''));if(current!==rankRequest)return;
+const picker=$('#ranking-category'),chosen=picker.value;picker.replaceChildren(new Option('All fields','0'));for(const c of result.categories)picker.append(new Option(c.name+' · '+c.kind,c.id));picker.value=chosen;
+roundOptions($('#ranking-round'),result.rounds,result.weekStart);$('#ranking-period').textContent=new Date(result.weekStart).toISOString().slice(0,10)+' – '+new Date(result.weekEnd).toISOString().slice(0,10)+' · Monday 00:00 UTC · '+result.round.status;
+$('#ranking-me').textContent=result.me?'Your overall Weekly Score: '+points(result.me.weekly.units)+' · Rank: '+(result.me.weeklyRank?'#'+result.me.weeklyRank:'—')+' · Total Reputation: '+points(result.me.units):'Sign in to see your weekly position.';
+renderRanking(result,$('#ranking-list'));$('#ranking-status').textContent='';}catch(error){if(current===rankRequest)$('#ranking-status').textContent=error.message;}}
   let poolBusy=false;
   async function pool(){
     if(poolBusy)return;poolBusy=true;
@@ -67,7 +73,7 @@ export function createRewardsUI(api,getAccount,onChanged){
     }catch{for(const id of ['#reward-balance','#nav-reward-balance'])$(id).textContent='Balance unavailable';for(const id of ['#reward-change','#nav-reward-change','#reward-growth-note'])$(id).textContent='';}
     finally{poolBusy=false;}
   }
-  $('#ranking-category').addEventListener('change',loadRanking);
+  for(const selector of ['#ranking-category','#ranking-round','#ranking-limit'])$(selector).addEventListener('change',loadRanking);
   async function members(){if(getAccount()?.role!=='admin')return;const account=owner;try{const data=await api('/api/admin/members?page='+memberPage+'&search='+encodeURIComponent($('#member-search').value.trim()));if(owner!==account)return;memberPages=data.pages;$('#member-wallet-list').replaceChildren();for(const row of data.members){const card=el('div','');card.className='member-wallet';card.append(el('strong',row.nickname),el('code',row.address));$('#member-wallet-list').append(card);}$('#member-page').textContent=`Page ${memberPage} of ${memberPages}`;$('#member-prev').disabled=memberPage<=1;$('#member-next').disabled=memberPage>=memberPages;$('#member-status').textContent='';}catch(error){if(owner===account)$('#member-status').textContent=error.message;}}
   $('#admin-members').addEventListener('toggle',()=>{if($('#admin-members').open)members();});$('#member-search-form').addEventListener('submit',event=>{event.preventDefault();memberPage=1;members();});$('#member-prev').addEventListener('click',()=>{if(memberPage>1){memberPage--;members();}});$('#member-next').addEventListener('click',()=>{if(memberPage<memberPages){memberPage++;members();}});
   let presenceBusy=false;

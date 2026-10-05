@@ -8,9 +8,10 @@ import {pipeline} from 'node:stream/promises';
 import {globeData,clientIp,lookupCountry} from './geography.mjs';
 import {expireQuestions,acceptedAnswers} from './lifecycle.mjs';
 import {createPayments,REWARD_ADDRESS} from './payments.mjs';
-import {presence,ranking,rewardGrowth} from './community.mjs';
+import {presence,rewardGrowth} from './community.mjs';
 import {prepareAction,submitAction} from './actions.mjs';
-import {debate} from './debate.mjs';
+import {debate,voteOnDebate} from './debate.mjs';
+import {reputationRanking,reputationAdmin,reputation,rounds} from './reputation.mjs';
 import {createMarketReader} from './token-market.mjs';
 import {NS_TOKEN,createNeuronReader} from './neuron-token.mjs';
 import {listNotifications,readNotifications} from './notifications.mjs';
@@ -98,7 +99,11 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         res.setHeader('Set-Cookie',cookie('ns_visitor',visitor,604800));
         return json(200,(await presence(db,hash(visitor),(await account(req)),input.active===true,now())));
       }
-      if(path==='/api/ranking'&&req.method==='GET')return json(200,(await ranking(db,new URL(req.url,origin).searchParams,now(),(await account(req))?.role==='admin')));
+      if(path==='/api/ranking'&&req.method==='GET'){const a=await account(req);return json(200,await reputationRanking(db,new URL(req.url,origin).searchParams,now(),a?.role==='admin',a?.address.toLowerCase()));}
+      if(path==='/api/rounds'&&req.method==='GET')return json(200,{rounds:await rounds(db,now())});
+      if(path==='/api/reputation'&&req.method==='GET'){const a=await account(req);if(!a)throw failure(401,'Sign in to view your reputation.');const r=new URL(req.url,origin).searchParams.get('round');return json(200,await reputation(db,a.address.toLowerCase(),now(),r===null?undefined:Number(r)));}
+      const debateVote=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/debate\/(\d+)\/vote$/);
+      if(debateVote&&req.method==='POST')return json(200,await voteOnDebate(db,await account(req),debateVote[1],Number(debateVote[2]),await body(req),now()));
       if(path==='/api/rewards'&&req.method==='GET'){const balance=await readNeuron(REWARD_ADDRESS);return json(200,{address:REWARD_ADDRESS,balance:balance.balance,updatedAt:balance.updatedAt,...(await rewardGrowth(db,balance.balance,now()))});}
       if(path==='/api/payments/prepare'&&req.method==='POST')return json(200,await payments.prepare((await account(req)),await body(req),now()));
       if(path==='/api/payments/confirm'&&req.method==='POST')return json(200,await payments.confirm((await account(req)),await body(req),now()));
@@ -116,6 +121,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if(['/api/notifications/read','/api/notifications/read-all'].includes(path)&&req.method==='POST')return json(200,(await readNotifications(db,(await account(req)),await body(req),path.endsWith('read-all'),now())));
       if(path.startsWith('/api/admin/')){
         const current=(await account(req));(await requireAdmin(db,current));
+        if(path==='/api/admin/reputation'&&req.method==='GET')return json(200,await reputationAdmin(db,new URL(req.url,origin).searchParams,now()));
         if(path==='/api/admin/archive.txt'&&req.method==='GET'){res.setHeader('Content-Type','text/plain; charset=utf-8');res.setHeader('Content-Disposition','attachment; filename="neuron-storm-history.txt"');await pipeline(Readable.from((await archiveText(db))),res);return;}
         if(path==='/api/admin/reports'&&['GET','POST'].includes(req.method))return json(200,(await adminReports(db,current,req.method==='POST'?await body(req):null,new URL(req.url,origin).searchParams,now())));
         if(path==='/api/admin/rewards/confirm'&&req.method==='POST')return json(200,await confirmReward(current,await body(req),now()));
@@ -209,7 +215,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0)]);
         return json(200, { ok: true });
       }
-      const files = { '/question-tools.js':['public/question-tools.js','text/javascript'], '/member-tools.js':['public/member-tools.js','text/javascript'], '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
+      const files = { '/reputation-ui.js':['public/reputation-ui.js','text/javascript'], '/question-tools.js':['public/question-tools.js','text/javascript'], '/member-tools.js':['public/member-tools.js','text/javascript'], '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });

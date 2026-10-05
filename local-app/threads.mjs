@@ -88,6 +88,7 @@ export async function voteOnReply(db,account,id,replyId,input,now=Date.now()){
   const voter=account.address.toLowerCase();
   if(reply.author===voter)throw fail(403,'You cannot rate your own reply.');
   if(![1,-1,0].includes(input.value))throw fail(400,'Choose an upvote, a downvote or remove your vote.');
+  await db.query("SELECT set_config('neuron.event_time',$1,true)",[String(now)]);
   if(input.value===0)(await db.prepare("DELETE FROM reply_votes WHERE reply_id=$1 AND voter=$2").run(replyId,voter));
   else (await db.prepare("INSERT INTO reply_votes(reply_id,voter,value,awarded_at) VALUES($1,$2,$3,$4) ON CONFLICT(reply_id,voter) DO UPDATE SET value=excluded.value,awarded_at=CASE WHEN reply_votes.value=excluded.value THEN reply_votes.awarded_at ELSE excluded.awarded_at END").run(replyId,voter,input.value,now));
   return {ok:true};

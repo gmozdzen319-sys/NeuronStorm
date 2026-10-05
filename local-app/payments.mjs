@@ -73,8 +73,9 @@ export function createPayments(db,fetcher=fetch,clock=null){
         if(intent.action!=='tip'){
           let answer;try{answer=(await reply(account,intent.reply_id));}catch(error){if(error.status===404||error.status===409)throw fail(409,'This conversation closed before the answer change was confirmed. Keep your transaction hash and contact the administrator. Do not pay again.');throw error;}
           if(answer.author!==intent.payer||answer.version!==intent.reply_version)throw fail(409,'The answer changed after payment preparation. Keep your transaction hash and contact the administrator.');
+          await db.query("SELECT set_config('neuron.event_time',$1,true)",[String(now)]);
           if(intent.action==='edit'){(await db.prepare("UPDATE replies SET body=$1,edited_at=$2,version=version+1 WHERE id=$3").run(intent.body,now,answer.id));(await db.prepare("DELETE FROM reply_votes WHERE reply_id=$1").run(answer.id));}
-          else (await db.prepare("UPDATE replies SET deleted_at=$1,version=version+1 WHERE id=$2").run(now,answer.id));
+          else {await db.prepare("UPDATE replies SET deleted_at=$1,version=version+1 WHERE id=$2").run(now,answer.id);await db.prepare("DELETE FROM reply_votes WHERE reply_id=$1").run(answer.id);}
           (await db.prepare("UPDATE questions SET revision=revision+1,updated_at=$1 WHERE id=$2").run(now,answer.question_id));
         }
         (await db.prepare("UPDATE payment_intents SET tx_hash=$1,completed_at=$2 WHERE id=$3").run(hash,now,intent.id));return {ok:true,action:intent.action};

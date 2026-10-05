@@ -360,7 +360,7 @@ test('multiple topic groups deliver once per member and expose aggregate statist
   assert.deepEqual((await f.request('/api/stats',undefined,ah)).data.stats,{members:3,topics:4,questions:1,replies:1});
 });
 
-test('ratings are one per voter, private, reversible and award only received upvotes',async t=>{
+test('ratings are one per voter, private, reversible and calculate net helpful reputation',async t=>{
   const f=await fixture(t),ah=await createMember(f,newWallet(),'Author',['Books']),rh=await createMember(f,newWallet(),'Reader',['Books']),bh=await createMember(f,newWallet(),'Second',['Books']),oh=await createMember(f,newWallet(),'Outsider',['Other']);
   const categoryId=(await f.request('/api/categories',undefined,ah)).data.categories.work.find(c=>c.name==='Books').id;
   const id=(await f.request('/api/questions',{categoryId,body:'Question'},ah)).data.id;
@@ -378,11 +378,11 @@ test('ratings are one per voter, private, reversible and award only received upv
   assert.equal(rated.upvotes,2);assert.equal(rated.myVote,1);
   await f.request(path,{value:-1},ah);
   rated=(await f.request('/api/questions/'+id,undefined,ah)).data.thread.replies[0];assert.equal(rated.upvotes,1);assert.equal(rated.downvotes,1);
-  assert.equal((await f.request('/api/profile',undefined,rh)).data.profile.points,1);
+  assert.equal((await f.request('/api/profile',undefined,rh)).data.profile.points,0);
   await f.request(path,{value:0},bh);
-  assert.equal((await f.request('/api/profile',undefined,rh)).data.profile.points,0);
+  assert.equal((await f.request('/api/profile',undefined,rh)).data.profile.points,-1);
   await f.request('/api/profile',{nickname:'Reader',work:['Books'],hobbies:[],points:999},rh);
-  assert.equal((await f.request('/api/profile',undefined,rh)).data.profile.points,0);
+  assert.equal((await f.request('/api/profile',undefined,rh)).data.profile.points,-1);
 });
 
 test('available question topics exclude categories no longer used by any profile',async t=>{

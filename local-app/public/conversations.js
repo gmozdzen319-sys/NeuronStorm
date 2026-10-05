@@ -1,3 +1,4 @@
+import {loadReputationAdmin,clearReputationAdmin} from './reputation-ui.js';
 import {createQuestionTools} from './question-tools.js';
 import {createMemberTools} from './member-tools.js';
 import {createGlobe} from './globe.js';
@@ -28,6 +29,7 @@ export function createConversations({api,onProfile,onExpired}) {
     document.querySelectorAll('[data-view]').forEach(button=>{if(button.dataset.view===next)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');});
   }
   function clear(){
+    clearReputationAdmin();
     questionTools.setAccount(null);memberTools.clear();questionPreview=null;$('#question-preview-dialog').close();globe.clear();debate.stop();sounds.setAccount(null);rewards.clear();lifecycle.clear();
     $('#landing').append($('.how'));
     $('#moderation-dialog').close();$('#admin-nav').hidden=true;$('#notifications-button').hidden=true;$('#admin-list').replaceChildren();$('#notifications-list').replaceChildren();$('#admin-audit').replaceChildren();moderated=null;pendingModeration=null;notificationSignature='';
@@ -164,7 +166,7 @@ export function createConversations({api,onProfile,onExpired}) {
 
   async function loadAdmin(background=false){
     if(identity?.role!=='admin'||view!=='admin')return;const current=epoch;
-    lifecycle.loadAccepted();if(!background)status('#admin-status','Loading conversations…');
+    if(!background)loadReputationAdmin(api);lifecycle.loadAccepted();if(!background)status('#admin-status','Loading conversations…');
     try{const result=await api('/api/admin/conversations?state='+adminState+'&page='+adminPage+'&search='+encodeURIComponent(adminSearch));if(current!==epoch)return;adminPage=result.page;adminPages=result.pages;status('#admin-status');const next=JSON.stringify(result);if(signature===next)return;signature=next;
       $('#admin-stats').replaceChildren();for(const [key,label]of [['members','Members'],['active','Active conversations'],['deleted','Deleted conversations'],['replies','Active replies']]){const card=node('div');card.append(node('dt',label),node('dd',result.stats[key]));$('#admin-stats').append(card);}
       $('#admin-list').replaceChildren();for(const item of result.questions){const button=node('button',undefined,'question-row');button.type='button';button.append(node('h2',item.title),node('p',item.excerpt.split('\n').slice(1).join('\n').trim()),node('p','By '+item.author+' · '+date(item.createdAt)+' · '+item.replyCount+(item.replyCount===1?' reply':' replies'),'muted'),node('p',item.categories.map(t=>t.name).join(' · '),'question-meta'));if(item.deletedAt!==null)button.append(node('p','Deleted '+date(item.deletedAt),'muted'));button.addEventListener('click',()=>openThread(item.id,true));$('#admin-list').append(button);}if(!result.questions.length)$('#admin-list').append(node('p','No conversations found.','empty-state'));

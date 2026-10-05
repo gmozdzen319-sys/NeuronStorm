@@ -1,3 +1,4 @@
+import {reputation} from './reputation.mjs';
 const invalid = message => Object.assign(new Error(message), { status: 400 });
 export const categoryKey = name => name.normalize('NFKC').replace(/\s/gu, '').toLowerCase();
 function text(value, label, max, required = false) {
@@ -23,8 +24,8 @@ export async function readProfile(db, address) {
   const profile = (await db.prepare("SELECT nickname, first_name AS \"firstName\", last_name AS \"lastName\" FROM profiles WHERE address=$1").get(address));
   if (!profile) return null;
   const selected = (await db.prepare(`SELECT c.id,c.kind,c.name FROM categories c JOIN profile_categories p ON p.category_id=c.id WHERE p.address=$1 ORDER BY lower(c.name),c.id`).all(address));
-  const points=(await db.prepare("SELECT count(*) AS n FROM reply_votes v JOIN replies r ON r.id=v.reply_id JOIN questions q ON q.id=r.question_id WHERE q.deleted_at IS NULL AND r.deleted_at IS NULL AND r.author=$1 AND v.value=1").get(address)).n;
-  return { ...profile, points, work: selected.filter(c => c.kind === 'work').map(({id,name})=>({id,name})), hobbies: selected.filter(c => c.kind === 'hobbies').map(({id,name})=>({id,name})) };
+  const score=await reputation(db,address);
+  return { ...profile, points:score.units/100,reputation:score, work: selected.filter(c => c.kind === 'work').map(({id,name})=>({id,name})), hobbies: selected.filter(c => c.kind === 'hobbies').map(({id,name})=>({id,name})) };
 }
 export async function readCategories(db,availableOnly=false) {
   const rows=(await db.prepare(`SELECT c.id,c.kind,c.name,(SELECT count(*) FROM profile_categories pc WHERE pc.category_id=c.id) AS "memberCount" FROM categories c ${availableOnly?'WHERE EXISTS(SELECT 1 FROM profile_categories pc WHERE pc.category_id=c.id)':''} ORDER BY lower(c.name),c.id`).all());

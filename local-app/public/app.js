@@ -1,3 +1,4 @@
+import {renderReputation} from './reputation-ui.js';
 import {createTopicSuggestions} from './topic-suggestions.js';
 import {getWalletProvider,isBlip,walletName,blipLink} from './wallet-provider.js';
 import {startNeuronBackground} from './neuron-background.js';
@@ -28,7 +29,7 @@ function showProfile() {
   $('#profile-title').textContent='My Profile';
   $('#profile-intro').textContent='Your experience, your interests, your next conversation.';
   form.hidden=true; $('#profile-view').hidden=false;
-  $('#saved-nickname').textContent=profile.nickname;$('#saved-points').textContent='★ '+(profile.points||0)+(profile.points===1?' star':' stars');
+  renderReputation(profile.reputation);$('#saved-nickname').textContent=profile.nickname;$('#saved-points').textContent='★ '+(profile.points||0)+' Reputation';
   $('#saved-name').textContent=[profile.firstName,profile.lastName].filter(Boolean).join(' ');
   for(const kind of ['work','hobbies']) {
     const list=$('#saved-'+kind);list.replaceChildren();
@@ -177,6 +178,6 @@ await refresh();window.addEventListener('focus',refresh);setInterval(refresh,600
 async function refreshPoints(){
   if(!currentAccount||!profile||$('#profile-area').hidden||$('#profile-view').hidden)return;
   const current=profileRevision;
-  try{const result=await api('/api/profile');if(current!==profileRevision||!result.profile)return;profile.points=result.profile.points;$('#saved-points').textContent='★ '+profile.points+(profile.points===1?' star':' stars');}catch(error){if(error.httpStatus===401)await refresh();}
+  try{const result=await api('/api/profile');if(current!==profileRevision||!result.profile)return;profile.reputation=result.profile.reputation;renderReputation(profile.reputation);profile.points=result.profile.points;$('#saved-points').textContent='★ '+profile.points+' Reputation';}catch(error){if(error.httpStatus===401)await refresh();}
 }
 setInterval(()=>{if(!document.hidden)refreshPoints();},5000);
