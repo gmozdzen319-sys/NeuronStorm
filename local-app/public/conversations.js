@@ -31,7 +31,8 @@ export function createConversations({api,onProfile,onExpired}) {
   function clear(){
     clearReputationAdmin();
     questionTools.setAccount(null);memberTools.clear();questionPreview=null;$('#question-preview-dialog').close();globe.clear();debate.stop();sounds.setAccount(null);rewards.clear();lifecycle.clear();
-    $('#landing').append($('.how'));
+    root.before($('#landing'));
+    $('#landing').append($('.experience-path'),$('.how'));
     $('#moderation-dialog').close();$('#admin-nav').hidden=true;$('#notifications-button').hidden=true;$('#admin-list').replaceChildren();$('#notifications-list').replaceChildren();$('#admin-audit').replaceChildren();moderated=null;pendingModeration=null;notificationSignature='';
     $('#wallet-button').hidden=true;$('#wallet-assets').replaceChildren();$('#wallet-address').textContent='';$('#wallet-updated').textContent='';status('#wallet-status');
     identity=null;epoch++;threadId=null;root.hidden=true;$('#member-nav').hidden=true;$('#ask-question').hidden=true;$('#member-name').hidden=true;
@@ -128,7 +129,7 @@ export function createConversations({api,onProfile,onExpired}) {
   }
   for(const kind of ['work','hobbies'])$('#search-'+kind).addEventListener('input',()=>{const query=$('#search-'+kind).value.normalize('NFKC').toLocaleLowerCase().trim();let matches=0;for(const label of $('#question-'+kind).querySelectorAll('label')){label.hidden=!label.textContent.normalize('NFKC').toLocaleLowerCase().includes(query);if(!label.hidden)matches++;}$('#search-'+kind+'-empty').hidden=matches>0;});
   async function ask(focusQuestion=false){
-    if(!identity)return;shell('ask');$('#ask-view').append($('.platform-stats'),$('.how'));loadStats();$('#question-form').reset();status('#question-status','Loading topics…');$('#send-question').disabled=true;
+    if(!identity)return;shell('ask');$('#ask-view').prepend($('.experience-path'));$('#question-form').after($('#landing'));$('#ask-view').append($('.platform-stats'),$('.how'));loadStats();$('#question-form').reset();status('#question-status','Loading topics…');$('#send-question').disabled=true;
     const current=epoch;
     try{const result=await api('/api/categories?available=1');if(current!==epoch)return;
       for(const kind of ['work','hobbies']){const list=$('#question-'+kind);list.replaceChildren();for(const topic of result.categories[kind]){const label=node('label',undefined,'topic-choice'),check=node('input');check.type='checkbox';check.name='question-topic';check.value=topic.id;check.dataset.topicName=topic.name;label.append(check,node('span',topic.name),node('small',topic.memberCount+(topic.memberCount===1?' member':' members'),'topic-member-count'));check.addEventListener('change',()=>updateChosen(kind));list.append(label);}if(!result.categories[kind].length)list.append(node('p','No available topics yet.','muted'));$('#picker-'+kind).open=false;$('#search-'+kind).value='';$('#search-'+kind+'-empty').hidden=true;updateChosen(kind);}

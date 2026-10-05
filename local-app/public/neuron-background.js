@@ -1,24 +1,42 @@
 export function startNeuronBackground(){
-  const canvas=document.querySelector('#neuron-background'),ctx=canvas.getContext('2d');
+  const canvas=document.querySelector('#neuron-background'),ctx=canvas?.getContext('2d');
   if(!ctx)return;
-  const reduced=matchMedia('(prefers-reduced-motion: reduce)');let timer,frame,width,height;
-  function resize(){width=innerWidth;height=innerHeight;const ratio=Math.min(devicePixelRatio||1,2);canvas.width=width*ratio;canvas.height=height*ratio;ctx.setTransform(ratio,0,0,ratio,0,0);}
-  function stop(){canvas.dataset.phase='idle';clearTimeout(timer);cancelAnimationFrame(frame);ctx.clearRect(0,0,width,height);}
-  function schedule(delay=22000+Math.random()*14000){if(!document.hidden&&!reduced.matches)timer=setTimeout(pulse,delay);}
-  function pulse(){
-    const x=width*.04,y=height*(.2+Math.random()*.5),scale=Math.min(width/650,1);
-    const points=[[0,0],[95,-80],[175,15],[75,115],[245,-65],[280,120],[-55,80]].map(([a,b])=>[x+a*scale,y+b*scale]);
-    const edges=[[0,1],[0,2],[0,3],[0,6],[1,4],[2,4],[2,5],[3,5]];const start=performance.now();
-    function draw(now){
-      const t=(now-start)/6500;ctx.clearRect(0,0,width,height);if(t>=1){canvas.dataset.phase='idle';schedule();return;}canvas.dataset.phase=t>.35?'connected':'connecting';
-      const fade=Math.sin(Math.PI*t)*.32;
-      edges.forEach(([a,b],i)=>{const progress=Math.max(0,Math.min(1,(t-.08-i*.035)*3));if(!progress)return;const [ax,ay]=points[a],[bx,by]=points[b],color=i%2?'255,65,95':'45,191,255';ctx.strokeStyle=`rgba(${color},${fade})`;ctx.shadowColor=`rgba(${color},.5)`;ctx.shadowBlur=9;ctx.lineWidth=1.2;ctx.beginPath();ctx.moveTo(ax,ay);ctx.lineTo(ax+(bx-ax)*progress,ay+(by-ay)*progress);ctx.stroke();});
-      points.forEach(([px,py],i)=>{const color=i%2?'255,65,95':'45,191,255';ctx.fillStyle=`rgba(${color},${fade*1.7})`;ctx.shadowColor=`rgba(${color},.8)`;ctx.shadowBlur=15;ctx.beginPath();ctx.arc(px,py,2.6+Math.sin(t*7+i)*.6,0,Math.PI*2);ctx.fill();
-        for(let branch=0;branch<3;branch++){const angle=i+branch*2.1;ctx.strokeStyle=`rgba(${color},${fade*.7})`;ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(px+Math.cos(angle)*14,py+Math.sin(angle)*14);ctx.stroke();}});
-      frame=requestAnimationFrame(draw);
+  const reduced=matchMedia('(prefers-reduced-motion: reduce)');
+  let width=0,height=0,frame=0,last=0,time=0,points=[],edges=[];
+  function resize(){
+    width=innerWidth;height=innerHeight;
+    const ratio=Math.min(devicePixelRatio||1,1.5);
+    canvas.width=Math.round(width*ratio);canvas.height=Math.round(height*ratio);ctx.setTransform(ratio,0,0,ratio,0,0);
+    const cols=width<600?10:19,rows=8;points=[];edges=[];
+    for(let row=0;row<rows;row++)for(let col=0;col<cols;col++){
+      const index=points.length;
+      points.push({u:col/(cols-1),v:row/(rows-1),phase:Math.sin(index*17.3)*Math.PI,depth:.4+.6*(.5+.5*Math.sin(index*7.9))});
+      if(col)edges.push([index-1,index]);if(row)edges.push([index-cols,index]);if(row&&col&&(row+col)%2===0)edges.push([index-cols-1,index]);
     }
-    frame=requestAnimationFrame(draw);
+    draw();
   }
-  function reset(){stop();if(!reduced.matches&&!document.hidden)schedule(2500);}
-  resize();schedule(2500);window.addEventListener('resize',()=>{resize();});document.addEventListener('visibilitychange',reset);reduced.addEventListener('change',reset);
+  function draw(){
+    ctx.clearRect(0,0,width,height);
+    const positions=points.map(p=>({x:p.u*width+Math.sin(p.phase*5)*width*.018+Math.sin(time*.09+p.phase)*9,y:(p.v+.11*Math.sin(p.u*6+time*.035+p.v*2)+Math.sin(p.phase*3)*.035)*height+Math.cos(time*.07+p.phase)*6}));
+    const glow=Math.pow(.5+.5*Math.sin(time*Math.PI/32),8);
+    edges.forEach(([a,b])=>{
+      const p=points[a],start=positions[a],end=positions[b];
+      const center=Math.abs(p.u-.5)*2;
+      const red=Math.round(255+(45-255)*p.u),green=Math.round(65+(191-65)*p.u),blue=Math.round(95+(255-95)*p.u);
+      ctx.strokeStyle=`rgba(${red},${green},${blue},${(.035+.085*center)*(1+glow*.4)*p.depth})`;
+      ctx.lineWidth=.65;ctx.beginPath();ctx.moveTo(start.x,start.y);ctx.lineTo(end.x,end.y);ctx.stroke();
+    });
+    points.forEach((p,i)=>{
+      const {x,y}=positions[i],color=p.u<.45?'255,100,112':'55,198,255',alpha=(.09+.14*Math.abs(p.u-.5)*2)*p.depth;
+      ctx.fillStyle=`rgba(${color},${alpha+glow*.09})`;ctx.beginPath();ctx.arc(x,y,1+p.depth,0,Math.PI*2);ctx.fill();
+      if(i%13===0){const halo=ctx.createRadialGradient(x,y,0,x,y,13);halo.addColorStop(0,`rgba(${color},${.07+glow*.05})`);halo.addColorStop(1,`rgba(${color},0)`);ctx.fillStyle=halo;ctx.fillRect(x-13,y-13,26,26);}
+    });
+  }
+  function tick(now){
+    if(document.hidden||reduced.matches){frame=0;return;}
+    if(now-last>=1000/30){time+=Math.min((now-last)/1000,.1);last=now;draw();}
+    frame=requestAnimationFrame(tick);
+  }
+  function reset(){cancelAnimationFrame(frame);frame=0;last=performance.now();draw();if(!document.hidden&&!reduced.matches)frame=requestAnimationFrame(tick);}
+  resize();reset();window.addEventListener('resize',resize);document.addEventListener('visibilitychange',reset);reduced.addEventListener('change',reset);
 }
