@@ -204,3 +204,14 @@ Weryfikacja: 92/92 testy. Testy prywatności blokad, obustronnego doboru odbiorc
 0.16.0 (projekt regulaminu): 96/96 testow. Nowe testy sprawdzaja brak zgody, stary hash, bledny podpis, jednorazowosc challenge, zapis dowodu i snapshotu po weryfikacji. Podglad 390x844: akceptacja domyslnie odznaczona, klikniecie kontynuacji bez zgody blokuje podpis, Terms/Privacy bez przewijania poziomego. QA w pamieci, bez prawdziwych podpisow. Regulamin nieaktywny do uzupelnienia danych operatora.
 
 0.16.1: zapis odpowiedzi tylko przez autora pytania; test odbiorcy, autora odpowiedzi i administratora w cudzym pytaniu. Przegladarka: Morgan zapisuje odpowiedz w My Questions (Saved), Alex widzi tylko Report. Testy regulaminu uzywaja wolnego portu zamiast stalego.
+
+
+## PostgreSQL — 0.17.0 (05.10.2026)
+
+Zmiany przygotowane lokalnie, bez pushu, deployu i połączenia z produkcyjną bazą. Zachowano pliki SQLite. Pełny zestaw: 104 testy, 103 zaliczone, 0 błędów, 1 celowo pominięty. Testy SQL/HTTP uruchomiono na PGlite przez sterownik pg. Obejmują sesje, profile, limity kategorii, pytania, odpowiedzi, Debate, powiadomienia, głosy, ranking, archiwum, zapisane odpowiedzi, zgłoszenia, geolokalizację, akceptacje regulaminu i potwierdzenia płatności/nagród z symulowanym RPC. Nowe testy sprawdzają schemat, rollback profilu, duplikaty podpisów/odpowiedzi, rejestr transakcji i ponowny start.
+
+Natywny PostgreSQL 18 nie uruchomił się w ograniczonym środowisku Windows (błąd restricted token w initdb). Test dwóch niezależnych pul przy równoczesnej akceptacji i wygaśnięciu wymaga natywnego PostgreSQL; pozostaje warunkiem przed wdrożeniem. Instrukcja: POSTGRESQL.md. Nie przeprowadzono prawdziwych transakcji NS ani testu portfela na produkcji.
+
+### Uzupełnienie — natywny PostgreSQL 18.4
+
+05.10.2026: użytkownik uruchomił tymczasowy serwer w swoim terminalu. Log potwierdził gotowość bazy na localhost. Poprzedni skrypt czekał na zamknięcie potoków odziedziczonych przez proces PostgreSQL po uruchomieniu pg_ctl; poprawiono sterowanie procesem i dodano komunikaty postępu. Pełny zestaw uruchomiono na tej odizolowanej bazie: **104 testy zaliczone, 0 błędów, 0 pominięć**, w tym test dwóch niezależnych pul. Poprzedni warunek testu natywnego został spełniony. Nie wykonano pushu ani deployu i nie używano bazy Rendera.

@@ -4,10 +4,10 @@ import {mockTokenFetch} from './token-fixture.mjs';
 // Isolated UI QA only: disposable wallets, in-memory database, no user data.
 import {randomBytes,createHash} from 'node:crypto';
 import {Wallet,isQuaiAddress,id as eventId} from 'quais';
-import {createApp,ADMIN} from '../server.mjs';
+import {createApp,ADMIN} from './database.mjs';
 let paymentHeight=100n;const paymentTransactions=new Map();
 const mockPaymentFetch=async(url,options)=>{const {method,params}=JSON.parse(options.body);const saved=paymentTransactions.get(params[0]);const result=method==='quai_chainId'?'0x9':method==='quai_blockNumber'?'0x'+paymentHeight.toString(16):method==='quai_getTransactionReceipt'?saved?.receipt||null:method==='quai_getTransactionByHash'?saved?.tx||null:method==='quai_getBlockByNumber'?{hash:'0x'+'bb'.repeat(32)}:null;return {ok:true,json:async()=>({result})};};
-const origin='http://127.0.0.1:43127';const {server,db}=createApp({legal:loadLegal({published:false,version:'QA'}),database:':memory:',origin,...(process.env.QA_GLOBE_DEMO==='1'?{trustProxy:true,geoLookup:()=> 'GB'}:{}),paymentFetch:mockPaymentFetch,tokenFetch:mockTokenFetch,holdingsFetch:async url=>({ok:true,json:async()=>({status:'1',result:url.searchParams.get('action')==='balance'?'125012345678901234567':[{name:'Demo token (test data)',symbol:'DEMO',type:'ERC-20',contractAddress:'0x0000000000000000000000000000000000000001',balance:'25000000',decimals:'6'}]})})});
+const origin='http://127.0.0.1:43127';const {server,db}=(await createApp({legal:loadLegal({published:false,version:'QA'}),database:':memory:',origin,...(process.env.QA_GLOBE_DEMO==='1'?{trustProxy:true,geoLookup:()=> 'GB'}:{}),paymentFetch:mockPaymentFetch,tokenFetch:mockTokenFetch,holdingsFetch:async url=>({ok:true,json:async()=>({status:'1',result:url.searchParams.get('action')==='balance'?'125012345678901234567':[{name:'Demo token (test data)',symbol:'DEMO',type:'ERC-20',contractAddress:'0x0000000000000000000000000000000000000001',balance:'25000000',decimals:'6'}]})})}));
 await new Promise(resolve=>server.listen(43127,'127.0.0.1',resolve));
 const sessions={},addresses={},wallets={};
 for(const [actor,nickname,topic]of [['author','Morgan','Cooking'],['alex','Alex','Electrical work'],['sam','Sam','Electrical work'],['outsider','Taylor','Gardening'],['newcomer','New member','Books']]){
@@ -21,7 +21,7 @@ for(const [actor,nickname,topic]of [['author','Morgan','Cooking'],['alex','Alex'
   const profile=await fetch(origin+'/api/profile',{method:'POST',headers:{Origin:origin,'Content-Type':'application/json',Cookie:sessions[actor].split(';')[0]},body:JSON.stringify({nickname,work:[topic],hobbies:[]})});if(!profile.ok)throw new Error('QA profile failed');
 }
 // Synthetic administrator session exists only in this disposable in-memory fixture.
-const adminToken=randomBytes(32).toString('hex');db.prepare('INSERT INTO accounts VALUES(?,?)').run(ADMIN,Date.now());db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(adminToken).digest('hex'),ADMIN,Date.now()+28800000);sessions.admin='ns_session='+adminToken+'; HttpOnly; SameSite=Strict; Path=/';
+const adminToken=randomBytes(32).toString('hex');(await db.prepare("INSERT INTO accounts VALUES($1,$2)").run(ADMIN,Date.now()));(await db.prepare("INSERT INTO sessions VALUES($1,$2,$3)").run(createHash('sha256').update(adminToken).digest('hex'),ADMIN,Date.now()+28800000));sessions.admin='ns_session='+adminToken+'; HttpOnly; SameSite=Strict; Path=/';
 async function qaRequest(actor,path,data){if(data?.body&&(path==='/api/questions'||/^\/api\/questions\/[^/]+\/replies$/.test(path))){const challenge=await qaRequest(actor,'/api/actions/challenge',{path,payload:data});data={actionId:challenge.id,signature:await wallets[actor].signMessage(challenge.message)};}const response=await fetch(origin+path,{method:data===undefined?'GET':'POST',headers:{Origin:origin,'Content-Type':'application/json',Cookie:sessions[actor].split(';')[0]},body:data===undefined?undefined:JSON.stringify(data)});if(!response.ok)throw new Error('QA seed failed '+response.status);return response.json();}
 await qaRequest('admin','/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true});
 await qaRequest('admin','/api/profile',{nickname:'Test Administrator',work:['Administration'],hobbies:[]});
@@ -30,7 +30,7 @@ const question=await qaRequest('author','/api/questions',{categoryId,body:'How s
 await qaRequest('alex','/api/questions/'+question.id+'/replies',{body:'Use separate task lighting above the worktop.'});
 const reply=(await qaRequest('author','/api/questions/'+question.id)).thread.replies[0];await qaRequest('author','/api/questions/'+question.id+'/replies/'+reply.id+'/vote',{value:1});
 await qaRequest('author','/api/questions',{categoryId,body:'Which lighting controls are easiest to use?'});
-if(process.env.QA_GLOBE_DEMO==='1'){const seed=()=>{for(const [actor,country] of [['alex','US'],['sam','PL'],['outsider','BR']])db.prepare('INSERT INTO globe_presence VALUES(?,?,?) ON CONFLICT(address) DO UPDATE SET seen=excluded.seen').run(addresses[actor].toLowerCase(),country,Date.now());};seed();setInterval(seed,20000).unref();}
+if(process.env.QA_GLOBE_DEMO==='1'){const seed=async ()=>{for(const [actor,country] of [['alex','US'],['sam','PL'],['outsider','BR']])(await db.prepare("INSERT INTO globe_presence VALUES($1,$2,$3) ON CONFLICT(address) DO UPDATE SET seen=excluded.seen").run(addresses[actor].toLowerCase(),country,Date.now()));};(await seed());setInterval(seed,20000).unref();}
 const handler=server.listeners('request')[0];server.removeListener('request',handler);
 server.on('request',(req,res)=>{
   if(process.env.QA_GLOBE_DEMO==='1')req.headers['x-forwarded-for']='8.8.8.8';

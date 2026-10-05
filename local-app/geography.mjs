@@ -35,14 +35,14 @@ export function lookupCountry(ip){
     while(low<=high){const mid=Math.floor((low+high)/2),offset=mid*size,start=number(offset),end=number(offset+width);if(value<start)high=mid-1;else if(value>end)low=mid+1;else return data.toString('ascii',offset+2*width,offset+size);}
   }catch{return null;}return null;
 }
-export function initGlobe(db){db.exec(`CREATE TABLE IF NOT EXISTS globe_preferences(address TEXT PRIMARY KEY REFERENCES accounts(address),enabled INTEGER NOT NULL CHECK(enabled IN(0,1)));CREATE TABLE IF NOT EXISTS globe_presence(address TEXT PRIMARY KEY REFERENCES accounts(address),country TEXT NOT NULL,seen INTEGER NOT NULL);`);}
-export function globeData(db,account,ip,input,now,lookup=lookupCountry){
-  requireProfile(db,account);const address=account.address.toLowerCase();
-  if(input?.enabled!==undefined){if(typeof input.enabled!=='boolean')throw Object.assign(Error('Choose whether to share your approximate country.'),{status:400});db.prepare('INSERT INTO globe_preferences VALUES(?,?) ON CONFLICT(address) DO UPDATE SET enabled=excluded.enabled').run(address,input.enabled?1:0);}
-  const enabled=db.prepare('SELECT enabled FROM globe_preferences WHERE address=?').get(address)?.enabled===1;
+
+export async function globeData(db,account,ip,input,now,lookup=lookupCountry){
+  (await requireProfile(db,account));const address=account.address.toLowerCase();
+  if(input?.enabled!==undefined){if(typeof input.enabled!=='boolean')throw Object.assign(Error('Choose whether to share your approximate country.'),{status:400});(await db.prepare("INSERT INTO globe_preferences VALUES($1,$2) ON CONFLICT(address) DO UPDATE SET enabled=excluded.enabled").run(address,input.enabled?1:0));}
+  const enabled=(await db.prepare("SELECT enabled FROM globe_preferences WHERE address=$1").get(address))?.enabled===1;
   let country;try{country=ip&&lookup(ip);}catch{country=null;}if(!/^[A-Z]{2}$/.test(country||''))country=null;
-  db.prepare('DELETE FROM globe_presence WHERE seen<=?').run(now-65000);
-  if(input){if(enabled&&country&&input.active===true)db.prepare('INSERT INTO globe_presence VALUES(?,?,?) ON CONFLICT(address) DO UPDATE SET country=excluded.country,seen=excluded.seen').run(address,country,now);else db.prepare('DELETE FROM globe_presence WHERE address=?').run(address);}
-  const countries=db.prepare('SELECT country,count(*) AS count FROM globe_presence WHERE seen>? GROUP BY country ORDER BY country').all(now-65000);
+  (await db.prepare("DELETE FROM globe_presence WHERE seen<=$1").run(now-65000));
+  if(input){if(enabled&&country&&input.active===true)(await db.prepare("INSERT INTO globe_presence VALUES($1,$2,$3) ON CONFLICT(address) DO UPDATE SET country=excluded.country,seen=excluded.seen").run(address,country,now));else (await db.prepare("DELETE FROM globe_presence WHERE address=$1").run(address));}
+  const countries=(await db.prepare("SELECT country,count(*) AS count FROM globe_presence WHERE seen>$1 GROUP BY country ORDER BY country").all(now-65000));
   return {enabled,viewerCountry:country,countries,sharingOnline:countries.reduce((n,c)=>n+c.count,0),updatedAt:now,accuracy:'country',approximate:true};
 }

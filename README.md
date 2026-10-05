@@ -1,4 +1,12 @@
-# Neuron Storm — lokalna aplikacja
+# Neuron Storm — aktualne uruchamianie (0.17.0)
+
+Aplikacja wymaga teraz PostgreSQL i zmiennej środowiskowej `DATABASE_URL`. Dane SQLite nie są importowane ani usuwane. Instrukcja, testy i kolejność wdrożenia: [POSTGRESQL.md](POSTGRESQL.md).
+
+Testy lokalne: `npm test`. Start na Renderze pozostaje `node local-app/render-start.mjs`. Przygotowanie kodu nie oznacza wykonania deployu.
+
+Poniższe sekcje są historią rozwoju; dawne informacje o SQLite i uruchamianiu bez PostgreSQL zastępuje powyższa instrukcja.
+
+# Historia lokalnej aplikacji
 
 Właściwy projekt: `C:\Users\kolek\Desktop\Neuron Storm`.
 

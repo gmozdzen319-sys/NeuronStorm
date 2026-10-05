@@ -5,7 +5,7 @@ import {mockTokenFetch} from './token-fixture.mjs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Wallet, isQuaiAddress } from 'quais';
-import { createApp, ADMIN } from '../server.mjs';
+import { createApp, ADMIN } from './database.mjs';
 import { authenticate, walletError, connectWallet, signIn } from '../public/wallet.js';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -42,10 +42,10 @@ const testSigners=new Map();
 function newWallet() { let w; do { w = new Wallet(randomBytes(32).toString('hex')); } while (!isQuaiAddress(w.address)); testSigners.set(w.address.toLowerCase(),w); return w; }
 const wallet = newWallet(), other = newWallet();
 async function fixture(t, extra = {}) {
-  const app = createApp({ legal:loadLegal({published:false,version:'QA'}), database: ':memory:', tokenFetch:mockTokenFetch, ...extra });
+  const app = (await createApp({ legal:loadLegal({published:false,version:'QA'}), database: ':memory:', tokenFetch:mockTokenFetch, ...extra }));
   await new Promise(resolve => app.server.listen(0, '127.0.0.1', resolve));
   const url = `http://127.0.0.1:${app.server.address().port}`;
-  t.after(async () => { await new Promise(resolve => app.server.close(resolve)); app.db.close(); });
+  t.after(async () => { await new Promise(resolve => app.server.close(resolve)); (await app.db.close()); });
   const jar = {};
   async function request(path, data, headers = {}) {
     // Exercise the real signature flow using only disposable test wallets.
@@ -53,7 +53,7 @@ async function fixture(t, extra = {}) {
       const challenge=await request('/api/actions/challenge',{path,payload:data},headers);
       if(challenge.status!==200)return challenge;
       const session=(headers.Cookie??('ns_session='+jar.ns_session)).match(/ns_session=([^;]+)/)?.[1];
-      const account=session&&app.db.prepare('SELECT address FROM sessions WHERE token_hash=?').get(createHash('sha256').update(session).digest('hex'));
+      const account=session&&(await app.db.prepare("SELECT address FROM sessions WHERE token_hash=$1").get(createHash('sha256').update(session).digest('hex')));
       const signer=account&&testSigners.get(account.address);
       if(signer)data={actionId:challenge.data.id,signature:await signer.signMessage(challenge.data.message)};
     }
@@ -80,7 +80,7 @@ test('address alone is not authentication; signature creates session; logout rev
   assert.match(result.headers.get('set-cookie'), /HttpOnly; SameSite=Strict/);
   const old = f.jar.ns_session;
   assert.equal((await f.request('/api/session')).data.account.address, wallet.address);
-  assert.equal(f.db.prepare('SELECT token_hash FROM sessions').get().token_hash === old, false);
+  assert.equal((await f.db.prepare("SELECT token_hash FROM sessions").get()).token_hash === old, false);
   assert.equal((await f.request('/api/logout', {})).status, 200);
   assert.equal((await f.request('/api/session', undefined, { Cookie: `ns_session=${old}` })).data.account, null);
 });
@@ -124,26 +124,26 @@ test('administrator address does not grant access without its signature', async 
 test('repeat login keeps one account and rotates session', async t => {
   const f=await fixture(t); await f.login(); const previous=f.jar.ns_session; await f.login();
   assert.notEqual(f.jar.ns_session,previous);
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM accounts').get().n,1);
+  assert.equal((await f.db.prepare("SELECT count(*) AS n FROM accounts").get()).n,1);
   assert.equal((await f.request('/api/session',undefined,{Cookie:`ns_session=${previous}`})).data.account,null);
 });
 test('session and account persist after database is reopened', async t => {
   const folder=mkdtempSync(join(tmpdir(),'neuron-auth-')), database=join(folder,'auth.sqlite');
-  const first=createApp({database});
-  first.db.prepare('INSERT INTO accounts VALUES(?,?)').run(wallet.address.toLowerCase(),Date.now());
+  const first=(await createApp({database}));
+  (await first.db.prepare("INSERT INTO accounts VALUES($1,$2)").run(wallet.address.toLowerCase(),Date.now()));
   const session=randomBytes(32).toString('hex');
-  first.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(session).digest('hex'),wallet.address.toLowerCase(),Date.now()+60000);
-  first.db.close();
+  (await first.db.prepare("INSERT INTO sessions VALUES($1,$2,$3)").run(createHash('sha256').update(session).digest('hex'),wallet.address.toLowerCase(),Date.now()+60000));
+  (await first.db.close());
   const second=await fixture(t,{database});
   t.after(()=>rmSync(folder,{recursive:true,force:true}));
-  assert.equal(second.db.prepare('SELECT address FROM accounts').get().address,wallet.address.toLowerCase());
+  assert.equal((await second.db.prepare("SELECT address FROM accounts").get()).address,wallet.address.toLowerCase());
   assert.equal((await second.request('/api/session',undefined,{Cookie:`ns_session=${session}`})).data.account.address,wallet.address);
 });
 test('malformed JSON values do not create accounts', async t => {
   const f=await fixture(t);
   assert.equal((await f.request('/api/challenge',null)).status,400);
   assert.equal((await f.request('/api/challenge',[])).status,400);
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM accounts').get().n,0);
+  assert.equal((await f.db.prepare("SELECT count(*) AS n FROM accounts").get()).n,0);
 });
 test('missing wallet and refused signature leave user unauthenticated', async () => {
   await assert.rejects(authenticate(undefined,()=>assert.fail()), /No supported wallet detected/);
@@ -214,7 +214,7 @@ test('profile creation, reload, repeat login and editing preserve one profile',a
   assert.equal((await f.request('/api/profile')).data.profile.nickname,'Nova');
   saved=await f.request('/api/profile',{nickname:'Nova 2',firstName:'Éva',lastName:'Kowalska',work:['Electrical Engineering'],hobbies:[]});
   assert.equal(saved.data.profile.firstName,'Éva');assert.equal(saved.data.profile.work.length,1);assert.equal(saved.data.profile.hobbies.length,0);
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM profiles').get().n,1);
+  assert.equal((await f.db.prepare("SELECT count(*) AS n FROM profiles").get()).n,1);
 });
 test('profiles and category lists require a valid session; claimed address grants no access',async t=>{
   const f=await fixture(t);
@@ -249,7 +249,7 @@ test('profile writes reject foreign origin and expired sessions',async t=>{
   assert.equal((await f.request('/api/profile',profileInput,{Origin:'https://evil.example'})).status,403);
   time+=28800001;
   assert.equal((await f.request('/api/profile',profileInput)).status,401);
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM profiles').get().n,0);
+  assert.equal((await f.db.prepare("SELECT count(*) AS n FROM profiles").get()).n,0);
 });
 test('profile and categories survive database reopening',async t=>{
   const folder=mkdtempSync(join(tmpdir(),'neuron-profile-')),database=join(folder,'profile.sqlite');
@@ -261,8 +261,8 @@ test('profile and categories survive database reopening',async t=>{
 });
 test('administrator also starts with no profile and profile data cannot alter role',async t=>{
   const f=await fixture(t),session=randomBytes(32).toString('hex');
-  f.db.prepare('INSERT INTO accounts VALUES(?,?)').run(ADMIN,Date.now());
-  f.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(session).digest('hex'),ADMIN,Date.now()+60000);
+  (await f.db.prepare("INSERT INTO accounts VALUES($1,$2)").run(ADMIN,Date.now()));
+  (await f.db.prepare("INSERT INTO sessions VALUES($1,$2,$3)").run(createHash('sha256').update(session).digest('hex'),ADMIN,Date.now()+60000));
   f.jar.ns_session=session;await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true});
   assert.equal((await f.request('/api/profile')).data.profile,null);
   assert.equal((await f.request('/api/profile',{...profileInput,role:'member'})).status,200);
@@ -280,7 +280,7 @@ test('shared thread reaches two recipients; outsiders blocked; unread, snapshots
   const category=(await f.request('/api/categories',undefined,authorHeaders)).data.categories.work.find(c=>c.name==='Electrical work').id;
   const sent=await f.request('/api/questions',{categoryId:category,body:'How can I plan the lighting in my kitchen?',author:outsider.address},authorHeaders);
   assert.equal(sent.status,201);assert.equal(sent.data.recipientCount,2);const id=sent.data.id;
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM questions').get().n,1);
+  assert.equal((await f.db.prepare("SELECT count(*) AS n FROM questions").get()).n,1);
   for(const h of [aHeaders,bHeaders]){const q=(await f.request('/api/questions?view=inbox',undefined,h)).data.questions;assert.equal(q.length,1);assert.equal(q[0].unread,true);assert.equal(q[0].author,'Cook');}
   assert.equal((await f.request('/api/questions?view=mine',undefined,authorHeaders)).data.questions[0].id,id);
   assert.equal((await f.request('/api/questions?view=inbox',undefined,authorHeaders)).data.questions.length,0);
@@ -310,7 +310,7 @@ test('shared thread reaches two recipients; outsiders blocked; unread, snapshots
   assert.equal(newer.data.recipientCount,2);
   assert.equal((await f.request('/api/questions/'+newer.data.id,undefined,aHeaders)).status,404);
   assert.equal((await f.request('/api/questions/'+newer.data.id,undefined,outsiderHeaders)).status,200);
-  const adminToken=randomBytes(32).toString('hex');f.db.prepare('INSERT INTO accounts VALUES(?,?)').run(ADMIN,time);f.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(adminToken).digest('hex'),ADMIN,time+60000);
+  const adminToken=randomBytes(32).toString('hex');(await f.db.prepare("INSERT INTO accounts VALUES($1,$2)").run(ADMIN,time));(await f.db.prepare("INSERT INTO sessions VALUES($1,$2,$3)").run(createHash('sha256').update(adminToken).digest('hex'),ADMIN,time+60000));
   const adminHeaders={Cookie:`ns_session=${adminToken}`};await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true},adminHeaders);await f.request('/api/profile',{nickname:'Admin',work:['Administration'],hobbies:[]},adminHeaders);
   assert.equal((await f.request('/api/questions?view=inbox',undefined,adminHeaders)).data.questions.length,2);
   assert.equal((await f.request('/api/questions/'+id,undefined,adminHeaders)).status,200);
@@ -326,7 +326,7 @@ test('no recipients, invalid messages, incomplete profiles and foreign origins c
   assert.equal((await f.request('/api/questions',{categoryId:category,body:'x'.repeat(4001)})).status,400);
   assert.equal((await f.request('/api/questions',{categoryId:99999,body:'Hello'})).status,400);
   assert.equal((await f.request('/api/questions',{categoryId:category,body:'Hello'},{Origin:'https://evil.example'})).status,403);
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM questions').get().n,0);
+  assert.equal((await f.db.prepare("SELECT count(*) AS n FROM questions").get()).n,0);
 });
 test('questions, replies, recipients and read state survive database reopening',async t=>{
   const folder=mkdtempSync(join(tmpdir(),'neuron-threads-')),database=join(folder,'threads.sqlite');
@@ -408,7 +408,7 @@ test('ratings and profile stars survive reopening the database',async t=>{
 });
 
 async function adminMember(f){
-  const session=randomBytes(32).toString('hex');f.db.prepare('INSERT OR IGNORE INTO accounts VALUES(?,?)').run(ADMIN,Date.now());f.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(session).digest('hex'),ADMIN,Date.now()+600000);
+  const session=randomBytes(32).toString('hex');(await f.db.prepare("INSERT INTO accounts VALUES($1,$2) ON CONFLICT DO NOTHING").run(ADMIN,Date.now()));(await f.db.prepare("INSERT INTO sessions VALUES($1,$2,$3)").run(createHash('sha256').update(session).digest('hex'),ADMIN,Date.now()+600000));
   const headers={Cookie:`ns_session=${session}`};await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true},headers);await f.request('/api/profile',{nickname:'Administrator',work:['Administration'],hobbies:[]},headers);return headers;
 }
 test('admin dashboard protects endpoints, soft-deletes, audits and restores without losing participants',async t=>{
@@ -439,13 +439,13 @@ test('admin dashboard protects endpoints, soft-deletes, audits and restores with
   assert.equal((await f.request('/api/profile',undefined,rh)).data.profile.points,0);
   assert.equal((await f.request('/api/stats',undefined,rh)).data.stats.questions,0);
   assert.equal((await f.request('/api/admin/conversations?state=deleted',undefined,admin)).data.questions[0].id,id);
-  const deleted=(await f.request(path,undefined,admin)).data;assert.ok(deleted.thread.deletedAt);assert.equal(deleted.audit[0].action,'delete');assert.equal(deleted.audit[0].actor,ADMIN);
-  assert.equal(f.db.prepare('SELECT count(*) AS n FROM replies').get().n,1);assert.equal(f.db.prepare('SELECT count(*) AS n FROM profiles').get().n,3);
+  const deleted=(await f.request(path,undefined,admin)).data;assert.ok(deleted.thread.deletedAt);assert.equal(deleted.audit[0].action,"delete");assert.equal(deleted.audit[0].actor,ADMIN);
+  assert.equal((await f.db.prepare("SELECT count(*) AS n FROM replies").get()).n,1);assert.equal((await f.db.prepare("SELECT count(*) AS n FROM profiles").get()).n,3);
   assert.equal((await f.request(path+'/restore',{confirmation:id},admin)).status,200);
   assert.equal((await f.request('/api/questions/'+id,undefined,rh)).status,200);
   assert.equal((await f.request('/api/profile',undefined,rh)).data.profile.points,1);
   assert.equal((await f.request('/api/notifications',undefined,rh)).data.unread,0);
-  assert.deepEqual((await f.request(path,undefined,admin)).data.audit.map(x=>x.action),['restore','delete']);
+  assert.deepEqual((await f.request(path,undefined,admin)).data.audit.map(x=>x.action),['restore',"delete"]);
 });
 
 test('admin search pagination and deleted state persist across database reopening',async t=>{
@@ -515,11 +515,11 @@ test('registration creates a profile after signature without token import or con
  const c=await f.challenge();await f.request('/api/verify',{id:c.id,signature:await wallet.signMessage(c.message)});
  assert.equal((await f.request('/api/profile')).data.tokenSetupRequired,false);
  assert.equal((await f.request('/api/profile',profileInput)).status,200);
- assert.equal(f.db.prepare('SELECT count(*) AS n FROM token_confirmations').get().n,0);
+ assert.equal((await f.db.prepare("SELECT count(*) AS n FROM token_confirmations").get()).n,0);
  assert.equal((await f.request('/api/profile')).data.profile.nickname,profileInput.nickname.trim());
 });
 test('NS balance uses session address and on-chain calls only; public supply exposes no balances',async t=>{
- const calls=[];const f=await fixture(t,{tokenFetch:async(url,options)=>{calls.push(JSON.parse(options.body));return mockTokenFetch(url,options);}});
+ const calls=[];const f=await fixture(t,{tokenFetch:async(url,options)=>{calls.push(JSON.parse(options.body));return (await mockTokenFetch(url,options));}});
  assert.equal((await f.request('/api/token/balance')).status,401);assert.equal(calls.length,0);
  const stats=(await f.request('/api/token')).data;assert.equal(stats.totalSupply,'10000000');assert.equal(stats.balance,undefined);
  await f.login();const result=(await f.request('/api/token/balance?address='+other.address)).data;
@@ -528,7 +528,7 @@ test('NS balance uses session address and on-chain calls only; public supply exp
  assert.ok(calls.every(c=>['quai_chainId','quai_blockNumber','quai_call'].includes(c.method)));
 });
 test('NS reader rejects wrong networks, invalid contract results and network failures',async()=>{
- for(const fetcher of [async()=>({ok:false}),async()=>({ok:true,json:async()=>({result:'0x3a98'})}),async(url,opts)=>JSON.parse(opts.body).method==='quai_call'?{ok:true,json:async()=>({result:'0x'})}:mockTokenFetch(url,opts)]){
+ for(const fetcher of [async()=>({ok:false}),async()=>({ok:true,json:async()=>({result:'0x3a98'})}),async(url,opts)=>JSON.parse(opts.body).method==='quai_call'?{ok:true,json:async()=>({result:'0x'})}:(await mockTokenFetch(url,opts))]){
   await assert.rejects(createNeuronReader(fetcher)(wallet.address),e=>e.status===502);
  }
 });
@@ -591,13 +591,13 @@ test('Debate is private, unsigned, idempotent and separate from formal replies; 
   assert.equal((await f.request('/api/notifications',undefined,ah)).data.notifications.length,0);
   time+=26000;assert.deepEqual((await f.request(path,undefined,ah)).data.online,[]);
   // Seed older history only in the disposable database to verify both paging directions.
-  const address=f.db.prepare('SELECT author FROM questions WHERE id=?').get(id).author;
-  for(let n=0;n<60;n++)f.db.prepare('INSERT INTO debate_messages(question_id,author,body,client_id,created_at) VALUES(?,?,?,?,?)').run(id,address,'Older '+n,'seed-'+n,time);
+  const address=(await f.db.prepare("SELECT author FROM questions WHERE id=$1").get(id)).author;
+  for(let n=0;n<60;n++)(await f.db.prepare("INSERT INTO debate_messages(question_id,author,body,client_id,created_at) VALUES($1,$2,$3,$4,$5)").run(id,address,'Older '+n,'seed-'+n,time));
   const last=(await f.request(path,undefined,ah)).data;assert.equal(last.messages.length,50);assert.equal(last.hasEarlier,true);
   const earlier=(await f.request(path+'?before='+last.messages[0].id,undefined,ah)).data;
   assert.equal(earlier.messages.length,11);assert.equal(earlier.hasEarlier,false);
   const newer=(await f.request(path+'?after='+earlier.messages.at(-1).id,undefined,ah)).data;assert.deepEqual(newer.messages,last.messages);
-  f.db.prepare('UPDATE questions SET deleted_at=? WHERE id=?').run(time,id);
+  (await f.db.prepare("UPDATE questions SET deleted_at=$1 WHERE id=$2").run(time,id));
   assert.equal((await f.request(path,undefined,ah)).status,404);assert.equal((await f.request(path,message,rh)).status,404);
 });
 
@@ -634,7 +634,7 @@ test('member wallet directory is admin-only and public ranking never reveals add
  const f=await fixture(t),headers=await createMember(f,newWallet(),'Member',['Books']);
  assert.equal((await f.request('/api/admin/members',undefined,{Cookie:''})).status,401);
  assert.equal((await f.request('/api/admin/members',undefined,headers)).status,403);
- const session=randomBytes(32).toString('hex');f.db.prepare('INSERT INTO accounts VALUES(?,?)').run(ADMIN,Date.now());f.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(session).digest('hex'),ADMIN,Date.now()+60000);
+ const session=randomBytes(32).toString('hex');(await f.db.prepare("INSERT INTO accounts VALUES($1,$2)").run(ADMIN,Date.now()));(await f.db.prepare("INSERT INTO sessions VALUES($1,$2,$3)").run(createHash('sha256').update(session).digest('hex'),ADMIN,Date.now()+60000));
  const admin={Cookie:'ns_session='+session};await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true},admin);await f.request('/api/profile',{nickname:'Admin',work:['Administration'],hobbies:[]},admin);
  const result=await f.request('/api/admin/members',undefined,admin);assert.equal(result.status,200);assert.equal(result.data.members.length,2);assert.ok(result.data.members.every(m=>/^0x/.test(m.address)));
  const ranking=await f.request('/api/ranking',undefined,{Cookie:''});assert.equal(ranking.status,200);assert.ok(!JSON.stringify(ranking.data).includes('0x'));
@@ -659,7 +659,7 @@ test('accepted answers API is private and signed author acceptance closes every 
   assert.equal((await f.request('/api/questions/'+id+'/replies/'+reply.id+'/vote',{value:1},ah)).status,404);
   assert.equal((await f.request('/api/questions?view=mine',undefined,ah)).data.questions.length,0);
   assert.equal((await f.request('/api/notifications',undefined,ah)).data.notifications.length,0);
-  const token=randomBytes(32).toString('hex');f.db.prepare('INSERT INTO accounts VALUES(?,?)').run(ADMIN,time);f.db.prepare('INSERT INTO sessions VALUES(?,?,?)').run(createHash('sha256').update(token).digest('hex'),ADMIN,time+60000);
+  const token=randomBytes(32).toString('hex');(await f.db.prepare("INSERT INTO accounts VALUES($1,$2)").run(ADMIN,time));(await f.db.prepare("INSERT INTO sessions VALUES($1,$2,$3)").run(createHash('sha256').update(token).digest('hex'),ADMIN,time+60000));
   const adminHeaders={Cookie:'ns_session='+token};await f.request('/api/token/confirm',{contract:NS_TOKEN.address,confirmed:true},adminHeaders);await f.request('/api/profile',{nickname:'Admin',work:['Administration'],hobbies:[]},adminHeaders);
   const accepted=await f.request('/api/admin/accepted',undefined,adminHeaders);assert.equal(accepted.status,200);assert.equal(accepted.data.answers[0].question,'Choose a lamp');assert.equal(accepted.data.answers[0].answer,'Warm task lighting');assert.equal(accepted.data.answers[0].walletAddress,r.address.toLowerCase());
   assert.equal((await f.request('/api/admin/conversations',undefined,adminHeaders)).data.questions.length,0);
@@ -671,8 +671,8 @@ test('HTTP request catches overdue questions after downtime before showing or ch
   const id=(await f.request('/api/questions',{categoryId,body:'Expires in seven days'},ah)).data.id;
   await f.request('/api/questions/'+id+'/replies',{body:'Automatic winner'},rh);
   const deadline=time+7*86400000;assert.equal((await f.request('/api/questions/'+id,undefined,ah)).data.thread.expiresAt,deadline);
-  time=deadline;f.db.prepare('UPDATE sessions SET expires=?').run(time+60000);
+  time=deadline;(await f.db.prepare("UPDATE sessions SET expires=$1").run(time+60000));
   const result=await f.request('/api/questions?view=mine',undefined,ah);assert.equal(result.status,200);assert.equal(result.data.questions.length,0);
   assert.equal((await f.request('/api/questions/'+id,undefined,ah)).status,404);
-  assert.equal(f.db.prepare('SELECT selection FROM accepted_answers WHERE question_id=?').get(id).selection,'automatic');
+  assert.equal((await f.db.prepare("SELECT selection FROM accepted_answers WHERE question_id=$1").get(id)).selection,'automatic');
 });

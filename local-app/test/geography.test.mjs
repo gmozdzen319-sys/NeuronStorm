@@ -1,6 +1,6 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {createApp} from '../server.mjs';
+import {createApp} from './database.mjs';
 import {saveProfile} from '../profiles.mjs';
 import {ipNumber,publicIp,clientIp,lookupCountry,globeData} from '../geography.mjs';
 test('IP parsing rejects private addresses and only trusts explicitly configured proxy headers',()=>{
@@ -11,17 +11,17 @@ test('IP parsing rejects private addresses and only trusts explicitly configured
   assert.equal(clientIp(req),null);assert.equal(clientIp(req,true),'8.8.8.8');
   assert.match(lookupCountry('8.8.8.8'),/^[A-Z]{2}$/);assert.match(lookupCountry('2001:4860:4860::8888'),/^[A-Z]{2}$/);assert.equal(lookupCountry('127.0.0.1'),null);
 });
-test('globe requires a profile, defaults to private, aggregates and expires consented presence',t=>{
-  const {db}=createApp({database:':memory:'});t.after(()=>db.close());
+test('globe requires a profile, defaults to private, aggregates and expires consented presence',async t=>{
+  const {db}=(await createApp({database:':memory:'}));t.after(async ()=>(await db.close()));
   const accounts=[1,2].map(n=>({address:'0x'+String(n).padStart(40,'0'),role:'member'}));
-  for(const a of accounts){db.prepare('INSERT INTO accounts VALUES(?,?)').run(a.address,1);saveProfile(db,a.address,{nickname:'Member',work:['Lighting'],hobbies:[]},1);}
-  const read=(a,input,now=100000)=>globeData(db,a,'8.8.8.8',input,now,()=> 'GB');
-  assert.throws(()=>read(null,{}));assert.equal(read(accounts[0],{active:true}).sharingOnline,0);
-  read(accounts[0],{enabled:true,active:true});read(accounts[0],{active:true});
-  const both=read(accounts[1],{enabled:true,active:true});assert.deepEqual(both.countries.map(c=>({...c})),[{country:'GB',count:2}]);
+  for(const a of accounts){(await db.prepare("INSERT INTO accounts VALUES($1,$2)").run(a.address,1));(await saveProfile(db,a.address,{nickname:'Member',work:['Lighting'],hobbies:[]},1));}
+  const read=async (a,input,now=100000)=>(await globeData(db,a,'8.8.8.8',input,now,()=> 'GB'));
+  await assert.rejects(async ()=>(await read(null,{})));assert.equal((await read(accounts[0],{active:true})).sharingOnline,0);
+  (await read(accounts[0],{enabled:true,active:true}));(await read(accounts[0],{active:true}));
+  const both=(await read(accounts[1],{enabled:true,active:true}));assert.deepEqual(both.countries.map(c=>({...c})),[{country:'GB',count:2}]);
   assert.equal(JSON.stringify(both).includes(accounts[0].address),false);assert.equal(JSON.stringify(both).includes('8.8.8.8'),false);
-  assert.equal(read(accounts[0],{enabled:false,active:true}).sharingOnline,1);
-  assert.equal(read(accounts[0],undefined,165000).sharingOnline,0);
-  assert.throws(()=>read(accounts[0],{enabled:'yes'}),e=>e.status===400);
-  const unknown=globeData(db,accounts[1],null,{active:true},170000);assert.equal(unknown.viewerCountry,null);assert.equal(unknown.sharingOnline,0);
+  assert.equal((await read(accounts[0],{enabled:false,active:true})).sharingOnline,1);
+  assert.equal((await read(accounts[0],undefined,165000)).sharingOnline,0);
+  await assert.rejects(async ()=>(await read(accounts[0],{enabled:'yes'})),e=>e.status===400);
+  const unknown=(await globeData(db,accounts[1],null,{active:true},170000));assert.equal(unknown.viewerCountry,null);assert.equal(unknown.sharingOnline,0);
 });

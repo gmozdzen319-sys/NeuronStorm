@@ -1,6 +1,6 @@
 {
   "name": "neuron-storm-local",
-  "version": "0.16.2",
+  "version": "0.17.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -8,9 +8,17 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test test/*.test.mjs"
+    "test": "node test/run.mjs",
+    "test:postgres": "node test/run.mjs --native",
+    "test:postgres:embedded": "node test/run-postgres.mjs"
   },
   "dependencies": {
+    "pg": "8.23.1",
     "quais": "1.0.0-alpha.57"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-socket": "^0.2.11",
+    "embedded-postgres": "18.4.0-beta.17"
   }
 }
