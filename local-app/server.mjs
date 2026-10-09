@@ -1,4 +1,6 @@
 import {loadLegal,initLegal,legalPage} from './legal.mjs';
+import {createPasskeyAccounts,passkeyConfiguration} from './passkey-accounts.mjs';
+import {createPasskeyWallet} from './passkey-wallet.mjs';
 import {blocks,remindDeadlines} from './contact-preferences.mjs';
 import {library,reportContent,adminReports} from './member-tools.mjs';
 import {createRewardConfirmation} from './reward-confirmation.mjs';
@@ -37,6 +39,10 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   const runningVersion=JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version;
   const db = await openDatabase(database,{max:databasePoolSize});
   try{await initLegal(db,legal);}catch(error){await db.close();throw error;}
+  let passkeyConfig;
+  try{passkeyConfig=passkeyConfiguration(origin);}catch(error){await db.close();throw error;}
+  const passkeys=createPasskeyAccounts(db,{config:passkeyConfig,legal,now});
+  const passkeyWallet=createPasskeyWallet(db);
   let maintenance;
   const maintain=()=>maintenance??=(async()=>{await expireQuestions(db,now());await remindDeadlines(db,now());})().finally(()=>{maintenance=null;});
   const confirmReward=createRewardConfirmation(db,paymentFetch);
@@ -86,6 +92,33 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         (await db.prepare("DELETE FROM sessions WHERE expires<=$1").run(now()));
       }
       if(req.method==='GET'&&path==='/api/legal')return json(200,{published:legal.published,version:legal.version,hash:legal.hash});
+      if(req.method==='GET'&&path==='/api/passkey/config')return json(200,{enabled:passkeyConfig.enabled,walletEnabled:false});
+      const passkeyRoute=path.match(/^\/api\/passkey\/(register|login)\/(options|verify)$/);
+      if(passkeyRoute&&req.method==='POST'){
+        const input=await body(req),[_,purpose,step]=passkeyRoute;
+        if(await account(req))throw failure(409,'Sign out before choosing a different account.');
+        let browser=cookies(req).ns_passkey_challenge;
+        if(step==='options'){
+          if(await passkeys.session(cookies(req).ns_passkey_session))throw failure(409,'You are already signed in.');
+          if(!browser||!/^[a-f0-9]{64}$/.test(browser))browser=token();
+          const result=await passkeys.options(purpose,browser,input);
+          res.setHeader('Set-Cookie',cookie('ns_passkey_challenge',browser,120));return json(200,result);
+        }
+        const result=await passkeys.verify(purpose,browser||'',input);
+        await passkeys.logout(cookies(req).ns_passkey_session);
+        res.setHeader('Set-Cookie',[cookie('ns_passkey_session',result.raw,28800),cookie('ns_passkey_challenge','',0)]);
+        return json(200,{account:result.account});
+      }
+      if(path.startsWith('/api/passkey/wallet')||path==='/api/passkey/devices'){
+        const current=await passkeys.session(cookies(req).ns_passkey_session);
+        if(path==='/api/passkey/devices'&&req.method==='GET')return json(200,{devices:await passkeys.devices(current)});
+        if(path==='/api/passkey/wallet'&&req.method==='GET')return json(200,await passkeyWallet.state(current));
+        if(path==='/api/passkey/wallet/token-preview'&&req.method==='POST')return json(200,await passkeyWallet.preview(current,await body(req)));
+        if(path==='/api/passkey/wallet/tokens'&&req.method==='POST')return json(200,await passkeyWallet.add(current,await body(req)));
+        // No client argument, session or configuration flag can activate these operations.
+        if(['/api/passkey/wallet/send','/api/passkey/wallet/receive','/api/passkey/wallet/pair','/api/passkey/wallet/revoke'].includes(path))passkeyWallet.blocked(current);
+        throw failure(404,'Page not found.');
+      }
       if(req.method==='GET'&&['/terms','/privacy'].includes(path)){res.writeHead(200,{'Content-Type':'text/html; charset=utf-8'});return res.end(legalPage(legal,path==='/terms'?'terms':'privacy'));}
       if(path.startsWith('/api/'))(await maintain());
       if(path==='/api/blocks'&&['GET','POST'].includes(req.method))return json(200,(await blocks(db,(await account(req)),req.method==='POST'?await body(req):null)));
@@ -116,7 +149,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if(path==='/api/actions/challenge'&&req.method==='POST'){const input=await body(req);return json(200,(await prepareAction(db,(await account(req)),hash(cookies(req).ns_session||''),input.path,input.payload,origin,now())));}
       const debateRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/debate$/);
       if(debateRoute&&['GET','POST'].includes(req.method))return json(200,(await debate(db,(await account(req)),debateRoute[1],hash(cookies(req).ns_session||''),new URL(req.url,origin).searchParams,req.method==='POST'?await body(req):null,now())));
-      if (path === '/api/session' && req.method === 'GET') return json(200, { account: (await account(req)) });
+      if (path === '/api/session' && req.method === 'GET') return json(200, { account: (await account(req)) || await passkeys.session(cookies(req).ns_passkey_session) });
       if(path==='/api/notifications'&&req.method==='GET')return json(200,(await listNotifications(db,(await account(req)),new URL(req.url,origin).searchParams)));
       if(['/api/notifications/read','/api/notifications/read-all'].includes(path)&&req.method==='POST')return json(200,(await readNotifications(db,(await account(req)),await body(req),path.endsWith('read-all'),now())));
       if(path.startsWith('/api/admin/')){
@@ -170,6 +203,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         throw failure(405, 'This method is not supported.');
       }
       if (path === '/api/challenge' && req.method === 'POST') {
+        if(await passkeys.session(cookies(req).ns_passkey_session))throw failure(409,'Sign out before choosing a different account.');
         const input = await body(req);
         let address;
         try { address = getAddress(input.address); } catch { throw failure(400, 'Invalid wallet address.'); }
@@ -184,6 +218,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         return json(200, { id, message });
       }
       if (path === '/api/verify' && req.method === 'POST') {
+        if(await passkeys.session(cookies(req).ns_passkey_session))throw failure(409,'Sign out before choosing a different account.');
         const { id, signature } = await body(req);
         if (typeof id !== 'string' || typeof signature !== 'string' || signature.length > 300) throw failure(400, 'Invalid signature.');
         const browser = cookies(req).ns_challenge || '';
@@ -209,13 +244,14 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       }
       if (path === '/api/logout' && req.method === 'POST') {
         const current = cookies(req);
+        await passkeys.logout(current.ns_passkey_session);
         const departing=(await account(req));if(departing)(await db.prepare("DELETE FROM globe_presence WHERE address=$1").run(departing.address.toLowerCase()));
         if (current.ns_session) (await db.prepare("DELETE FROM sessions WHERE token_hash=$1").run(hash(current.ns_session)));
         if (current.ns_challenge) (await db.prepare("DELETE FROM challenges WHERE browser_hash=$1").run(hash(current.ns_challenge)));
-        res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0)]);
+        res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0),cookie('ns_passkey_session','',0),cookie('ns_passkey_challenge','',0)]);
         return json(200, { ok: true });
       }
-      const files = { '/fonts/audiowide/Audiowide-Regular.ttf':['public/fonts/audiowide/Audiowide-Regular.ttf','font/ttf'], '/reputation-ui.js':['public/reputation-ui.js','text/javascript'], '/question-tools.js':['public/question-tools.js','text/javascript'], '/member-tools.js':['public/member-tools.js','text/javascript'], '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
+      const files = { '/passkey-ui.js':['public/passkey-ui.js','text/javascript'], '/fonts/audiowide/Audiowide-Regular.ttf':['public/fonts/audiowide/Audiowide-Regular.ttf','font/ttf'], '/reputation-ui.js':['public/reputation-ui.js','text/javascript'], '/question-tools.js':['public/question-tools.js','text/javascript'], '/member-tools.js':['public/member-tools.js','text/javascript'], '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });

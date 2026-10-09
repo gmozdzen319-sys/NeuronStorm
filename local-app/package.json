@@ -1,6 +1,6 @@
 {
   "name": "neuron-storm-local",
-  "version": "0.18.3",
+  "version": "0.18.4",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,6 +13,7 @@
     "test:postgres:embedded": "node test/run-postgres.mjs"
   },
   "dependencies": {
+    "@simplewebauthn/server": "13.3.3",
     "pg": "8.23.1",
     "quais": "1.0.0-alpha.57"
   },

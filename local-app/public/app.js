@@ -1,3 +1,4 @@
+import {createPasskeyUI} from './passkey-ui.js';
 import {renderReputation} from './reputation-ui.js';
 import {createTopicSuggestions} from './topic-suggestions.js';
 import {getWalletProvider,isBlip,walletName,blipLink} from './wallet-provider.js';
@@ -8,12 +9,12 @@ import { connectWallet, signIn, walletError } from './wallet.js';
 import { createConversations } from './conversations.js';
 const $ = selector => document.querySelector(selector);
 const login = $('#login'), logout = $('#logout'), status = $('#status'), form = $('#profile-form');
-let legalInfo=null;
+let legalInfo=null, selectedProvider=null;
 let busy = false, generation = 0, connectedAddress = null;
 let currentAccount = null, profile = null, catalog = { work: [], hobbies: [] }, selected = { work: [], hobbies: [] };
 let profileRevision = 0, saving = false, loading = false;
 const key = name => name.normalize('NFKC').replace(/\s/gu, '').toLowerCase();
-function resetConnection() { connectedAddress = null;legalInfo=null;$('#terms-acceptance').hidden=true;$('#accept-terms').checked=false; login.textContent = 'Sign in with '+walletName(); }
+function resetConnection() { connectedAddress = null;legalInfo=null;$('#terms-acceptance').hidden=true;$('#accept-terms').checked=false; login.textContent = 'Log in / Sign up'; }
 async function api(path, data) {
   const response = await fetch(path, { method: data === undefined ? 'GET' : 'POST', credentials: 'same-origin', headers: data === undefined ? {} : { 'Content-Type': 'application/json' }, body: data === undefined ? undefined : JSON.stringify(data) });
   const result = await response.json();
@@ -78,6 +79,11 @@ async function loadProfile() {
   } finally {if(revision===profileRevision)loading=false;}
 }
 async function renderSession(account) {
+  passkeyUI.setAccount(account);
+  if(account?.method==='passkey'){
+    currentAccount=account;conversations.clear();conversations.setAccount(null);tokenUI.setAccount(null);profileRevision++;loading=false;profile=null;
+    login.hidden=true;logout.hidden=false;$('#landing').hidden=true;$('#profile-area').hidden=true;$('#wallet-button').hidden=false;return;
+  }
   const changed=currentAccount?.address?.toLowerCase()!==account?.address?.toLowerCase();
   currentAccount=account;conversations.setAccount(account);tokenUI.setAccount(account);
   login.hidden=!!account;logout.hidden=!account;if(changed||!account)$('#landing').hidden=!!account;if(changed||!account)$('#profile-area').hidden=!account;
@@ -130,20 +136,21 @@ form.addEventListener('submit',async event=>{
   }
 });
 $('#terms-continue').addEventListener('click',()=>login.click());
-login.addEventListener('click',async()=>{
+login.addEventListener('click',()=>connectedAddress?externalLogin():passkeyUI.open());
+async function externalLogin(){
   if(busy)return;
-  if(!getWalletProvider()?.request){resetConnection();notice('Install Pelagus from its official website, then return here and refresh the page to sign in.');$('#wallet-install').hidden=false;window.location.assign('https://www.pelaguswallet.io/');return;}
+  if(!(selectedProvider||getWalletProvider())?.request){resetConnection();notice('Install Pelagus from its official website, then return here and refresh the page to sign in.');$('#wallet-install').hidden=false;window.location.assign('https://www.pelaguswallet.io/');return;}
   $('#wallet-install').hidden=true;busy=true;login.disabled=true;
   const attempt=++generation;
   try {
-    if(!connectedAddress){notice('Confirm the connection in '+walletName()+'…');connectedAddress=await connectWallet(getWalletProvider());legalInfo=await api('/api/legal');$('#terms-acceptance').hidden=!legalInfo.published;$('#accept-terms').checked=false;$('#terms-version').textContent=legalInfo.version;login.textContent='Sign message & continue';notice('Wallet connected. You are not signed in yet. Click “Sign message & continue” to confirm your account with a one-time signature.');return;}
+    if(!connectedAddress){notice('Confirm the connection in '+walletName(selectedProvider||getWalletProvider())+'…');connectedAddress=await connectWallet((selectedProvider||getWalletProvider()));legalInfo=await api('/api/legal');$('#terms-acceptance').hidden=!legalInfo.published;$('#accept-terms').checked=false;$('#terms-version').textContent=legalInfo.version;login.textContent='Sign message & continue';notice('Wallet connected. You are not signed in yet. Click “Sign message & continue” to confirm your account with a one-time signature.');return;}
     if(legalInfo?.published&&!$('#accept-terms').checked){notice('Read and accept the Terms of Use before signing.',true);$('#accept-terms').focus();return;}
-    const result=await signIn(getWalletProvider(),connectedAddress,api,notice,{accepted:$('#accept-terms').checked,hash:legalInfo?.hash});
+    const result=await signIn((selectedProvider||getWalletProvider()),connectedAddress,api,notice,{accepted:$('#accept-terms').checked,hash:legalInfo?.hash});
     if(attempt!==generation){await api('/api/logout',{});return;}
     resetConnection();notice();await renderSession(result.account);
   }catch(error){resetConnection();notice(walletError(error),true);}
   finally{busy=false;login.disabled=false;}
-});
+}
 logout.addEventListener('click',async()=>{
   logout.disabled=true;generation++;
   try{await api('/api/logout',{});resetConnection();await renderSession(null);notice('You have signed out.');}
@@ -151,7 +158,7 @@ logout.addEventListener('click',async()=>{
   finally{logout.disabled=false;}
 });
 async function walletChanged(){
-  if(busy)return;resetConnection();generation++;
+  if(busy||currentAccount?.method==='passkey')return;resetConnection();generation++;
   try{await api('/api/logout',{});await renderSession(null);notice('Your wallet connection has changed. Please sign in again.');}
   catch{await renderSession(null);notice('Unable to end the session. Start the local server and click Sign out.',true);logout.hidden=false;}
 }
@@ -164,15 +171,21 @@ async function refresh(){
 }
 const blipOpen=$('#open-blip');
 blipOpen.href=blipLink(location.origin)||blipLink('https://neuronstorm.onrender.com');
-blipOpen.hidden=isBlip(getWalletProvider());
+blipOpen.hidden=true;
 $('#blip-info').hidden=!isBlip(getWalletProvider());
 resetConnection();
 if(isBlip(getWalletProvider())){
   const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let node;
-  while(node=walker.nextNode())if(node.parentElement.tagName!=='SCRIPT'&&!node.parentElement.closest('#blip-info'))node.textContent=node.textContent.replaceAll('Pelagus','Blip').replaceAll('PELAGUS','BLIP');
+  while(node=walker.nextNode())if(node.parentElement.tagName!=='SCRIPT'&&!node.parentElement.closest('#blip-info, #auth-dialog'))node.textContent=node.textContent.replaceAll('Pelagus','Blip').replaceAll('PELAGUS','BLIP');
 }
 const conversations=createConversations({api,onProfile:async()=>{if(!profile){conversations.openProfile();showEditor();return;}if(profile){profileNotice();showProfile();await refreshPoints();}},onExpired:async()=>{await renderSession(null);notice('Your session has expired. Please sign in again.',true);}});
 const tokenUI=createTokenUI({api,onExpired:()=>renderSession(null)});
+const passkeyUI=createPasskeyUI({api,onAccount:renderSession,onExternal:async method=>{
+  selectedProvider=method==='pelagus'?window.pelagus:getWalletProvider();
+  if(method==='billpay'&&!isBlip(selectedProvider)){window.location.assign(blipOpen.href);return;}
+  if(method==='pelagus'&&(!selectedProvider?.request||isBlip(selectedProvider))){window.location.assign('https://www.pelaguswallet.io/');return;}
+  await externalLogin();
+}});
 await refresh();window.addEventListener('focus',refresh);setInterval(refresh,60000);
 
 async function refreshPoints(){
