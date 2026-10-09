@@ -1,5 +1,6 @@
 import {randomBytes, randomUUID, createHash} from 'node:crypto';
 import {generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse} from '@simplewebauthn/server';
+import {assignCloneWallet} from './wallet-infrastructure.mjs';
 
 const secret=()=>randomBytes(32).toString('base64url');
 export const passkeyHash=value=>createHash('sha256').update(value).digest('hex');
@@ -84,6 +85,7 @@ export function createPasskeyAccounts(db,{config,legal,now=Date.now}){
           await db.prepare('INSERT INTO passkey_accounts VALUES($1,$2,$3,$4,$5,$6)').run(owner,challenge.user_handle,now(),challenge.legal_hash,config.rpID,config.origin);
           await db.prepare('INSERT INTO passkey_credentials VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULL)').run(c.id,owner,Buffer.from(c.publicKey).toString('base64url'),c.counter,'My passkey',info.credentialBackedUp,now(),now());
           await db.prepare('INSERT INTO passkey_wallets(account_id) VALUES($1)').run(owner);
+          await assignCloneWallet(db,owner,now);
         }else{
           credentialID=input.response.id;
           const c=await db.prepare(`SELECT c.*,a.user_handle,a.rp_id,a.origin FROM passkey_credentials c JOIN passkey_accounts a ON a.id=c.account_id WHERE c.id=$1 AND c.revoked_at IS NULL FOR UPDATE OF c`).get(credentialID);

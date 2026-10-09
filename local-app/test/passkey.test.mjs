@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {generateKeyPairSync,randomBytes,createHash,sign} from 'node:crypto';
-import {isoCBOR} from '@simplewebauthn/server/helpers';
+import {convertCOSEtoPKCS,isoCBOR} from '@simplewebauthn/server/helpers';
 import {createApp} from './database.mjs';
 import {loadLegal} from '../legal.mjs';
 import {createPasskeyAccounts,passkeyConfiguration,strictClientData} from '../passkey-accounts.mjs';
@@ -81,4 +81,30 @@ test('token metadata reader is read-only, chain-bound and rejects unsupported co
  assert.equal((await read('0x0000000000000000000000000000000000000001')).symbol,'EX');
  assert.ok(seen.every(m=>['quai_chainId','quai_getCode','quai_call'].includes(m)));invalid=true;await assert.rejects(read('0x0000000000000000000000000000000000000001'));
  await assert.rejects(read('https://evil.example'));assert.throws(()=>tokenAddress('0x0000000000000000000000000000000000000000'));
+});
+
+// Reopen the actual PostgreSQL-backed app: no in-memory wallet assignment survives.
+// This validates a candidate address only; no wallet is activated or funded.
+test('Passkey identity and deterministic clone plan survive application restart',async()=>{
+ const {planWalletClone}=await import('../wallet-clone-plan.mjs');
+ const database='clone-restart-'+randomBytes(8).toString('hex'),device=authenticator();
+ let app=await createApp({database,legal});
+ try {
+  let service=createPasskeyAccounts(app.db,{config,legal});
+  const request=await service.options('register','restart');
+  const first=await service.verify('register','restart',{id:request.id,response:device.register(request.options)});
+  const loadPlan=async()=>{
+   const row=await app.db.prepare('SELECT public_key FROM passkey_credentials WHERE account_id=$1').get(first.account.id);
+   const key=convertCOSEtoPKCS(Buffer.from(row.public_key,'base64url'));
+   return planWalletClone({chainId:9,factory:'0x0011111111111111111111111111111111111111',implementation:'0x0022222222222222222222222222222222222222',x:'0x'+Buffer.from(key.subarray(1,33)).toString('hex'),y:'0x'+Buffer.from(key.subarray(33)).toString('hex')});
+  };
+  const before=await loadPlan();await app.close();app=await createApp({database,legal});
+  service=createPasskeyAccounts(app.db,{config,legal});
+  const login=await service.options('login','restart');
+  const returning=await service.verify('login','restart',{id:login.id,response:device.assertion(login.options)});
+  assert.equal(returning.account.id,first.account.id);
+  assert.deepEqual(await loadPlan(),before);
+  assert.equal(before.receiveAvailable,false);
+  assert.equal((await app.db.prepare('SELECT COUNT(*) AS n FROM passkey_wallets').get()).n,1);
+ } finally {await app.close();}
 });

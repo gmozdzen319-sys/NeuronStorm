@@ -1,6 +1,6 @@
 {
   "name": "neuron-storm-local",
-  "version": "0.18.4",
+  "version": "0.18.5",
   "private": true,
   "type": "module",
   "engines": {
@@ -15,6 +15,7 @@
   "dependencies": {
     "@simplewebauthn/server": "13.3.3",
     "pg": "8.23.1",
+    "qrcode": "1.5.4",
     "quais": "1.0.0-alpha.57"
   },
   "devDependencies": {

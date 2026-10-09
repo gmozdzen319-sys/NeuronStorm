@@ -1,5 +1,9 @@
 import {getAddress,isQuaiAddress,Interface} from 'quais';
 import {NS_TOKEN} from './neuron-token.mjs';
+import {assignCloneWallet,loadCloneWallet} from './wallet-infrastructure.mjs';
+import {createWalletChain} from './wallet/chain.mjs';
+import {createNativeSend} from './wallet/native-send.mjs';
+import QRCode from 'qrcode';
 
 const erc20=new Interface(['function name() view returns(string)','function symbol() view returns(string)','function decimals() view returns(uint8)']);
 const fail=(status,message)=>Object.assign(new Error(message),{status});
@@ -33,12 +37,27 @@ export function createTokenMetadataReader(fetcher=fetch){
     }catch{throw fail(422,'This contract could not be verified as a supported token. Try again later or check its address.');}
   };
 }
-export function createPasskeyWallet(db,{readMetadata=createTokenMetadataReader()}={}){
+export function createPasskeyWallet(db,{readMetadata=createTokenMetadataReader(),chain=createWalletChain(),executor=null,now=Date.now}={}){
   const requireAccount=a=>{if(!a||a.method!=='passkey')throw fail(401,'Sign in with your passkey.');};
-  return {
-    async state(account){requireAccount(account);return {accountId:account.id,status:'awaiting_review',address:null,chainId:9,quaiBalance:null,nsBalance:null,
+  const send=createNativeSend(db,{chain,executor,now});
+  const service={send,
+    async state(account){requireAccount(account);const base={accountId:account.id,status:'awaiting_review',address:null,chainId:9,quaiBalance:null,nsBalance:null,
       tokens:await db.prepare('SELECT contract,name,symbol,decimals FROM passkey_tokens WHERE account_id=$1 ORDER BY symbol,contract').all(account.id),
-      receiveAvailable:false,sendAvailable:false,deviceChangesAvailable:false,reason:WALLET_BLOCKED};},
+      transfers:await db.prepare('SELECT id,phase,tx_hash,created_at FROM passkey_native_operations WHERE account_id=$1 ORDER BY created_at DESC LIMIT 10').all(account.id),
+      receiveAvailable:false,sendAvailable:false,deviceChangesAvailable:false,reason:WALLET_BLOCKED};
+      // An unknown identity must never acquire a wallet through this endpoint.
+      if(!await db.prepare('SELECT id FROM passkey_accounts WHERE id=$1').get(account.id))return base;
+      try{
+       await assignCloneWallet(db,account.id,now);const row=await loadCloneWallet(db,account.id);if(!row)return base;
+       if(row.revoked_at!==null)return {...base,status:'unavailable',reason:'This wallet key is no longer authorized.'};
+       const view=await chain.snapshot(row.plan);
+       if(!view.deployed)return {...base,status:'awaiting_approval',reason:'Your personal wallet is reserved. Activation is awaiting approval of its network fee. Do not send funds until your receiving address is available.'};
+       const pending=await db.prepare("SELECT id FROM passkey_native_operations WHERE account_id=$1 AND (phase IN ('verifying','authorized','submitting') OR (phase='awaiting_confirmation' AND expires_at>$2)) LIMIT 1").get(account.id,now());
+       const ready=!pending&&await send.available();
+       return {...base,status:'active',address:row.plan.address,quaiBalance:view.quaiBalance,receiveAvailable:true,sendAvailable:ready,updatedAt:new Date(view.observedAt).toISOString(),reason:pending?'An earlier transfer is awaiting confirmation or review. Do not send it again.':ready?'Your personal wallet is ready. Each transfer requires your passkey.':'Your wallet can receive QUAI. Sending is temporarily unavailable.'};
+      }catch{return {...base,status:'unavailable',reason:'We could not safely verify your wallet. Refresh later. No transaction was sent.'};}
+    },
+    async receive(account){const s=await service.state(account);if(!s.receiveAvailable)throw fail(423,s.reason);return {address:s.address,quaiBalance:s.quaiBalance,network:'Quai Mainnet · Cyprus-1',qr:await QRCode.toDataURL(s.address,{errorCorrectionLevel:'M',width:232,margin:4})};},
     async preview(account,input){requireAccount(account);return readMetadata(input.contract);},
     async add(account,input){requireAccount(account);const metadata=await readMetadata(input.contract);
       if(metadata.contract.toLowerCase()===NS_TOKEN.address.toLowerCase())throw fail(409,'NS is already included in your wallet.');
@@ -48,4 +67,5 @@ export function createPasskeyWallet(db,{readMetadata=createTokenMetadataReader()
       if(!result.changes)throw fail(409,'This token is already in your wallet.');return {added:true};},
     blocked(account){requireAccount(account);throw fail(423,WALLET_BLOCKED);}
   };
+  return service;
 }

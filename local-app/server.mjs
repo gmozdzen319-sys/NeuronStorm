@@ -1,6 +1,8 @@
 import {loadLegal,initLegal,legalPage} from './legal.mjs';
 import {createPasskeyAccounts,passkeyConfiguration} from './passkey-accounts.mjs';
 import {createPasskeyWallet} from './passkey-wallet.mjs';
+import {createWalletChain} from './wallet/chain.mjs';
+import {configuredExecutor} from './wallet/configured-executor.mjs';
 import {blocks,remindDeadlines} from './contact-preferences.mjs';
 import {library,reportContent,adminReports} from './member-tools.mjs';
 import {createRewardConfirmation} from './reward-confirmation.mjs';
@@ -42,7 +44,10 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   let passkeyConfig;
   try{passkeyConfig=passkeyConfiguration(origin);}catch(error){await db.close();throw error;}
   const passkeys=createPasskeyAccounts(db,{config:passkeyConfig,legal,now});
-  const passkeyWallet=createPasskeyWallet(db);
+  const walletChain=createWalletChain();
+  let walletExecutor;
+  try{walletExecutor=await configuredExecutor(db,walletChain);}catch{await db.close();throw new Error('Invalid wallet execution configuration');}
+  const passkeyWallet=createPasskeyWallet(db,{chain:walletChain,executor:walletExecutor,now});
   let maintenance;
   const maintain=()=>maintenance??=(async()=>{await expireQuestions(db,now());await remindDeadlines(db,now());})().finally(()=>{maintenance=null;});
   const confirmReward=createRewardConfirmation(db,paymentFetch);
@@ -92,7 +97,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         (await db.prepare("DELETE FROM sessions WHERE expires<=$1").run(now()));
       }
       if(req.method==='GET'&&path==='/api/legal')return json(200,{published:legal.published,version:legal.version,hash:legal.hash});
-      if(req.method==='GET'&&path==='/api/passkey/config')return json(200,{enabled:passkeyConfig.enabled,walletEnabled:false});
+      if(req.method==='GET'&&path==='/api/passkey/config')return json(200,{enabled:passkeyConfig.enabled,walletEnabled:true});
       const passkeyRoute=path.match(/^\/api\/passkey\/(register|login)\/(options|verify)$/);
       if(passkeyRoute&&req.method==='POST'){
         const input=await body(req),[_,purpose,step]=passkeyRoute;
@@ -115,6 +120,11 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         if(path==='/api/passkey/wallet'&&req.method==='GET')return json(200,await passkeyWallet.state(current));
         if(path==='/api/passkey/wallet/token-preview'&&req.method==='POST')return json(200,await passkeyWallet.preview(current,await body(req)));
         if(path==='/api/passkey/wallet/tokens'&&req.method==='POST')return json(200,await passkeyWallet.add(current,await body(req)));
+        if(path==='/api/passkey/wallet/receive'&&req.method==='GET')return json(200,await passkeyWallet.receive(current));
+        if(path==='/api/passkey/wallet/send/prepare'&&req.method==='POST')return json(200,await passkeyWallet.send.prepare(current,await body(req)));
+        if(path==='/api/passkey/wallet/send/confirm'&&req.method==='POST')return json(200,await passkeyWallet.send.confirm(current,await body(req)));
+        const transferStatus=path.match(/^\/api\/passkey\/wallet\/send\/([a-f0-9-]{36})$/);
+        if(transferStatus&&req.method==='GET')return json(200,await passkeyWallet.send.status(current,transferStatus[1]));
         // No client argument, session or configuration flag can activate these operations.
         if(['/api/passkey/wallet/send','/api/passkey/wallet/receive','/api/passkey/wallet/pair','/api/passkey/wallet/revoke'].includes(path))passkeyWallet.blocked(current);
         throw failure(404,'Page not found.');
@@ -266,11 +276,18 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       return json(error.status || 500, { error: error.status ? error.message : 'Server error. Please try again.' });
     }
   });
-  let expiryTimer;
+  let expiryTimer,provisionTimer,provisionWork;
+  const provisionApproved=()=>{
+    if(!walletExecutor?.provisioner||provisionWork)return;
+    provisionWork=(async()=>{
+      const next=await db.prepare("SELECT account_id FROM passkey_clone_approvals WHERE approved=TRUE AND phase='quoted' AND expires_at>$1 ORDER BY expires_at LIMIT 1").get(now());
+      if(next)await walletExecutor.provisioner.execute(next.account_id);
+    })().catch(()=>console.error('Approved wallet provisioning stopped; manual review required.')).finally(()=>{provisionWork=null;});
+  };
   const runMaintenance=()=>maintain().catch(()=>console.error('Question maintenance failed.'));
-  server.on('listening',()=>{runMaintenance();expiryTimer=setInterval(runMaintenance,10000);expiryTimer.unref();});
-  server.on('close',()=>clearInterval(expiryTimer));
-  return { server, db, async close(){clearInterval(expiryTimer);if(server.listening)await new Promise(resolve=>server.close(resolve));if(maintenance)await maintenance.catch(()=>{});await db.close();} };
+  server.on('listening',()=>{runMaintenance();expiryTimer=setInterval(runMaintenance,10000);expiryTimer.unref();if(walletExecutor?.provisioner){provisionTimer=setInterval(provisionApproved,10000);provisionTimer.unref();}});
+  server.on('close',()=>{clearInterval(expiryTimer);clearInterval(provisionTimer);});
+  return { server, db, async close(){clearInterval(expiryTimer);clearInterval(provisionTimer);if(server.listening)await new Promise(resolve=>server.close(resolve));if(maintenance)await maintenance.catch(()=>{});if(provisionWork)await provisionWork;await db.close();} };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
