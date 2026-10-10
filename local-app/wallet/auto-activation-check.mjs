@@ -9,11 +9,17 @@ import {validateAutoQuote} from './auto-activation.mjs';
 import {diagnoseProvisioning} from './provisioning-diagnosis.mjs';
 const db=await openDatabase(process.env.DATABASE_URL);
 try{
- if(process.argv[2]==='--preflight-diagnose'){
+ if(['--preflight-diagnose','--pending-preflight'].includes(process.argv[2])){
+  if(process.argv[2]==='--pending-preflight')assert.notEqual(process.env.NS_WALLET_AUTO_ACTIVATE,'true','Pending audit requires paused automation');
   const chain=createWalletChain(),relayer=process.env.NS_WALLET_RELAYER_ADDRESS;
   const preflight=createNativePreflight({binary:process.env.NS_WALLET_NATIVE_VERIFIER,binaryHash:process.env.NS_WALLET_NATIVE_VERIFIER_SHA256});
   const verifyNetwork=createNetworkVerification(process.env);
-  const rows=await db.prepare("SELECT account_id FROM passkey_auto_activations WHERE phase='stopped' ORDER BY created_at LIMIT 10").all();
+  const rows=process.argv[2]==='--pending-preflight'
+   ?await db.prepare(`SELECT w.account_id FROM passkey_clone_wallets w
+     LEFT JOIN passkey_auto_activations j ON j.account_id=w.account_id
+     LEFT JOIN passkey_clone_approvals p ON p.account_id=w.account_id
+     WHERE j.account_id IS NULL AND p.account_id IS NULL ORDER BY w.created_at LIMIT 10`).all()
+   :await db.prepare("SELECT account_id FROM passkey_auto_activations WHERE phase='stopped' ORDER BY created_at LIMIT 10").all();
   for(const {account_id:accountId} of rows)console.log(JSON.stringify({activationPreflight:{accountId,...await diagnoseProvisioning(db,{accountId,relayer,chain,preflight,verifyNetwork})},broadcasts:0}));
  }else if(process.argv[2]==='--diagnose'){
   // Historical evidence only. No credentials, signer, grants or state changes.
@@ -29,7 +35,9 @@ try{
    console.log(JSON.stringify({activationDiagnosis:{accountId:row.account_id,phase:row.phase,savedQuoteValid,history},broadcasts:0}));
   }
  }else if(process.argv[2]==='--status'){
+  console.log(JSON.stringify({activationConfiguration:{generation:process.env.NS_WALLET_GENERATION??'2',automatic:process.env.NS_WALLET_AUTO_ACTIVATE==='true',send:process.env.NS_WALLET_SEND_ENABLED==='true',provision:process.env.NS_WALLET_PROVISION_ENABLED==='true'},broadcasts:0}));
   const rows=await db.prepare(`SELECT w.account_id,w.address,j.phase AS automatic_phase,p.phase AS approval_phase,
+   EXISTS(SELECT 1 FROM passkey_relayer_grants old WHERE old.id='auto-activation-v1:'||w.account_id) AS legacy_grant_exists,
    p.tx_hash,p.quote::jsonb->>'maximumCostQuai' AS maximum_cost_quai,
    p.receipt::jsonb->>'feeQuai' AS fee_quai,g.enabled AS grant_enabled,g.reserved_wei,
    (SELECT stage FROM passkey_activation_events e WHERE e.account_id=w.account_id ORDER BY id DESC LIMIT 1) AS last_stage,

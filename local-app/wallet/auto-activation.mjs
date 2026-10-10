@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import {parseUnits,getAddress} from 'quais';
 import {configuredExecutor} from './configured-executor.mjs';
-import {WALLET_INFRASTRUCTURE as infra} from '../wallet-infrastructure.mjs';
+import {WALLET_INFRASTRUCTURE as infra,WALLET_GENERATION} from '../wallet-infrastructure.mjs';
 import {activationFailure} from './activation-failure.mjs';
 import {randomUUID} from 'node:crypto';
 
@@ -42,7 +42,9 @@ export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now}){
       AND ((h.evidence::jsonb->>'phase')<>'quoted' OR (h.evidence::jsonb->>'approved')='true' OR (h.evidence::jsonb->>'tx_hash') IS NOT NULL))
     ORDER BY w.created_at,w.account_id LIMIT 1 FOR UPDATE OF w`).get(infra.rpID,infra.origin,now());
    if(!candidate)return null;
-   const grantId='auto-activation-v1:'+candidate.account_id;
+   // Grants are shared across generations; wallet queues are not. Never collide
+   // with or revive a historical v1 sponsorship when assigning this user's v2.
+   const grantId='auto-activation-v'+WALLET_GENERATION+':'+candidate.account_id;
    await db.prepare('INSERT INTO passkey_relayer_grants(id,relayer,budget_wei,expires_at,enabled) VALUES($1,$2,$3,$4,FALSE)').run(grantId,relayer,String(AUTO_MAXIMUM),now()+300000);
    await db.prepare("INSERT INTO passkey_auto_activations VALUES($1,$2,$3,'running',$4)").run(candidate.account_id,relayer,grantId,now());
    return {...candidate,grantId};

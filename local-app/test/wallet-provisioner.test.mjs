@@ -2,7 +2,7 @@ import test from 'node:test';import assert from 'node:assert/strict';
 import {randomUUID,generateKeyPairSync} from 'node:crypto';
 import {Wallet,QuaiTransaction} from 'quais';import {isoCBOR} from '@simplewebauthn/server/helpers';
 import {createApp} from './database.mjs';
-import {assignCloneWallet,loadCloneWallet,WALLET_INFRASTRUCTURE as infra} from '../wallet-infrastructure.mjs';
+import {assignCloneWallet,loadCloneWallet,WALLET_INFRASTRUCTURE as infra,WALLET_GENERATION} from '../wallet-infrastructure.mjs';
 import {factoryABI} from '../wallet/chain.mjs';
 import {createAutoActivation,validateAutoQuote} from '../wallet/auto-activation.mjs';
 import {createCloneProvisioner} from '../wallet/provisioner.mjs';
@@ -73,7 +73,7 @@ test('Automatic activation runs real sender once, retains wallet and disables ac
  const worker=createAutoActivation(f.db,f);
  assert.equal((await worker.runNext()).status,'confirmed');assert.equal(f.sends,1);
  assert.equal((await loadCloneWallet(f.db,f.accountId)).address,before.address);
- const g=await f.db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1').get('auto-activation-v1:'+f.accountId);
+ const g=await f.db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1').get('auto-activation-v'+WALLET_GENERATION+':'+f.accountId);
  assert.equal(g.enabled,false);assert.equal(g.budget_wei,'15000000000000000000');
  assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,1);
 });
@@ -108,6 +108,17 @@ test('Prior stopped/paid/ambiguous history never gets an automatic reapproval',a
  await f.db.prepare("UPDATE passkey_clone_approvals SET approved=FALSE,phase='quoted',expires_at=0 WHERE account_id=$1").run(f.accountId);
  assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,0);
 });
+test('v2 activation preserves historical v1 grant and creates exactly one independent sponsorship',{skip:WALLET_GENERATION!==2},async t=>{
+ const f=await fixture(t),oldId='auto-activation-v1:'+f.accountId;
+ await f.db.prepare('INSERT INTO passkey_relayer_grants(id,relayer,budget_wei,expires_at,enabled) VALUES($1,$2,$3,0,FALSE)').run(oldId,f.relayer,'15000000000000000000');
+ const old=await f.db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1').get(oldId);
+ assert.equal((await createAutoActivation(f.db,f).runNext()).status,'confirmed');assert.equal(f.sends,1);
+ assert.deepEqual(await f.db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1').get(oldId),old);
+ const job=await f.db.prepare('SELECT * FROM passkey_auto_activations WHERE account_id=$1').get(f.accountId);
+ assert.equal(job.grant_id,'auto-activation-v2:'+f.accountId);
+ assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,1);
+});
+
 test('Process crash claim remains blocked after restart',async t=>{
  const f=await fixture(t);const id='auto-activation-v1:'+f.accountId;
  await f.db.prepare('INSERT INTO passkey_relayer_grants(id,relayer,budget_wei,expires_at) VALUES($1,$2,$3,0)').run(id,f.relayer,'15000000000000000000');
