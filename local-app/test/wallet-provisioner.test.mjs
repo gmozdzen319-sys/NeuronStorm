@@ -7,6 +7,7 @@ import {factoryABI} from '../wallet/chain.mjs';
 import {createAutoActivation,validateAutoQuote} from '../wallet/auto-activation.mjs';
 import {createCloneProvisioner} from '../wallet/provisioner.mjs';
 import {quoteProvisioning} from '../wallet/provisioning-quote.mjs';
+import {diagnoseProvisioning} from '../wallet/provisioning-diagnosis.mjs';
 const hash=n=>'0x'+BigInt(n).toString(16).padStart(64,'0'),q=n=>'0x'+BigInt(n).toString(16);
 let signer;for(let n=1;n<10000;n++){const s=new Wallet(hash(n));if(/^0x00[0-7]/i.test(s.address)){signer=s;break;}}assert(signer);
 async function fixture(t){
@@ -19,6 +20,7 @@ async function fixture(t){
  const rpc=async(method,args=[])=>{
   if(method==='quai_chainId')return '0x9';if(method==='quai_getBlockByNumber')return block(args[0]==='latest'?(sends?19:16):Number(BigInt(args[0])));
   if(method==='quai_getTransactionCount')return q(sends||wrongNonce?1:0);if(method==='quai_getBalance')return q(10n**21n);if(method==='quai_gasPrice')return q(30000000000000n);
+  if(method==='quai_getCode')return '0x';if(method==='quai_getStorageAt')return hash(0);
   if(method==='quai_getTransactionReceipt'){if(args[0]===infra.factoryTransaction)return {status:'0x1',contractAddress:infra.factory,blockNumber:'0x1',blockHash:hash(1)};return {status:'0x1',blockNumber:'0x10',blockHash:hash(16),transactionHash:signed.hash,transactionIndex:'0x0',gasUsed:q(240000),effectiveGasPrice:q(signed.gasPrice)};}
   if(method==='quai_getLogs')return [];if(method==='quai_createAccessList')return {gasUsed:q(240000),accessList:[{address:infra.factory.toLowerCase(),storageKeys:[]}]};if(method==='quai_estimateGas')return q(320000);
   if(method==='quai_getTransactionByHash')return {type:'0x0',chainId:'0x9',from:relayer,to:infra.factory,nonce:'0x0',value:'0x0',gasPrice:q(signed.gasPrice),gas:q(signed.gasLimit),input:signed.data,accessList:signed.accessList};
@@ -28,8 +30,15 @@ async function fixture(t){
  const preflight=async(rpc,tx,row,block)=>({block,accounts:[],gasUsed:'240000',returnValue:factoryABI.encodeFunctionResult('createWallet',[wrongReturn?infra.implementation:row.plan.address])});
  const makeProvisioner=id=>createCloneProvisioner(db,{chain,relayer,grantId:id,stabilize:async()=>({stable:true}),signer:{getAddress:()=>signer.getAddress(),signTransaction:tx=>{if(mutateInput)tx.data+='00';return signer.signTransaction(tx);}},sendRaw:async raw=>{sends++;signed=QuaiTransaction.from(raw);if(ambiguous)throw Error('uncertain network');return signed.hash;},preflight,verifyNetwork:async()=>true});
  const provisioner=makeProvisioner(grantId);
- return {db,accountId,relayer,chain,provisioner,makeProvisioner,get sends(){return sends;},set:k=>{if(k==='ambiguous')ambiguous=true;if(k==='address')wrongReturn=true;if(k==='nonce')wrongNonce=true;if(k==='input')mutateInput=true;},approve:()=>db.prepare('UPDATE passkey_clone_approvals SET approved=TRUE WHERE account_id=$1').run(accountId)};
+ return {db,accountId,relayer,chain,preflight,provisioner,makeProvisioner,get sends(){return sends;},set:k=>{if(k==='ambiguous')ambiguous=true;if(k==='address')wrongReturn=true;if(k==='nonce')wrongNonce=true;if(k==='input')mutateInput=true;},approve:()=>db.prepare('UPDATE passkey_clone_approvals SET approved=TRUE WHERE account_id=$1').run(accountId)};
 }
+test('Read-only production rehearsal reaches signing boundary without writes or signing',async t=>{
+ const f=await fixture(t),before=await f.db.prepare('SELECT * FROM passkey_relayer_grants ORDER BY id').all();
+ const result=await diagnoseProvisioning(f.db,{...f,verifyNetwork:async()=>true});
+ assert.equal(result.stage,'PRE_SIGN_CHECKS_PASSED');assert.equal(f.sends,0);
+ assert.equal(await f.db.prepare('SELECT * FROM passkey_clone_approvals WHERE account_id=$1').get(f.accountId),undefined);
+ assert.deepEqual(await f.db.prepare('SELECT * FROM passkey_relayer_grants ORDER BY id').all(),before);
+});
 test('Provision quote is exact to RPC/native simulation, creates no wallet and needs separate approval',async t=>{const f=await fixture(t),quote=await f.provisioner.quote(f.accountId);assert.equal(quote.expectedCostQuai,'7.2');assert.equal(quote.maximumCostQuai,'9.9');assert.equal(quote.broadcastAllowed,false);assert.equal(quote.nativePreflightRequired,false);assert.equal(f.sends,0);await assert.rejects(f.provisioner.execute(f.accountId));assert.equal(f.sends,0);});
 test('Approved provisioning calls only the existing factory once and verifies assigned clone',async t=>{const f=await fixture(t),quote=await f.provisioner.quote(f.accountId);await f.approve();const r=await f.provisioner.execute(f.accountId);assert.equal(r.address,quote.address);assert.equal(r.status,'confirmed');assert.equal(f.sends,1);await assert.rejects(f.provisioner.execute(f.accountId));assert.equal(f.sends,1);});
 for(const kind of ['address','nonce','input'])test('Provisioning stops '+kind+' mismatch without spending',async t=>{const f=await fixture(t);await f.provisioner.quote(f.accountId);await f.approve();f.set(kind);await assert.rejects(f.provisioner.execute(f.accountId));assert.equal(f.sends,0);});

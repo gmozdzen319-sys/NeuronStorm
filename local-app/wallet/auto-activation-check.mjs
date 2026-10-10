@@ -6,9 +6,16 @@ import {createNativePreflight} from './preflight.mjs';
 import {quoteProvisioning} from './provisioning-quote.mjs';
 import {createNetworkVerification} from './network-verification.mjs';
 import {validateAutoQuote} from './auto-activation.mjs';
+import {diagnoseProvisioning} from './provisioning-diagnosis.mjs';
 const db=await openDatabase(process.env.DATABASE_URL);
 try{
- if(process.argv[2]==='--diagnose'){
+ if(process.argv[2]==='--preflight-diagnose'){
+  const chain=createWalletChain(),relayer=process.env.NS_WALLET_RELAYER_ADDRESS;
+  const preflight=createNativePreflight({binary:process.env.NS_WALLET_NATIVE_VERIFIER,binaryHash:process.env.NS_WALLET_NATIVE_VERIFIER_SHA256});
+  const verifyNetwork=createNetworkVerification(process.env);
+  const rows=await db.prepare("SELECT account_id FROM passkey_auto_activations WHERE phase='stopped' ORDER BY created_at LIMIT 10").all();
+  for(const {account_id:accountId} of rows)console.log(JSON.stringify({activationPreflight:{accountId,...await diagnoseProvisioning(db,{accountId,relayer,chain,preflight,verifyNetwork})},broadcasts:0}));
+ }else if(process.argv[2]==='--diagnose'){
   // Historical evidence only. No credentials, signer, grants or state changes.
   const rows=await db.prepare(`SELECT w.account_id,w.address,j.phase,p.quote,p.commitment,p.expires_at
    FROM passkey_clone_wallets w JOIN passkey_auto_activations j ON j.account_id=w.account_id
