@@ -39,6 +39,29 @@ test('Read-only production rehearsal reaches signing boundary without writes or 
  assert.equal(await f.db.prepare('SELECT * FROM passkey_clone_approvals WHERE account_id=$1').get(f.accountId),undefined);
  assert.deepEqual(await f.db.prepare('SELECT * FROM passkey_relayer_grants ORDER BY id').all(),before);
 });
+test('Explicit review resumes only a proven pre-broadcast STOP with a fresh grant and same wallet',async t=>{
+ const f=await fixture(t),before=await loadCloneWallet(f.db,f.accountId);
+ const worker=createAutoActivation(f.db,{...f,makeProvisioner:id=>{const p=f.makeProvisioner(id);return {...p,execute:async()=>{throw Error('temporary failure');}};}});
+ assert.equal((await worker.runNext()).status,'stopped');assert.equal(f.sends,0);
+ const original=await f.db.prepare('SELECT * FROM passkey_auto_activations WHERE account_id=$1').get(f.accountId);
+ const historyBefore=await f.db.prepare('SELECT count(*) AS n FROM passkey_clone_approval_history WHERE account_id=$1').get(f.accountId);
+ assert.equal(await createAutoActivation(f.db,f).runNext(),null);
+ assert.equal((await createAutoActivation(f.db,f).runReviewed(f.accountId)).status,'confirmed');assert.equal(f.sends,1);
+ const current=await f.db.prepare('SELECT * FROM passkey_auto_activations WHERE account_id=$1').get(f.accountId);assert.notEqual(current.grant_id,original.grant_id);
+ assert(await f.db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1').get(original.grant_id));
+ assert.equal((await loadCloneWallet(f.db,f.accountId)).address,before.address);
+ assert((await f.db.prepare('SELECT count(*) AS n FROM passkey_clone_approval_history WHERE account_id=$1').get(f.accountId)).n>historyBefore.n);
+ await assert.rejects(createAutoActivation(f.db,f).runReviewed(f.accountId));assert.equal(f.sends,1);
+});
+test('Operator review cannot recycle an ambiguous broadcast or reserved fees',async t=>{
+ const f=await fixture(t);f.set('ambiguous');const worker=createAutoActivation(f.db,f);
+ assert.equal((await worker.runNext()).status,'ambiguous');await assert.rejects(worker.runReviewed(f.accountId));assert.equal(f.sends,1);
+});
+test('Durable failure diagnostics exclude arbitrary SDK data and secrets',async t=>{
+ const f=await fixture(t);await createAutoActivation(f.db,{...f,makeProvisioner:async()=>{throw Object.assign(Error('SECRET TEST VALUE'),{privateKey:'SECRET TEST VALUE',provisioningStage:'SECRET TEST VALUE'});}}).runNext();
+ const rows=await f.db.prepare('SELECT * FROM passkey_activation_events WHERE account_id=$1').all(f.accountId);
+ assert.equal(rows.length,1);assert.equal(rows[0].stage,'UNKNOWN');assert(!JSON.stringify(rows).includes('SECRET TEST VALUE'));
+});
 test('Provision quote is exact to RPC/native simulation, creates no wallet and needs separate approval',async t=>{const f=await fixture(t),quote=await f.provisioner.quote(f.accountId);assert.equal(quote.expectedCostQuai,'7.2');assert.equal(quote.maximumCostQuai,'9.9');assert.equal(quote.broadcastAllowed,false);assert.equal(quote.nativePreflightRequired,false);assert.equal(f.sends,0);await assert.rejects(f.provisioner.execute(f.accountId));assert.equal(f.sends,0);});
 test('Approved provisioning calls only the existing factory once and verifies assigned clone',async t=>{const f=await fixture(t),quote=await f.provisioner.quote(f.accountId);await f.approve();const r=await f.provisioner.execute(f.accountId);assert.equal(r.address,quote.address);assert.equal(r.status,'confirmed');assert.equal(f.sends,1);await assert.rejects(f.provisioner.execute(f.accountId));assert.equal(f.sends,1);});
 for(const kind of ['address','nonce','input'])test('Provisioning stops '+kind+' mismatch without spending',async t=>{const f=await fixture(t);await f.provisioner.quote(f.accountId);await f.approve();f.set(kind);await assert.rejects(f.provisioner.execute(f.accountId));assert.equal(f.sends,0);});

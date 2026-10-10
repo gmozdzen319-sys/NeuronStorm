@@ -8,7 +8,7 @@ import {validateAutoQuote,AUTO_MAXIMUM} from './auto-activation.mjs';
 import {loadCloneWallet} from '../wallet-infrastructure.mjs';
 
 export async function diagnoseProvisioning(db,{accountId,relayer,chain,preflight,verifyNetwork}){
- let stage='QUOTE',approval,signingBoundary=false;
+ let stage='QUOTE',approval,signingBoundary=false,cost;
  const readOnly={
   transaction:work=>work(),
   prepare(sql){
@@ -24,6 +24,7 @@ export async function diagnoseProvisioning(db,{accountId,relayer,chain,preflight
   const quote=await quoteProvisioning(readOnly,{accountId,relayer,chain,preflight});
   if(quote.alreadyProvisioned)return {stage:'ALREADY_PROVISIONED',broadcasts:0};
   validateAutoQuote(quote,{accountId,address:row.address,relayer});
+  cost={maximumCostQuai:quote.maximumCostQuai,expectedCostQuai:quote.expectedCostQuai,balanceQuai:quote.balanceQuai};
   approval={quote:JSON.stringify(quote),commitment:quote.commitment,expires_at:Date.now()+120000};stage='EXECUTION';
   const provisioner=createCloneProvisioner(readOnly,{chain,relayer,grantId:'read-only-diagnosis',preflight,verifyNetwork,
    signer:{getAddress:async()=>{signingBoundary=true;throw Error('Diagnostic signing boundary');}},
@@ -41,6 +42,6 @@ export async function diagnoseProvisioning(db,{accountId,relayer,chain,preflight
   ]);
   return {stage:signingBoundary?'PRE_SIGN_CHECKS_PASSED':error.provisioningStage??stage,
    reason:signingBoundary?'READ_ONLY_BOUNDARY':knownMessages.get(error.message.split('\n')[0])??'INVARIANT_FAILED',
-   ...(error.walletRPC?{rpc:error.walletRPC}:{}),broadcasts:0};
+   ...(error.walletRPC?{rpc:error.walletRPC}:{}),...(cost?{cost}:{}),broadcasts:0};
  }
 }

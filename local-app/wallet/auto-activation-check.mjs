@@ -31,7 +31,9 @@ try{
  }else if(process.argv[2]==='--status'){
   const rows=await db.prepare(`SELECT w.account_id,w.address,j.phase AS automatic_phase,p.phase AS approval_phase,
    p.tx_hash,p.quote::jsonb->>'maximumCostQuai' AS maximum_cost_quai,
-   p.receipt::jsonb->>'feeQuai' AS fee_quai,g.enabled AS grant_enabled,g.reserved_wei
+   p.receipt::jsonb->>'feeQuai' AS fee_quai,g.enabled AS grant_enabled,g.reserved_wei,
+   (SELECT stage FROM passkey_activation_events e WHERE e.account_id=w.account_id ORDER BY id DESC LIMIT 1) AS last_stage,
+   (SELECT code FROM passkey_activation_events e WHERE e.account_id=w.account_id ORDER BY id DESC LIMIT 1) AS last_code
    FROM passkey_clone_wallets w LEFT JOIN passkey_auto_activations j ON j.account_id=w.account_id
    LEFT JOIN passkey_clone_approvals p ON p.account_id=w.account_id
    LEFT JOIN passkey_relayer_grants g ON g.id=j.grant_id ORDER BY w.created_at LIMIT 20`).all();
