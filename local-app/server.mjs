@@ -3,6 +3,7 @@ import {createPasskeyAccounts,passkeyConfiguration} from './passkey-accounts.mjs
 import {createPasskeyWallet} from './passkey-wallet.mjs';
 import {createWalletChain} from './wallet/chain.mjs';
 import {configuredExecutor} from './wallet/configured-executor.mjs';
+import {configuredAutoActivation} from './wallet/auto-activation.mjs';
 import {blocks,remindDeadlines} from './contact-preferences.mjs';
 import {library,reportContent,adminReports} from './member-tools.mjs';
 import {createRewardConfirmation} from './reward-confirmation.mjs';
@@ -45,9 +46,9 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   try{passkeyConfig=passkeyConfiguration(origin);}catch(error){await db.close();throw error;}
   const passkeys=createPasskeyAccounts(db,{config:passkeyConfig,legal,now});
   const walletChain=createWalletChain();
-  let walletExecutor;
-  try{walletExecutor=await configuredExecutor(db,walletChain);}catch{await db.close();throw new Error('Invalid wallet execution configuration');}
-  const passkeyWallet=createPasskeyWallet(db,{chain:walletChain,executor:walletExecutor,now});
+  let walletExecutor,autoActivation;
+  try{walletExecutor=await configuredExecutor(db,walletChain);autoActivation=configuredAutoActivation(db,walletChain);}catch{await db.close();throw new Error('Invalid wallet execution configuration');}
+  const passkeyWallet=createPasskeyWallet(db,{chain:walletChain,executor:walletExecutor,autoActivation:!!autoActivation,now});
   let maintenance;
   const maintain=()=>maintenance??=(async()=>{await expireQuestions(db,now());await remindDeadlines(db,now());})().finally(()=>{maintenance=null;});
   const confirmReward=createRewardConfirmation(db,paymentFetch);
@@ -278,14 +279,15 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   });
   let expiryTimer,provisionTimer,provisionWork;
   const provisionApproved=()=>{
-    if(!walletExecutor?.provisioner||provisionWork)return;
+    if((!walletExecutor?.provisioner&&!autoActivation)||provisionWork)return;
     provisionWork=(async()=>{
+      if(autoActivation){await autoActivation.runNext();return;}
       const next=await db.prepare("SELECT account_id FROM passkey_clone_approvals WHERE approved=TRUE AND phase='quoted' AND expires_at>$1 ORDER BY expires_at LIMIT 1").get(now());
       if(next)await walletExecutor.provisioner.execute(next.account_id);
     })().catch(()=>console.error('Approved wallet provisioning stopped; manual review required.')).finally(()=>{provisionWork=null;});
   };
   const runMaintenance=()=>maintain().catch(()=>console.error('Question maintenance failed.'));
-  server.on('listening',()=>{runMaintenance();expiryTimer=setInterval(runMaintenance,10000);expiryTimer.unref();if(walletExecutor?.provisioner){provisionTimer=setInterval(provisionApproved,10000);provisionTimer.unref();}});
+  server.on('listening',()=>{runMaintenance();expiryTimer=setInterval(runMaintenance,10000);expiryTimer.unref();if(walletExecutor?.provisioner||autoActivation){provisionApproved();provisionTimer=setInterval(provisionApproved,10000);provisionTimer.unref();}});
   server.on('close',()=>{clearInterval(expiryTimer);clearInterval(provisionTimer);});
   return { server, db, async close(){clearInterval(expiryTimer);clearInterval(provisionTimer);if(server.listening)await new Promise(resolve=>server.close(resolve));if(maintenance)await maintenance.catch(()=>{});if(provisionWork)await provisionWork;await db.close();} };
 }

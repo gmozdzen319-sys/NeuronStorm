@@ -37,7 +37,7 @@ export function createTokenMetadataReader(fetcher=fetch){
     }catch{throw fail(422,'This contract could not be verified as a supported token. Try again later or check its address.');}
   };
 }
-export function createPasskeyWallet(db,{readMetadata=createTokenMetadataReader(),chain=createWalletChain(),executor=null,now=Date.now}={}){
+export function createPasskeyWallet(db,{readMetadata=createTokenMetadataReader(),chain=createWalletChain(),executor=null,autoActivation=false,now=Date.now}={}){
   const requireAccount=a=>{if(!a||a.method!=='passkey')throw fail(401,'Sign in with your passkey.');};
   const send=createNativeSend(db,{chain,executor,now});
   const service={send,
@@ -51,7 +51,15 @@ export function createPasskeyWallet(db,{readMetadata=createTokenMetadataReader()
        await assignCloneWallet(db,account.id,now);const row=await loadCloneWallet(db,account.id);if(!row)return base;
        if(row.revoked_at!==null)return {...base,status:'unavailable',reason:'This wallet key is no longer authorized.'};
        const view=await chain.snapshot(row.plan);
-       if(!view.deployed)return {...base,status:'awaiting_approval',reason:'Your personal wallet is reserved. Activation is awaiting approval of its network fee. Do not send funds until your receiving address is available.'};
+       if(!view.deployed){
+        if(autoActivation){
+         const job=await db.prepare('SELECT phase FROM passkey_auto_activations WHERE account_id=$1').get(account.id);
+         const previous=await db.prepare('SELECT phase,approved FROM passkey_clone_approvals WHERE account_id=$1').get(account.id);
+         const waiting=(job&&job.phase!=='running')||(previous&&['stopped','failed','confirmed'].includes(previous.phase));
+         return {...base,status:waiting?'activation_waiting':'activating',reason:waiting?'Wallet activation is safely paused and needs review. No automatic retry will be made.':'Your wallet is being prepared. Neuron Storm covers activation fees up to 15 QUAI. Your receiving address will appear after confirmation. Do not send funds yet.'};
+        }
+        return {...base,status:'awaiting_approval',reason:'Your personal wallet is reserved. Activation is awaiting approval of its network fee. Do not send funds until your receiving address is available.'};
+       }
        const pending=await db.prepare("SELECT id FROM passkey_native_operations WHERE account_id=$1 AND (phase IN ('verifying','authorized','submitting') OR (phase='awaiting_confirmation' AND expires_at>$2)) LIMIT 1").get(account.id,now());
        const ready=!pending&&await send.available();
        return {...base,status:'active',address:row.plan.address,quaiBalance:view.quaiBalance,receiveAvailable:true,sendAvailable:ready,updatedAt:new Date(view.observedAt).toISOString(),reason:pending?'An earlier transfer is awaiting confirmation or review. Do not send it again.':ready?'Your personal wallet is ready. Each transfer requires your passkey.':'Your wallet can receive QUAI. Sending is temporarily unavailable.'};

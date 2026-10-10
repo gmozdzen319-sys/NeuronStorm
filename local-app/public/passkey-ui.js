@@ -47,8 +47,10 @@ export function createPasskeyUI({api,onExternal,onAccount}){
   }
   $('#passkey-signin').addEventListener('click',()=>authenticate('login'));
   $('#passkey-signup').addEventListener('click',()=>authenticate('register'));
+  let activationTimer;
   async function setAccount(next,force=false){
     if(!force&&account?.id===next?.id&&account?.method===next?.method)return;
+    clearTimeout(activationTimer);
     const revision=++epoch;account=next?.method==='passkey'?next:null;
     transfer=null;receiveAddress=null;$('#pk-wallet-address').textContent='';$('#pk-quai-balance').textContent='Not available';$('#pk-receive').disabled=true;$('#pk-send').disabled=true;
     $('#pk-transfers').replaceChildren();
@@ -59,6 +61,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
     $('#pk-id').textContent=account.id;$('#pk-status').textContent='Loading your account…';
     try{const state=await api('/api/passkey/wallet');if(revision!==epoch)return;
       $('#pk-status').textContent=state.reason;
+      if(state.status==='activating')activationTimer=setTimeout(()=>{if(revision===epoch&&!sending)setAccount(account,true);},15000);
       $('#pk-wallet-title').textContent=state.status==='active'?'Your personal wallet':'Wallet setup';
       $('#pk-wallet-address').textContent=state.address||'';$('#pk-quai-balance').textContent=state.quaiBalance??'Not available';$('#pk-receive').disabled=!state.receiveAvailable;$('#pk-send').disabled=!state.sendAvailable;
       const states={awaiting_confirmation:'Awaiting confirmation',verifying:'Checking confirmation',authorized:'Awaiting submission',submitting:'Submitted · awaiting verification',confirmed:'Confirmed',failed:'Failed',stopped:'Stopped'};

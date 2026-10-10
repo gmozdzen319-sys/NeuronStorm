@@ -28,10 +28,10 @@ test('missing PostgreSQL configuration refuses startup instead of falling back t
 test('fresh schema includes every legacy data table and a shared transaction registry',async t=>{
  const {db}=await fixture(t);
  const names=(await db.prepare("SELECT tablename FROM pg_tables WHERE schemaname='public'").all()).map(r=>r.tablename);
- const expected='accounts challenges sessions token_confirmations profiles categories profile_categories questions question_participants question_reads question_categories replies answer_slots reply_votes admin_audit notifications accepted_answers conversation_archive archive_meta saved_answers content_reports reward_receipts signed_actions debate_messages debate_presence payment_intents reward_baselines site_visitors site_presence globe_preferences globe_presence blocked_members deadline_reminders legal_documents legal_acceptances used_transactions schema_migrations weekly_rounds debate_votes reputation_events reputation_event_categories reputation_reviews reputation_account_reviews passkey_accounts passkey_credentials passkey_sessions passkey_challenges passkey_wallets passkey_tokens passkey_clone_wallets passkey_native_operations passkey_relayer_grants passkey_relayer_intents passkey_clone_approvals passkey_relayer_lanes passkey_clone_approval_history'.split(' ');
+ const expected='accounts challenges sessions token_confirmations profiles categories profile_categories questions question_participants question_reads question_categories replies answer_slots reply_votes admin_audit notifications accepted_answers conversation_archive archive_meta saved_answers content_reports reward_receipts signed_actions debate_messages debate_presence payment_intents reward_baselines site_visitors site_presence globe_preferences globe_presence blocked_members deadline_reminders legal_documents legal_acceptances used_transactions schema_migrations weekly_rounds debate_votes reputation_events reputation_event_categories reputation_reviews reputation_account_reviews passkey_accounts passkey_credentials passkey_sessions passkey_challenges passkey_wallets passkey_tokens passkey_clone_wallets passkey_native_operations passkey_relayer_grants passkey_relayer_intents passkey_clone_approvals passkey_relayer_lanes passkey_clone_approval_history passkey_auto_activations'.split(' ');
  assert.deepEqual(names.sort(),expected.sort());
  assert.equal(typeof (await db.prepare('SELECT count(*) AS n FROM accounts').get()).n,'number');
- assert.deepEqual((await db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).map(r=>r.version),['001_initial.sql','002_reputation.sql','003_passkey_accounts.sql','004_clone_wallets.sql']);
+ assert.deepEqual((await db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).map(r=>r.version),['001_initial.sql','002_reputation.sql','003_passkey_accounts.sql','004_clone_wallets.sql','005_auto_activation.sql']);
 });
 
 test('a failed profile transaction restores nickname and all previous categories',async t=>{
@@ -73,7 +73,7 @@ test('reopening PostgreSQL preserves archive entries without re-importing or rep
  await first.close();
  const second=await createApp({database:key});t.after(()=>second.close());
  assert.equal((await second.db.prepare('SELECT count(*) AS n FROM conversation_archive').get()).n,1);
- assert.deepEqual((await second.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).map(r=>r.version),['001_initial.sql','002_reputation.sql','003_passkey_accounts.sql','004_clone_wallets.sql']);
+ assert.deepEqual((await second.db.prepare('SELECT version FROM schema_migrations ORDER BY version').all()).map(r=>r.version),['001_initial.sql','002_reputation.sql','003_passkey_accounts.sql','004_clone_wallets.sql','005_auto_activation.sql']);
 });
 
 test('two application pools cannot select two winners during acceptance and expiry',{
