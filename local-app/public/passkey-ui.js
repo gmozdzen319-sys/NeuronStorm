@@ -72,7 +72,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
   let preview=null;
   $('#pk-refresh').addEventListener('click',()=>{if(!sending)setAccount(account,true);});
   $('#pk-receive').addEventListener('click',async()=>{const revision=epoch;$('#pk-receive').disabled=true;
-    try{const r=await api('/api/passkey/wallet/receive');if(revision!==epoch)return;receiveAddress=r.address;$('#pk-receive-address').textContent=r.address;$('#pk-receive-qr').src=r.qr;$('#pk-receive-panel').hidden=false;}
+    try{const r=await api('/api/passkey/wallet/receive');if(revision!==epoch)return;receiveAddress=r.address;$('#pk-receive-compatibility').hidden=r.receiveCompatible===true;$('#pk-receive-address').textContent=r.address;$('#pk-receive-qr').src=r.qr;$('#pk-receive-panel').hidden=false;}
     catch(error){if(revision===epoch)$('#pk-status').textContent=error.message;}finally{if(revision===epoch)$('#pk-receive').disabled=false;}
   });
   $('#pk-copy').addEventListener('click',async()=>{if(!receiveAddress)return;try{await navigator.clipboard.writeText(receiveAddress);$('#pk-status').textContent='Address copied.';}catch{$('#pk-status').textContent='Select and copy the address above.';}});

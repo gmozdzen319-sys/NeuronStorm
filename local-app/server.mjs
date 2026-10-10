@@ -23,6 +23,7 @@ import {listNotifications,readNotifications} from './notifications.mjs';
 import {requireAdmin,adminList,adminThread,moderateThread} from './admin.mjs';
 import http from 'node:http';
 import {openDatabase} from './db/database.mjs';
+import {WALLET_GENERATION} from './wallet-infrastructure.mjs';
 import { randomBytes, createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -40,7 +41,7 @@ const failure = (status, message) => Object.assign(new Error(message), { status 
 
 export async function createApp({ database = process.env.DATABASE_URL, databasePoolSize=5, origin = 'http://localhost:3000', now = Date.now, tokenFetch = fetch, marketFetch = fetch, paymentFetch = fetch, geoLookup=lookupCountry, trustProxy=process.env.RENDER==='true', legal=loadLegal() } = {}) {
   const runningVersion=JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version;
-  const db = await openDatabase(database,{max:databasePoolSize});
+  const db = await openDatabase(database,{max:databasePoolSize,walletGeneration:WALLET_GENERATION});
   try{await initLegal(db,legal);}catch(error){await db.close();throw error;}
   let passkeyConfig;
   try{passkeyConfig=passkeyConfiguration(origin);}catch(error){await db.close();throw error;}

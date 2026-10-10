@@ -2,6 +2,8 @@ import pg from 'pg';
 import {AsyncLocalStorage} from 'node:async_hooks';
 import {readFile, readdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
+import {walletSQL,assertV1Settled} from './wallet-generation.mjs';
+import {WALLET_GENERATION} from '../wallet-infrastructure.mjs';
 
 // Millisecond timestamps, counts and IDs stay numbers in the public API.
 // Token amounts are TEXT and never pass through floating-point arithmetic.
@@ -12,7 +14,8 @@ types.setTypeParser(20, value => {
   return number;
 });
 
-export async function openDatabase(connectionString, {max=5}={}) {
+export async function openDatabase(connectionString, {max=5,walletGeneration=WALLET_GENERATION}={}) {
+  walletSQL('',walletGeneration);
   if (!connectionString || !/^postgres(?:ql)?:\/\//.test(connectionString)) {
     throw new Error('DATABASE_URL must point to PostgreSQL. SQLite fallback is disabled.');
   }
@@ -21,7 +24,9 @@ export async function openDatabase(connectionString, {max=5}={}) {
   pool.on('error', () => console.error('A PostgreSQL connection was interrupted.'));
   const context = new AsyncLocalStorage();
   let closing;
-  const query = (sql, values = []) => (context.getStore() || pool).query(sql, values);
+  const rawQuery = (sql, values = []) => (context.getStore() || pool).query(sql, values);
+  let routeWalletTables=false;
+  const query = (sql, values = []) => rawQuery(routeWalletTables?walletSQL(sql,walletGeneration):sql,values);
   const db = {
     query,
     exec: sql => query(sql),
@@ -71,6 +76,8 @@ export async function openDatabase(connectionString, {max=5}={}) {
         await db.prepare('INSERT INTO schema_migrations(version,checksum) VALUES($1,$2)').run(name, checksum);
       }
     });
+    if(walletGeneration===2)await assertV1Settled(rawQuery);
+    routeWalletTables=true;
     return db;
   } catch (error) { await pool.end(); throw error; }
 }

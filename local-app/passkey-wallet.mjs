@@ -1,6 +1,6 @@
 import {getAddress,isQuaiAddress,Interface} from 'quais';
 import {NS_TOKEN} from './neuron-token.mjs';
-import {assignCloneWallet,loadCloneWallet} from './wallet-infrastructure.mjs';
+import {assignCloneWallet,loadCloneWallet,WALLET_GENERATION} from './wallet-infrastructure.mjs';
 import {createWalletChain} from './wallet/chain.mjs';
 import {createNativeSend} from './wallet/native-send.mjs';
 import QRCode from 'qrcode';
@@ -65,7 +65,7 @@ export function createPasskeyWallet(db,{readMetadata=createTokenMetadataReader()
        return {...base,status:'active',address:row.plan.address,quaiBalance:view.quaiBalance,receiveAvailable:true,sendAvailable:ready,updatedAt:new Date(view.observedAt).toISOString(),reason:pending?'An earlier transfer is awaiting confirmation or review. Do not send it again.':ready?'Your personal wallet is ready. Each transfer requires your passkey.':'Your wallet can receive QUAI. Sending is temporarily unavailable.'};
       }catch{return {...base,status:'unavailable',reason:'We could not safely verify your wallet. Refresh later. No transaction was sent.'};}
     },
-    async receive(account){const s=await service.state(account);if(!s.receiveAvailable)throw fail(423,s.reason);return {address:s.address,quaiBalance:s.quaiBalance,network:'Quai Mainnet · Cyprus-1',qr:await QRCode.toDataURL(s.address,{errorCorrectionLevel:'M',width:232,margin:4})};},
+    async receive(account){const s=await service.state(account);if(!s.receiveAvailable)throw fail(423,s.reason);return {address:s.address,quaiBalance:s.quaiBalance,receiveCompatible:WALLET_GENERATION===2,network:'Quai Mainnet · Cyprus-1',qr:await QRCode.toDataURL(s.address,{errorCorrectionLevel:'M',width:232,margin:4})};},
     async preview(account,input){requireAccount(account);return readMetadata(input.contract);},
     async add(account,input){requireAccount(account);const metadata=await readMetadata(input.contract);
       if(metadata.contract.toLowerCase()===NS_TOKEN.address.toLowerCase())throw fail(409,'NS is already included in your wallet.');
