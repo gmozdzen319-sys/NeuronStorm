@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {getAddress} from 'quais';
 const hex=x=>'0x'+BigInt(x).toString(16),hash=x=>typeof x==='string'&&/^0x[0-9a-f]{64}$/i.test(x);
 export const MAX_ADVANCE=32n,MAX_TIME_ADVANCE=120n;
 export function validateBlock(b){
@@ -23,7 +24,9 @@ export async function assertCanonicalAdvance(rpc,from,to){
 export async function captureAccounts(rpc,entries,block){
  await assertCanonicalBlock(rpc,block);const tag=block.woHeader.number;
  const accounts=await Promise.all(entries.map(async({address,storageKeys})=>{
-  const [Balance,n,Code,values]=await Promise.all([rpc('quai_getBalance',[address,tag]),rpc('quai_getTransactionCount',[address,tag]),rpc('quai_getCode',[address,tag]),Promise.all(storageKeys.map(k=>rpc('quai_getStorageAt',[address,k,tag])))]);
+  // Snapshots use lowercase identities; Quai RPC requires checksummed addresses.
+  const rpcAddress=getAddress(address);
+  const [Balance,n,Code,values]=await Promise.all([rpc('quai_getBalance',[rpcAddress,tag]),rpc('quai_getTransactionCount',[rpcAddress,tag]),rpc('quai_getCode',[rpcAddress,tag]),Promise.all(storageKeys.map(k=>rpc('quai_getStorageAt',[rpcAddress,k,tag])))]);
   assert(typeof Code==='string'&&/^0x(?:[0-9a-f]{2})*$/i.test(Code),'invalid code response');assert(BigInt(n)<=BigInt(Number.MAX_SAFE_INTEGER));
   const Storage={};storageKeys.forEach((k,i)=>{assert(hash(values[i]),'invalid storage response');Storage[k]=values[i].toLowerCase();});
   return {Address:address.toLowerCase(),Balance:hex(Balance),Nonce:Number(BigInt(n)),Code:Code.toLowerCase(),Storage};
