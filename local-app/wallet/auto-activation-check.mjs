@@ -8,7 +8,20 @@ import {createNetworkVerification} from './network-verification.mjs';
 import {validateAutoQuote} from './auto-activation.mjs';
 const db=await openDatabase(process.env.DATABASE_URL);
 try{
- if(process.argv[2]==='--status'){
+ if(process.argv[2]==='--diagnose'){
+  // Historical evidence only. No credentials, signer, grants or state changes.
+  const rows=await db.prepare(`SELECT w.account_id,w.address,j.phase,p.quote,p.commitment,p.expires_at
+   FROM passkey_clone_wallets w JOIN passkey_auto_activations j ON j.account_id=w.account_id
+   LEFT JOIN passkey_clone_approvals p ON p.account_id=w.account_id ORDER BY w.created_at`).all();
+  for(const row of rows){
+   const history=await db.prepare(`SELECT recorded_at,evidence::jsonb->>'phase' AS phase,
+    evidence::jsonb->>'approved' AS approved,evidence::jsonb->>'tx_hash' AS tx_hash
+    FROM passkey_clone_approval_history WHERE account_id=$1 ORDER BY id`).all(row.account_id);
+   let savedQuoteValid=false;
+   if(row.quote){const quote=JSON.parse(row.quote);try{validateAutoQuote(quote,{accountId:row.account_id,address:row.address,relayer:process.env.NS_WALLET_RELAYER_ADDRESS,now:Date.parse(quote.quotedAt)});savedQuoteValid=true;}catch{}}
+   console.log(JSON.stringify({activationDiagnosis:{accountId:row.account_id,phase:row.phase,savedQuoteValid,history},broadcasts:0}));
+  }
+ }else if(process.argv[2]==='--status'){
   const rows=await db.prepare(`SELECT w.account_id,w.address,j.phase AS automatic_phase,p.phase AS approval_phase,
    p.tx_hash,p.quote::jsonb->>'maximumCostQuai' AS maximum_cost_quai,
    p.receipt::jsonb->>'feeQuai' AS fee_quai,g.enabled AS grant_enabled,g.reserved_wei
