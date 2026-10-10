@@ -8,6 +8,15 @@ import {createNetworkVerification} from './network-verification.mjs';
 import {validateAutoQuote} from './auto-activation.mjs';
 const db=await openDatabase(process.env.DATABASE_URL);
 try{
+ if(process.argv[2]==='--status'){
+  const rows=await db.prepare(`SELECT w.account_id,w.address,j.phase AS automatic_phase,p.phase AS approval_phase,
+   p.tx_hash,p.quote::jsonb->>'maximumCostQuai' AS maximum_cost_quai,
+   p.receipt::jsonb->>'feeQuai' AS fee_quai,g.enabled AS grant_enabled,g.reserved_wei
+   FROM passkey_clone_wallets w LEFT JOIN passkey_auto_activations j ON j.account_id=w.account_id
+   LEFT JOIN passkey_clone_approvals p ON p.account_id=w.account_id
+   LEFT JOIN passkey_relayer_grants g ON g.id=j.grant_id ORDER BY w.created_at LIMIT 20`).all();
+  for(const row of rows)console.log(JSON.stringify({activationStatus:row,broadcasts:0}));
+ }else{
  assert.notEqual(process.env.NS_WALLET_AUTO_ACTIVATE,'true','Audit before enabling automatic spending');
  const chain=createWalletChain(),relayer=process.env.NS_WALLET_RELAYER_ADDRESS;
  const preflight=createNativePreflight({binary:process.env.NS_WALLET_NATIVE_VERIFIER,binaryHash:process.env.NS_WALLET_NATIVE_VERIFIER_SHA256});
@@ -24,5 +33,6 @@ try{
    assert(await createNetworkVerification(process.env)({rpc:chain.rpc,block:quote.native.block,relayer,wallet:row.address,accounts:quote.native.accounts}));
    console.log(JSON.stringify({activationAudit:'READY_FOR_AUTOMATIC_POLICY',accountId:row.account_id,address:row.address,maximumCostQuai:quote.maximumCostQuai,expectedCostQuai:quote.expectedCostQuai,gasLimit:quote.gasLimit,gasPriceWei:quote.gasPriceWei,balanceQuai:quote.balanceQuai,broadcasts:0}));
   }catch{console.log(JSON.stringify({activationAudit:'WAITING_SAFETY_CHECK',accountId:row.account_id,address:row.address,broadcasts:0}));}
+ }
  }
 }finally{await db.close();}
