@@ -12,7 +12,8 @@ const V1=Object.freeze({
  factoryTransaction:'0x0050005542c08e7298d2959c7932230224acc474b29f243e79cc11a5e35d6f1a',
  factoryHash:'0x0cebe7c9bbfb5af092b161e546432dbbfe956fe34f5ad9f6dae0ec5cdbc1f917'
 });
-export const WALLET_GENERATION=Number(process.env.NS_WALLET_GENERATION??'1');
+// Receive-compatible v2 is the application default. v1 remains explicit for historical tooling.
+export const WALLET_GENERATION=Number(process.env.NS_WALLET_GENERATION??'2');
 assert([1,2].includes(WALLET_GENERATION),'Unsupported wallet generation');
 export function receiveInfrastructure(manifest){
  assert.equal(manifest.generation,2);assert.equal(manifest.chainId,9);

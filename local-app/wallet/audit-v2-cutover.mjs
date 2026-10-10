@@ -5,7 +5,7 @@ import {assertV1Settled} from '../db/wallet-generation.mjs';
 assert.equal(process.env.NS_WALLET_AUTO_ACTIVATE,'false');
 assert.equal(process.env.NS_WALLET_PROVISION_ENABLED,'false');
 assert.equal(process.env.NS_WALLET_SEND_ENABLED,'false');
-assert.equal(process.env.NS_WALLET_GENERATION??'1','1');
+assert.equal(process.env.NS_WALLET_GENERATION,'1','Historical v1 audit requires explicit generation 1');
 const db=await openDatabase(process.env.DATABASE_URL);
 try {
  await assertV1Settled(db.query);
