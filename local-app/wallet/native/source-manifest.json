@@ -1,0 +1,10 @@
+{
+  "client": "go-quai v0.56.1",
+  "sourceFiles": {
+    "main.go": "639cee5f0f5f74c3ed378d62295134cd9dabc9f9e732c92d38ece81e027a57d2",
+    "go.mod": "45ee3c602d0802c347d1acdee19f30e83f90c8b8f62c35abdd96b40dcfbc2e41",
+    "go.sum": "4b07de9f108e7abf285985a2d36d70c6c0e5b6e3f33fd5575401511a6d17d74d"
+  },
+  "linuxExecutionVerified": false,
+  "broadcasts": 0
+}

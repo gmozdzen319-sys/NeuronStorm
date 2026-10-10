@@ -1,0 +1,20 @@
+// Build-time offline installation. Does not import application, DB or RPC code.
+import assert from 'node:assert/strict';
+import {readFile,writeFile,mkdir,chmod} from 'node:fs/promises';
+import {gunzipSync} from 'node:zlib';
+import {createHash} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
+import {execFile} from 'node:child_process';
+import {promisify} from 'node:util';
+assert.equal(process.platform,'linux','Production verifier requires Linux');
+assert.equal(process.arch,'x64','Production verifier requires x86-64');
+assert.notEqual(process.env.NS_WALLET_SEND_ENABLED,'true','Paid execution must remain disabled during activation');
+assert.notEqual(process.env.NS_WALLET_PROVISION_ENABLED,'true','Provisioning must remain disabled during activation');
+const hash='e4a8c99d2aa90c6ee0971e0a015a6eca25bc4c0e8b8600f25bb32fb262b5efb5';
+const binary=gunzipSync(await readFile(new URL('./quai-native-linux-amd64.gz',import.meta.url)),{maxOutputLength:50000000});
+assert.equal(createHash('sha256').update(binary).digest('hex'),hash,'Verifier artifact hash mismatch');
+const dir=new URL('./bin/',import.meta.url),path=new URL('./bin/quai-native',import.meta.url);
+await mkdir(dir,{recursive:true});await writeFile(path,binary,{mode:0o700});await chmod(path,0o700);
+const result=await promisify(execFile)(process.execPath,[fileURLToPath(new URL('./verify-native.mjs',import.meta.url)),fileURLToPath(path),hash],{timeout:200000,maxBuffer:1048576});
+process.stdout.write(result.stdout);
+console.log('Linux native verifier installed and verified; no RPC, signing or broadcast capability used.');
