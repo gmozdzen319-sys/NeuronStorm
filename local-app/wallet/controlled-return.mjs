@@ -18,7 +18,9 @@ export function scopeControlledReturn(db,executor){
   async prepare(row,op,...rest){
    validateControlledReturn(row,op);
    // Permanent preparation lock: failure, timeout or restart cannot get a new attempt.
-   await db.prepare('INSERT INTO passkey_relayer_grants(id,relayer,budget_wei,expires_at,enabled) VALUES($1,$2,$3,$4,FALSE)').run(RETURN.grant+':used',RETURN.recipient,'0',0);
+   // Schema requires a positive budget. This sentinel is disabled and expired;
+   // its 1 wei is never a usable sponsorship or reserved expenditure.
+   await db.prepare('INSERT INTO passkey_relayer_grants(id,relayer,budget_wei,expires_at,enabled) VALUES($1,$2,$3,$4,FALSE)').run(RETURN.grant+':used',RETURN.recipient,'1',0);
    try{const p=await prepare(row,op,...rest);assert.equal(p.relayerNonce,RETURN.relayerNonce);assert.equal(p.relayer,RETURN.recipient);
     assert(BigInt(p.maximumFeeWei)<=BigInt(RETURN.maximumWei));return p;
    }catch(error){await stop();throw error;}
