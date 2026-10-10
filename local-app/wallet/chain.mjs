@@ -26,7 +26,15 @@ export function createWalletRPC(fetcher=fetch,endpoint='https://rpc.quai.network
   assert(METHODS.has(method),'Read-only wallet RPC method required');const requestId=++id;
   const r=await fetcher(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:requestId,method,params}),signal:AbortSignal.timeout(10000)});
   const text=await r.text();assert(text.length<=2000000,'RPC result too large');const data=JSON.parse(text);
-  assert(r.ok&&data.jsonrpc==='2.0'&&data.id===requestId&&!data.error&&Object.hasOwn(data,'result'),'Invalid wallet RPC response');return data.result;
+  if(!(r.ok&&data.jsonrpc==='2.0'&&data.id===requestId&&!data.error&&Object.hasOwn(data,'result'))){
+   const error=new Error('Invalid wallet RPC response');
+   // Read-only methods only. Never attach request parameters, response data,
+   // signed bytes, arbitrary SDK error objects or endpoint credentials.
+   error.walletRPC={method,httpStatus:r.status,code:Number.isSafeInteger(data.error?.code)?data.error.code:null,
+    message:typeof data.error?.message==='string'?data.error.message.replace(/[\r\n]/g,' ').slice(0,240):'Invalid response envelope'};
+   throw error;
+  }
+  return data.result;
  };
 }
 const low=s=>s.toLowerCase(),zero='0x'+'0'.repeat(40);

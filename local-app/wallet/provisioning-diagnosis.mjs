@@ -40,6 +40,7 @@ export async function diagnoseProvisioning(db,{accountId,relayer,chain,preflight
    ['Native execution failed','NATIVE_EXECUTION_FAILED']
   ]);
   return {stage:signingBoundary?'PRE_SIGN_CHECKS_PASSED':error.provisioningStage??stage,
-   reason:signingBoundary?'READ_ONLY_BOUNDARY':knownMessages.get(error.message.split('\n')[0])??'INVARIANT_FAILED',broadcasts:0};
+   reason:signingBoundary?'READ_ONLY_BOUNDARY':knownMessages.get(error.message.split('\n')[0])??'INVARIANT_FAILED',
+   ...(error.walletRPC?{rpc:error.walletRPC}:{}),broadcasts:0};
  }
 }
