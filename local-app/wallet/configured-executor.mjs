@@ -5,6 +5,7 @@ import {createWalletExecutor} from './executor.mjs';
 import {createNativePreflight} from './preflight.mjs';
 import {createCloneProvisioner} from './provisioner.mjs';
 import {createNetworkVerification} from './network-verification.mjs';
+import {RETURN,scopeControlledReturn} from './controlled-return.mjs';
 
 // Deployment never enables spending. Secrets, a reviewed verifier/network policy
 // and a separately approved DB sponsorship grant are all required. No test keys.
@@ -24,5 +25,10 @@ export async function configuredExecutor(db,chain,env=process.env){
  const executor=createWalletExecutor(db,capabilities);
  if(env.NS_WALLET_SEND_ENABLED!=='true')executor.available=async()=>false;
  if(env.NS_WALLET_PROVISION_ENABLED==='true')executor.provisioner=createCloneProvisioner(db,capabilities);
+ if(env.NS_WALLET_GRANT_ID===RETURN.grant){
+  assert.equal(env.NS_WALLET_GENERATION,'2');assert.equal(relayer,RETURN.recipient);
+  assert.notEqual(env.NS_WALLET_PROVISION_ENABLED,'true');
+  return scopeControlledReturn(db,executor);
+ }
  return executor;
 }
