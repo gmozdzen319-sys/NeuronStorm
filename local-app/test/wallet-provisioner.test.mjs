@@ -39,6 +39,14 @@ test('Read-only production rehearsal reaches signing boundary without writes or 
  assert.equal(await f.db.prepare('SELECT * FROM passkey_clone_approvals WHERE account_id=$1').get(f.accountId),undefined);
  assert.deepEqual(await f.db.prepare('SELECT * FROM passkey_relayer_grants ORDER BY id').all(),before);
 });
+
+test('Read-only quote diagnosis identifies native gas mismatch without exposing assertion data',async t=>{
+ const f=await fixture(t);
+ const result=await diagnoseProvisioning(f.db,{...f,verifyNetwork:async()=>true,preflight:async(...args)=>({...await f.preflight(...args),gasUsed:'240001'})});
+ assert.deepEqual(result.quote,{stage:'NATIVE_GAS_MATCH',gas:{accessListGas:'240000',estimatedGas:'320000',gasLimit:'330000',nativeGas:'240001'}});
+ assert.equal(result.broadcasts,0);assert.equal(f.sends,0);
+ assert.equal(await f.db.prepare('SELECT * FROM passkey_clone_approvals WHERE account_id=$1').get(f.accountId),undefined);
+});
 test('Explicit review resumes only a proven pre-broadcast STOP with a fresh grant and same wallet',async t=>{
  const f=await fixture(t),before=await loadCloneWallet(f.db,f.accountId);
  const worker=createAutoActivation(f.db,{...f,makeProvisioner:id=>{const p=f.makeProvisioner(id);return {...p,execute:async()=>{throw Error('temporary failure');}};}});

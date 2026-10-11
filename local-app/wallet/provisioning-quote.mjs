@@ -8,23 +8,37 @@ import {PRICE_CAP,SAFETY_MARGIN,canonicalACL,fingerprint} from './transaction-po
 import {factoryStorageContext} from './factory-context.mjs';
 const q=n=>'0x'+BigInt(n).toString(16),LIMIT=330000n;
 export async function quoteProvisioning(db,{accountId,relayer,chain,preflight,now=Date.now}){
+ let quoteStage='ASSIGNMENT',gasEvidence;
+ try{
  relayer=getAddress(relayer);assert(/^0x00[0-7]/i.test(relayer)&&!/^0x0+$/i.test(relayer));
  await assignCloneWallet(db,accountId,now);const row=await loadCloneWallet(db,accountId);assert(row&&row.revoked_at===null,'No supported Passkey wallet assignment');
+ quoteStage='WALLET_SNAPSHOT';
  const observed=await chain.snapshot(row.plan);if(observed.deployed)return {alreadyProvisioned:true,address:row.plan.address,expectedCostQuai:'0',broadcastAllowed:false};
+ quoteStage='QUOTE_HEAD';
  const rpc=chain.rpc,block=validateBlock(await rpc('quai_getBlockByNumber',['latest',false]));await assertCanonicalAdvance(rpc,observed.block,block);const tag=block.woHeader.number;
  const [latest,pending,balance,recommended]=await Promise.all([rpc('quai_getTransactionCount',[relayer,tag]),rpc('quai_getTransactionCount',[relayer,'pending']),rpc('quai_getBalance',[relayer,tag]),rpc('quai_gasPrice',[])]);
+ quoteStage='RELAYER_NONCE_AND_PRICE';
  assert.equal(BigInt(latest),BigInt(pending));const price=BigInt(recommended);assert(price>0n&&price<=PRICE_CAP);
  assert(BigInt(latest)>=0n&&BigInt(latest)<=BigInt(Number.MAX_SAFE_INTEGER));
  const transaction={from:relayer,to:infra.factory,nonce:q(latest),value:'0x0',data:factoryABI.encodeFunctionData('createWallet',[row.plan.x,row.plan.y,row.plan.grind]),gas:q(LIMIT),gasPrice:q(price)};
+ quoteStage='RPC_ACCESS_LIST';
  const list=await rpc('quai_createAccessList',[transaction,tag]);assert(!list.error);transaction.accessList=canonicalACL(list.accessList);
-  const estimate=BigInt(await rpc('quai_estimateGas',[transaction,tag])),gas=BigInt(list.gasUsed);assert(gas>0n&&gas<=LIMIT&&estimate>0n&&estimate<=LIMIT);
+  quoteStage='RPC_GAS_ESTIMATE';
+  const estimate=BigInt(await rpc('quai_estimateGas',[transaction,tag])),gas=BigInt(list.gasUsed);
+  gasEvidence={accessListGas:String(gas),estimatedGas:String(estimate),gasLimit:String(LIMIT)};
+  assert(gas>0n&&gas<=LIMIT&&estimate>0n&&estimate<=LIMIT);
   let native=null;
   if(preflight){
+   quoteStage='FACTORY_STORAGE';
    const factoryStorageKeys=await factoryStorageContext(rpc,block);
+   quoteStage='NATIVE_EXECUTION';
    native=await preflight(rpc,{...transaction,chainId:9,type:0,gasLimit:String(LIMIT)}, {...row,factoryStorageKeys},block);
-   assert.equal(BigInt(native.gasUsed),gas);assert.equal(factoryABI.decodeFunctionResult('createWallet',native.returnValue)[0].toLowerCase(),row.address);
+   quoteStage='NATIVE_GAS_MATCH';gasEvidence.nativeGas=String(BigInt(native.gasUsed));
+   assert.equal(BigInt(native.gasUsed),gas);quoteStage='NATIVE_ADDRESS_MATCH';assert.equal(factoryABI.decodeFunctionResult('createWallet',native.returnValue)[0].toLowerCase(),row.address);
   }
+ quoteStage='FINAL_QUOTE_STATE';
  await assertCanonicalBlock(rpc,block);assert.equal(BigInt(await rpc('quai_getTransactionCount',[relayer,'pending'])),BigInt(latest));
  const maximum=price*LIMIT,shortfall=maximum+SAFETY_MARGIN-BigInt(balance);
  return {accountId,address:row.plan.address,factory:infra.factory,implementation:infra.implementation,chainId:9,transaction,commitment:fingerprint({transaction,address:row.plan.address,blockHash:block.hash}),blockNumber:tag,blockHash:block.hash,quotedAt:new Date(now()).toISOString(),gasUsed:String(gas),gasEstimate:String(estimate),gasLimit:String(LIMIT),gasPriceWei:String(price),expectedCostQuai:formatUnits(gas*price,18),maximumCostQuai:formatUnits(maximum,18),balanceQuai:formatUnits(balance,18),requiredSafetyMarginQuai:'10',shortfallQuai:formatUnits(shortfall>0n?shortfall:0n,18),native, nativePreflightRequired:!native,approvalRequired:true,broadcastAllowed:false};
+ }catch(error){error.quoteDiagnostic={stage:quoteStage,...(gasEvidence?{gas:gasEvidence}:{})};throw error;}
 }
