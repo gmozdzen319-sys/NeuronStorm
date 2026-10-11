@@ -47,6 +47,17 @@ test('Read-only quote diagnosis identifies native gas mismatch without exposing 
  assert.equal(result.broadcasts,0);assert.equal(f.sends,0);
  assert.equal(await f.db.prepare('SELECT * FROM passkey_clone_approvals WHERE account_id=$1').get(f.accountId),undefined);
 });
+
+test('Padded RPC estimate reaches native proof without increasing the hard gas cap',async t=>{
+ const f=await fixture(t),rpc=f.chain.rpc;
+ const chain={...f.chain,rpc:async(method,args)=>method==='quai_estimateGas'?'0x50a3c':rpc(method,args)};
+ let checks=0;
+ const preflight=async(...args)=>{checks++;assert.equal(args[1].gasLimit,'330000');return f.preflight(...args);};
+ const quote=await quoteProvisioning(f.db,{...f,chain,preflight});
+ assert.equal(quote.gasEstimate,'330300');assert.equal(quote.gasLimit,'330000');assert.equal(checks,1);assert.equal(f.sends,0);
+ await assert.rejects(quoteProvisioning(f.db,{...f,chain,preflight:undefined}),/Native proof required/);
+ await assert.rejects(quoteProvisioning(f.db,{...f,chain,preflight:async()=>{throw Error('Native execution failed');}}),/Native execution failed/);
+});
 test('Explicit review resumes only a proven pre-broadcast STOP with a fresh grant and same wallet',async t=>{
  const f=await fixture(t),before=await loadCloneWallet(f.db,f.accountId);
  const worker=createAutoActivation(f.db,{...f,makeProvisioner:id=>{const p=f.makeProvisioner(id);return {...p,execute:async()=>{throw Error('temporary failure');}};}});
@@ -82,7 +93,7 @@ test('Automatic activation runs real sender once, retains wallet and disables ac
  assert.equal((await worker.runNext()).status,'confirmed');assert.equal(f.sends,1);
  assert.equal((await loadCloneWallet(f.db,f.accountId)).address,before.address);
  const g=await f.db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1').get('auto-activation-v'+WALLET_GENERATION+':'+f.accountId);
- assert.equal(g.enabled,false);assert.equal(g.budget_wei,'15000000000000000000');
+ assert.equal(g.enabled,false);assert.equal(g.budget_wei,'40000000000000000000');
  assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,1);
 });
 test('Concurrent workers cannot claim or pay for the same account twice',async t=>{
@@ -104,7 +115,7 @@ for(const kind of ['nonce','input','address','ambiguous'])test('Automatic activa
 for(const patch of ['cap','balance','chain','wallet','stale','proof'])test('Auto quote rejects '+patch+' before sender executes',async t=>{
  const f=await fixture(t);let executeCalls=0;
  const makeProvisioner=id=>{const p=f.makeProvisioner(id);return {quote:async account=>{const q=await p.quote(account);
-  if(patch==='cap'){q.transaction.gasPrice='50000000000000';q.maximumCostQuai='16.5';}
+  if(patch==='cap'){q.transaction.gasPrice='125000000000000';q.maximumCostQuai='41.25';}
   if(patch==='balance')q.balanceQuai='10';if(patch==='chain')q.chainId=1;
   if(patch==='wallet')q.address=infra.factory;if(patch==='stale')q.quotedAt='2000-01-01T00:00:00Z';
   if(patch==='proof')q.native=null;return q;},execute:async()=>{executeCalls++;}};};
@@ -133,8 +144,8 @@ test('Process crash claim remains blocked after restart',async t=>{
  await f.db.prepare("INSERT INTO passkey_auto_activations VALUES($1,$2,$3,'running',0)").run(f.accountId,f.relayer.toLowerCase(),id);
  assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,0);
 });
-test('Auto cap accepts below 15 QUAI and rejects the next whole-wei gas price above it',async t=>{
- const f=await fixture(t),q=await f.provisioner.quote(f.accountId),price=15000000000000000000n/330000n;
+test('Auto sponsorship cap accepts below authorized 40 QUAI and rejects the next wei above it',async t=>{
+ const f=await fixture(t),q=await f.provisioner.quote(f.accountId),price=40000000000000000000n/330000n;
  const {formatUnits}=await import('quais');
  q.transaction.gasPrice=String(price);q.maximumCostQuai=formatUnits(price*330000n,18);
  assert.equal(validateAutoQuote(q,{accountId:f.accountId,address:q.address,relayer:f.relayer}),price*330000n);

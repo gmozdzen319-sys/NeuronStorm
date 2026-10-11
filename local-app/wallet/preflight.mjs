@@ -10,6 +10,7 @@ import {AbiCoder,toBeHex,keccak256} from 'quais';
 import {WALLET_INFRASTRUCTURE as infra} from '../wallet-infrastructure.mjs';
 import {canonicalACL} from './transaction-policy.mjs';
 import {captureAccounts,assertCanonicalBlock} from './head-guard.mjs';
+import {verifyProvisioningGas} from './provisioning-gas.mjs';
 const exec=promisify(execFile),q=n=>'0x'+BigInt(n).toString(16),abi=AbiCoder.defaultAbiCoder();
 export function rpcTransaction(tx){return {from:tx.from,to:tx.to,nonce:q(tx.nonce),value:'0x0',data:tx.data,gas:q(tx.gasLimit),gasPrice:q(tx.gasPrice),...(tx.accessList?{accessList:tx.accessList}:{})};}
 export function createNativePreflight({binary,binaryHash}){
@@ -37,7 +38,13 @@ export function createNativePreflight({binary,binaryHash}){
    assert.equal(result.snapshotCommitted,true);assert(!result.outcome.error,'Native execution failed');assert.deepEqual(canonicalACL(result.discoveredAccessList),canonicalACL(tx.accessList));
    const acl=await rpc('quai_createAccessList',[rpcTransaction(tx),block.woHeader.number]);assert(!acl.error);assert.deepEqual(canonicalACL(acl.accessList),canonicalACL(tx.accessList));assert.equal(BigInt(acl.gasUsed),BigInt(result.outcome.gas));
    const estimate=BigInt(await rpc('quai_estimateGas',[rpcTransaction(tx),block.woHeader.number]));
-   assert(estimate>0n&&estimate<=BigInt(tx.gasLimit)&&BigInt(result.estimate)<=BigInt(tx.gasLimit)&&BigInt(result.outcome.gas)>0n&&BigInt(result.outcome.gas)<=BigInt(tx.gasLimit));await assertCanonicalBlock(rpc,block);
+   if(tx.to.toLowerCase()===infra.factory.toLowerCase()){
+    verifyProvisioningGas({limit:tx.gasLimit,used:result.outcome.gas,minimum:result.minimumGas,nativeEstimate:result.estimate,rpcEstimate:estimate});
+    // Same gas limit, nonce, price, data, access list and pinned state as native.
+    const returned=await rpc('quai_call',[rpcTransaction(tx),block.woHeader.number]);
+    assert.equal(returned.toLowerCase(),result.outcome.return.toLowerCase(),'RPC/native provisioning return mismatch');
+   }else assert(estimate>0n&&estimate<=BigInt(tx.gasLimit)&&BigInt(result.estimate)<=BigInt(tx.gasLimit)&&BigInt(result.outcome.gas)>0n&&BigInt(result.outcome.gas)<=BigInt(tx.gasLimit));
+   await assertCanonicalBlock(rpc,block);
    return {accounts,block,gasUsed:String(result.outcome.gas),estimate:String(estimate),returnValue:result.outcome.return,accessList:canonicalACL(tx.accessList)};
   }finally{const relativePath=relative(resolve(tmpdir()),resolve(dir));assert(!isAbsolute(relativePath)&&!relativePath.startsWith('..')&&relativePath.startsWith('ns-wallet-preflight-'));await rm(dir,{recursive:true,force:true});}
  };

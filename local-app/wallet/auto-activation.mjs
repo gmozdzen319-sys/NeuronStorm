@@ -5,14 +5,14 @@ import {WALLET_INFRASTRUCTURE as infra,WALLET_GENERATION} from '../wallet-infras
 import {activationFailure} from './activation-failure.mjs';
 import {randomUUID} from 'node:crypto';
 
-export const AUTO_MAXIMUM=15000000000000000000n;
+export const AUTO_MAXIMUM=40000000000000000000n;
 export function validateAutoQuote(q,{accountId,address,relayer,now=Date.now()}){
  assert.equal(q.accountId,accountId);assert.equal(q.address.toLowerCase(),address.toLowerCase());
  assert.equal(q.chainId,9);assert.equal(q.factory,infra.factory);assert.equal(q.implementation,infra.implementation);
  assert.equal(q.transaction.from.toLowerCase(),relayer.toLowerCase());assert.equal(q.transaction.to.toLowerCase(),infra.factory.toLowerCase());
  assert.equal(BigInt(q.transaction.value),0n);assert.equal(BigInt(q.transaction.gas),330000n);assert.equal(BigInt(q.gasLimit),330000n);
  const reserve=BigInt(q.transaction.gasPrice)*330000n;
- assert(reserve>0n&&reserve<=AUTO_MAXIMUM,'Activation exceeds 15 QUAI');
+ assert(reserve>0n&&reserve<=AUTO_MAXIMUM,'Activation exceeds 40 QUAI');
  assert.equal(parseUnits(q.maximumCostQuai,18),reserve);assert(parseUnits(q.balanceQuai,18)>=reserve+10000000000000000000n);
  assert(q.native&&!q.nativePreflightRequired&&q.approvalRequired&&q.broadcastAllowed===false);
  const age=now-Date.parse(q.quotedAt);assert(Number.isFinite(age)&&age>=0&&age<60000);

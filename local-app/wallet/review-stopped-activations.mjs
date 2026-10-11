@@ -10,7 +10,7 @@ assert.equal(process.argv[2],'--execute-reviewed','Explicit operator review requ
 const accounts=process.argv.slice(3);
 assert(accounts.length>0&&accounts.length<=10&&new Set(accounts).size===accounts.length);
 assert(accounts.every(id=>/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id)));
-assert.equal(AUTO_MAXIMUM,15000000000000000000n);
+assert.equal(AUTO_MAXIMUM,40000000000000000000n);
 assert.equal(process.env.NS_WALLET_AUTO_ACTIVATE,'true');
 assert.notEqual(process.env.NS_WALLET_SEND_ENABLED,'true');
 assert.notEqual(process.env.NS_WALLET_PROVISION_ENABLED,'true');

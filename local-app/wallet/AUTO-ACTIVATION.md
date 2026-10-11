@@ -8,7 +8,7 @@ Keep `NS_WALLET_PROVISION_ENABLED=false`; Send is controlled separately and is
 not enabled by this change.
 
 Every account gets one permanent attempt and a separate grant of exactly
-15 QUAI. Fresh RPC/native quotes bind the immutable wallet assignment. The existing
+40 QUAI. Fresh RPC/native quotes bind the immutable wallet assignment. The existing
 sender freezes the gas price, revalidates nonce/access list/state/canonicality,
 persists the signed hash before its sole broadcast, and verifies the receipt.
 The relayer must retain its existing 10 QUAI safety reserve. No gas limit increase.
@@ -35,7 +35,7 @@ explicit operator action, never called by the automatic worker. It accepts only
 stopped, unbroadcast accounts with no submitted/failed/confirmed transaction in
 their history, no fee reservation and no unresolved relayer work. It preserves
 the assignment, old grants and approval history, records the review, and creates
-a fresh 15 QUAI grant. Every normal quote/native/RPC/signing/receipt gate still
+a fresh 40 QUAI grant. Every normal quote/native/RPC/signing/receipt gate still
 runs. Any STOP ends the batch; no automatic reapproval follows.
 
 The worker runs once at startup and every 10 seconds while the app is awake;
@@ -43,7 +43,7 @@ the Free Render service can sleep. Wallet UI polls read-only during activation.
 No secret or exception object is logged. Deployment/build itself does not run a
 provisioning command; execution is explicitly enabled only in the runtime.
 
-The 15 QUAI limit is PER ACCOUNT, not an aggregate sponsorship budget. A person
+The 40 QUAI limit is PER ACCOUNT, not an aggregate sponsorship budget. A person
 can register multiple Passkeys/accounts; this is not proof of unique humanity.
 Public signup sponsorship can consume relayer funds down to the safety reserve.
 Disable the runtime flag to prevent new attempts; do not terminate an in-flight
@@ -53,3 +53,5 @@ Verification uses a disposable PostgreSQL database and the existing real sender
 with local RPC/native fixtures: success, immutable assignment, concurrent workers,
 fresh quote of a legacy pending account, budget boundaries, insufficient balance,
 nonce/input/address mutation, missing proof, stale quote, ambiguous send and crash.
+
+Quai padded gas estimates are checked against the exact native minimum and RPC execution at the unchanged 330,000 gas limit. The 75,000 Gwei gas-price ceiling remains unchanged; the sponsorship ceiling is 40 QUAI per account (authorized 2026-10-11). No historical grants are rewritten.

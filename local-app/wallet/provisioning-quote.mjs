@@ -26,7 +26,9 @@ export async function quoteProvisioning(db,{accountId,relayer,chain,preflight,no
   quoteStage='RPC_GAS_ESTIMATE';
   const estimate=BigInt(await rpc('quai_estimateGas',[transaction,tag])),gas=BigInt(list.gasUsed);
   gasEvidence={accessListGas:String(gas),estimatedGas:String(estimate),gasLimit:String(LIMIT)};
-  assert(gas>0n&&gas<=LIMIT&&estimate>0n&&estimate<=LIMIT);
+  assert(gas>0n&&gas<=LIMIT&&estimate>0n);
+  // A padded estimate above LIMIT requires the exact native/RPC proof below.
+  assert(estimate<=LIMIT||preflight,'Native proof required for padded estimate');
   let native=null;
   if(preflight){
    quoteStage='FACTORY_STORAGE';
