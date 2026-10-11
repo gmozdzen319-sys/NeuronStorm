@@ -6,7 +6,8 @@ import {createWalletChain} from './chain.mjs';
 import {configuredAutoActivation,AUTO_MAXIMUM} from './auto-activation.mjs';
 import {activationFailure} from './activation-failure.mjs';
 
-assert.equal(process.argv[2],'--execute-reviewed','Explicit operator review required');
+assert(['--execute-reviewed','--execute-first-review'].includes(process.argv[2]),'Explicit operator review required');
+const firstReviewOnly=process.argv[2]==='--execute-first-review';
 const accounts=process.argv.slice(3);
 assert(accounts.length>0&&accounts.length<=10&&new Set(accounts).size===accounts.length);
 assert(accounts.every(id=>/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(id)));
@@ -19,7 +20,7 @@ try{
  const worker=configuredAutoActivation(db,createWalletChain());assert(worker);
  for(const accountId of accounts){
   try{
-   const result=await worker.runReviewed(accountId);
+   const result=await worker.runReviewed(accountId,{firstReviewOnly});
    const evidence=await db.prepare(`SELECT w.address,p.phase,p.tx_hash,p.receipt::jsonb->>'feeQuai' AS actual_fee_quai
     FROM passkey_clone_wallets w JOIN passkey_clone_approvals p ON p.account_id=w.account_id WHERE w.account_id=$1`).get(accountId);
    console.log(JSON.stringify({reviewedActivation:{...result,...evidence}}));

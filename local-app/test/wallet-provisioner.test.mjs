@@ -76,6 +76,16 @@ test('Operator review cannot recycle an ambiguous broadcast or reserved fees',as
  const f=await fixture(t);f.set('ambiguous');const worker=createAutoActivation(f.db,f);
  assert.equal((await worker.runNext()).status,'ambiguous');await assert.rejects(worker.runReviewed(f.accountId));assert.equal(f.sends,1);
 });
+
+test('Deployment first-review command cannot repeat even a pre-broadcast failed review',async t=>{
+ const f=await fixture(t);
+ const worker=createAutoActivation(f.db,{...f,makeProvisioner:()=>({quote:async()=>{throw Error('Read-only gate failed');}})});
+ assert.equal((await worker.runNext()).status,'stopped');
+ assert.equal((await worker.runReviewed(f.accountId,{firstReviewOnly:true})).status,'stopped');
+ await assert.rejects(worker.runReviewed(f.accountId,{firstReviewOnly:true}),/already consumed/);
+ assert.equal(f.sends,0);
+ assert.equal((await f.db.prepare("SELECT count(*) AS n FROM passkey_activation_events WHERE account_id=$1 AND stage='OPERATOR_REVIEW'").get(f.accountId)).n,1);
+});
 test('Durable failure diagnostics exclude arbitrary SDK data and secrets',async t=>{
  const f=await fixture(t);await createAutoActivation(f.db,{...f,makeProvisioner:async()=>{throw Object.assign(Error('SECRET TEST VALUE'),{privateKey:'SECRET TEST VALUE',provisioningStage:'SECRET TEST VALUE'});}}).runNext();
  const rows=await f.db.prepare('SELECT * FROM passkey_activation_events WHERE account_id=$1').all(f.accountId);

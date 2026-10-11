@@ -54,9 +54,10 @@ export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now}){
  }
  // Operator-only, explicit ONE new attempt after reviewing pre-broadcast STOP.
  // Never called by the worker timer; no public route exposes this capability.
- async function runReviewed(accountId){
+ async function runReviewed(accountId,{firstReviewOnly=false}={}){
   const job=await db.transaction(async()=>{
    await db.lock('neuron-storm:auto-activation:'+relayer);assert(!await blocked(),'Relayer has unresolved work');
+   if(firstReviewOnly)assert(!await db.prepare("SELECT id FROM passkey_activation_events WHERE account_id=$1 AND stage='OPERATOR_REVIEW' LIMIT 1").get(accountId),'This one-time operator review was already consumed');
    const previous=await db.prepare('SELECT * FROM passkey_auto_activations WHERE account_id=$1 FOR UPDATE').get(accountId);
    assert(previous&&previous.phase==='stopped'&&previous.relayer===relayer,'Only a reviewed pre-broadcast STOP can resume');
    const wallet=await db.prepare(`SELECT w.* FROM passkey_clone_wallets w JOIN passkey_accounts a ON a.id=w.account_id
