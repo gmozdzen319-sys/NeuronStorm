@@ -5,7 +5,7 @@ import {convertCOSEtoPKCS,isoCBOR} from '@simplewebauthn/server/helpers';
 import {createApp} from './database.mjs';
 import {loadLegal} from '../legal.mjs';
 import {createPasskeyAccounts,passkeyConfiguration,strictClientData} from '../passkey-accounts.mjs';
-import {createPasskeyWallet,createTokenMetadataReader,tokenAddress} from '../passkey-wallet.mjs';
+import {createPasskeyWallet,createTokenMetadataReader,createTokenBalanceReader,tokenAddress} from '../passkey-wallet.mjs';
 import {Interface} from 'quais';
 const config={enabled:true,origin:'http://localhost:3000',rpID:'localhost'},legal=loadLegal({published:false,version:'QA'});
 const b64=v=>Buffer.from(v).toString('base64url'),sha=v=>createHash('sha256').update(v).digest();
@@ -61,7 +61,7 @@ test('Passkey account integration with actual P-256 signatures and PostgreSQL sc
  await t.test('expiry and logout invalidate access',async()=>{const r=await service.options('login',browser);clock+=120001;await assert.rejects(service.verify('login',browser,{id:r.id,response:device.assertion(r.options)}));await service.logout(registered.raw);assert.equal(await service.session(registered.raw),null);});
  await t.test('revoked credential cannot login or retain a session',async()=>{const r=await service.options('login',browser),s=await service.verify('login',browser,{id:r.id,response:device.assertion(r.options)});await app.db.prepare('UPDATE passkey_credentials SET revoked_at=$1 WHERE account_id=$2').run(clock,s.account.id);assert.equal(await service.session(s.raw),null);const n=await service.options('login',browser);await assert.rejects(service.verify('login',browser,{id:n.id,response:device.assertion(n.options)}));});
  await t.test('wallet has no fake address, QR, zero balance or authorized send',async()=>{const s=await wallet.state(registered.account);assert.equal(s.address,null);assert.equal(s.quaiBalance,null);assert.equal(s.receiveAvailable,false);assert.equal(s.sendAvailable,false);assert.throws(()=>wallet.blocked(registered.account),e=>e.status===423);assert.throws(()=>wallet.blocked(null),e=>e.status===401);});
- await t.test('token metadata reviewed, duplicates rejected, identities isolated',async()=>{const metadata={contract:'0x0000000000000000000000000000000000000001',name:'Example',symbol:'EX',decimals:18};await assert.rejects(wallet.add(registered.account,{...metadata,symbol:'Trusted NS'}),e=>e.status===409);await wallet.add(registered.account,metadata);await assert.rejects(wallet.add(registered.account,metadata),e=>e.status===409);assert.equal((await wallet.state(registered.account)).tokens.length,1);assert.equal((await wallet.state({id:'unrelated',method:'passkey'})).tokens.length,0);});
+ await t.test('token metadata reviewed, duplicates rejected, identities isolated',async()=>{const metadata={contract:'0x0000000000000000000000000000000000000001',name:'Example',symbol:'EX',decimals:18};await assert.rejects(wallet.add(registered.account,{...metadata,symbol:'Trusted NS'}),e=>e.status===409);await wallet.add(registered.account,metadata);await assert.rejects(wallet.add(registered.account,metadata),e=>e.status===409);assert.equal((await wallet.tokens(registered.account)).tokens.length,1);assert.equal((await wallet.state(registered.account)).tokens.length,1);assert.equal((await wallet.state({id:'unrelated',method:'passkey'})).tokens.length,0);});
  await t.test('database cannot be used to activate an unreviewed wallet',async()=>{await assert.rejects(app.db.prepare("UPDATE passkey_wallets SET status='active' WHERE account_id=$1").run(registered.account.id));});
 });
 test('strict original client JSON accepts legal variants, rejects duplicate/ambiguous fields',()=>{
@@ -107,4 +107,21 @@ test('Passkey identity and deterministic clone plan survive application restart'
   assert.equal(before.receiveAvailable,false);
   assert.equal((await app.db.prepare('SELECT COUNT(*) AS n FROM passkey_wallets').get()).n,1);
  } finally {await app.close();}
+});
+
+test('added token balance uses exact decimals and current owner; RPC errors remain unavailable',async()=>{
+ const abi=new Interface(['function balanceOf(address) view returns(uint256)']);let owner,chain='0x9',invalid=false;
+ const read=createTokenBalanceReader(async(method,params)=>{if(method==='quai_chainId')return chain;assert.equal(method,'quai_call');owner=abi.decodeFunctionData('balanceOf',params[0].data)[0];return invalid?'0x':abi.encodeFunctionResult('balanceOf',[1234567n]);});
+ const token={contract:'0x0000000000000000000000000000000000000001',decimals:6},wallet='0x0000000000000000000000000000000000000002';
+ assert.equal(await read(token,wallet),'1.234567');assert.equal(owner,wallet);
+ invalid=true;await assert.rejects(read(token,wallet));invalid=false;chain='0x1';await assert.rejects(read(token,wallet));
+});
+
+test('built-in NS balance is read without adding tokens and never confused with unavailable',async()=>{
+ const address='0x0000000000000000000000000000000000000002';let calls=0,unavailable=false;
+ const service=createPasskeyWallet({}, {readBalance:async(token,owner)=>{calls++;assert.equal(token.contract,'0x003bc332Ef45fdd554F9e81786be6312A72540E6');assert.equal(owner,address);if(unavailable)throw Error('RPC');return '0.0';}});
+ service.state=async()=>({tokens:[],receiveAvailable:true,address});
+ assert.deepEqual(await service.tokenBalances({}),{nsBalance:'0.0',tokens:[]});assert.equal(calls,1);
+ unavailable=true;assert.equal((await service.tokenBalances({})).nsBalance,null);
+ service.state=async()=>({tokens:[],receiveAvailable:false,address:null});await service.tokenBalances({});assert.equal(calls,2);
 });

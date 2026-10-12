@@ -47,17 +47,38 @@ export function createPasskeyUI({api,onExternal,onAccount}){
   }
   $('#passkey-signin').addEventListener('click',()=>authenticate('login'));
   $('#passkey-signup').addEventListener('click',()=>authenticate('register'));
-  let activationTimer;
+  let activationTimer,tokenRevision=0;
+  function renderTokens(tokens){
+    $('#pk-tokens').replaceChildren();
+    for(const token of tokens){
+      const item=document.createElement('div');item.className='pk-token';
+      const title=document.createElement('strong'),detail=document.createElement('p'),balance=document.createElement('p');
+      title.textContent=token.symbol+' · '+token.name;detail.textContent=token.contract;detail.className='address';
+      balance.textContent=token.balance===undefined?'Loading balance…':token.balance===null?'Balance unavailable':token.balance+' '+token.symbol;
+      item.append(title,balance,detail);$('#pk-tokens').append(item);
+    }
+  }
+  async function loadTokens(revision){
+    const request=++tokenRevision;
+    try{
+      const saved=await api('/api/passkey/wallet/tokens');if(revision!==epoch||request!==tokenRevision)return;renderTokens(saved.tokens);
+
+      try{const balances=await api('/api/passkey/wallet/token-balances');if(revision===epoch&&request===tokenRevision){renderTokens(balances.tokens);$('#pk-ns-balance').textContent=balances.nsBalance??'Not available';}}
+      catch{if(revision===epoch&&request===tokenRevision){renderTokens(saved.tokens.map(t=>({...t,balance:null})));$('#pk-ns-balance').textContent='Not available';}}
+    }catch{if(revision===epoch&&request===tokenRevision){$('#pk-token-preview').textContent='Unable to load saved tokens. Please refresh.';$('#pk-ns-balance').textContent='Not available';}}
+  }
   async function setAccount(next,force=false){
     if(!force&&account?.id===next?.id&&account?.method===next?.method)return;
     clearTimeout(activationTimer);
     const revision=++epoch;account=next?.method==='passkey'?next:null;
+    $('#pk-ns-balance').textContent=account?'Loading…':'Not available';
     transfer=null;receiveAddress=null;$('#pk-wallet-address').textContent='';$('#pk-quai-balance').textContent='Not available';$('#pk-receive').disabled=true;$('#pk-send').disabled=true;
     $('#pk-transfers').replaceChildren();
     $('#pk-receive-panel').hidden=true;$('#pk-receive-address').textContent='';$('#pk-receive-qr').removeAttribute('src');$('#pk-send-form').hidden=true;$('#pk-recipient').value='';$('#pk-amount').value='';$('#pk-send-review').hidden=true;$('#pk-send-status').textContent='';
     preview=null;$('#pk-id').textContent='';$('#pk-token-address').value='';$('#pk-token-preview').textContent='';$('#pk-token-submit').textContent='Review token';
     if(!force||!account)$('#passkey-home').hidden=true;$('#pk-tokens').replaceChildren();$('#pk-devices').replaceChildren();$('#pk-status').textContent='';$('#pk-token-form').hidden=true;
     if(!account)return;
+    void loadTokens(revision);
     $('#pk-id').textContent=account.id;$('#pk-status').textContent='Loading your account…';
     try{const state=await api('/api/passkey/wallet');if(revision!==epoch)return;
       $('#pk-status').textContent=state.reason;
@@ -66,7 +87,6 @@ export function createPasskeyUI({api,onExternal,onAccount}){
       $('#pk-wallet-address').textContent=state.address||'';$('#pk-quai-balance').textContent=state.quaiBalance??'Not available';$('#pk-receive').disabled=!state.receiveAvailable;$('#pk-send').disabled=!state.sendAvailable;
       const states={awaiting_confirmation:'Awaiting confirmation',verifying:'Checking confirmation',authorized:'Awaiting submission',submitting:'Submitted · awaiting verification',confirmed:'Confirmed',failed:'Failed',stopped:'Stopped'};
       for(const transfer of state.transfers||[]){const item=document.createElement('p');item.className='address';item.textContent=(states[transfer.phase]||'Needs review')+(transfer.tx_hash?' · '+transfer.tx_hash:'');$('#pk-transfers').append(item);}
-      for(const token of state.tokens){const item=document.createElement('div');item.className='pk-token';const title=document.createElement('strong'),detail=document.createElement('p');title.textContent=token.symbol+' · '+token.name;detail.textContent=token.contract;detail.className='address';item.append(title,detail);$('#pk-tokens').append(item);}
     }catch(error){if(revision===epoch)$('#pk-status').textContent=error.message;}
   }
   let preview=null;
@@ -100,7 +120,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
     try{
       if(!preview){const result=await api('/api/passkey/wallet/token-preview',{contract:$('#pk-token-address').value.trim()});if(revision!==epoch)return;preview=result;
         $('#pk-token-preview').textContent=result.name+' ('+result.symbol+') · '+result.decimals+' decimals · '+result.contract+'\nToken names and symbols do not establish trust. Verify the contract independently.';$('#pk-token-submit').textContent='Add token';
-      }else{await api('/api/passkey/wallet/tokens',preview);if(revision!==epoch)return;preview=null;$('#pk-token-submit').textContent='Review token';await setAccount(account,true);}
+      }else{await api('/api/passkey/wallet/tokens',preview);if(revision!==epoch)return;preview=null;$('#pk-token-submit').textContent='Review token';$('#pk-token-preview').textContent='Token added. Updating balance…';$('#pk-token-address').value='';void loadTokens(revision);}
     }catch(error){if(revision===epoch)$('#pk-token-preview').textContent=error.message;}finally{$('#pk-token-submit').disabled=false;}
   });
   $('#pk-manage').addEventListener('click',async()=>{

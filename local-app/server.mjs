@@ -123,6 +123,8 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         if(path==='/api/passkey/devices'&&req.method==='GET')return json(200,{devices:await passkeys.devices(current)});
         if(path==='/api/passkey/wallet'&&req.method==='GET')return json(200,await passkeyWallet.state(current));
         if(path==='/api/passkey/wallet/token-preview'&&req.method==='POST')return json(200,await passkeyWallet.preview(current,await body(req)));
+        if(path==='/api/passkey/wallet/tokens'&&req.method==='GET')return json(200,await passkeyWallet.tokens(current));
+        if(path==='/api/passkey/wallet/token-balances'&&req.method==='GET')return json(200,await passkeyWallet.tokenBalances(current));
         if(path==='/api/passkey/wallet/tokens'&&req.method==='POST')return json(200,await passkeyWallet.add(current,await body(req)));
         if(path==='/api/passkey/wallet/receive'&&req.method==='GET')return json(200,await passkeyWallet.receive(current));
         if(path==='/api/passkey/wallet/send/prepare'&&req.method==='POST')return json(200,await passkeyWallet.send.prepare(current,await body(req)));

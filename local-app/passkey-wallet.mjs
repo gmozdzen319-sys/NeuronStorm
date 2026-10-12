@@ -1,7 +1,7 @@
-import {getAddress,isQuaiAddress,Interface} from 'quais';
+import {getAddress,isQuaiAddress,Interface,formatUnits} from 'quais';
 import {NS_TOKEN} from './neuron-token.mjs';
 import {assignCloneWallet,loadCloneWallet,WALLET_GENERATION} from './wallet-infrastructure.mjs';
-import {createWalletChain} from './wallet/chain.mjs';
+import {createWalletChain,createWalletRPC} from './wallet/chain.mjs';
 import {createNativeSend} from './wallet/native-send.mjs';
 import QRCode from 'qrcode';
 
@@ -37,10 +37,28 @@ export function createTokenMetadataReader(fetcher=fetch){
     }catch{throw fail(422,'This contract could not be verified as a supported token. Try again later or check its address.');}
   };
 }
-export function createPasskeyWallet(db,{readMetadata=createTokenMetadataReader(),chain=createWalletChain(),executor=null,autoActivation=false,now=Date.now}={}){
+export function createTokenBalanceReader(rpc=createWalletRPC()){
+ const abi=new Interface(['function balanceOf(address) view returns(uint256)']);
+ return async(token,wallet)=>{
+  if(BigInt(await rpc('quai_chainId',[]))!==9n)throw Error('Wrong network');
+  const contract=tokenAddress(token.contract),owner=tokenAddress(wallet);
+  const result=await rpc('quai_call',[{to:contract,data:abi.encodeFunctionData('balanceOf',[owner])},'latest']);
+  return formatUnits(abi.decodeFunctionResult('balanceOf',result)[0],token.decimals);
+ };
+}
+export function createPasskeyWallet(db,{readMetadata=createTokenMetadataReader(),readBalance=createTokenBalanceReader(),chain=createWalletChain(),executor=null,autoActivation=false,now=Date.now}={}){
   const requireAccount=a=>{if(!a||a.method!=='passkey')throw fail(401,'Sign in with your passkey.');};
   const send=createNativeSend(db,{chain,executor,now});
   const service={send,
+    async tokens(account){requireAccount(account);return {tokens:await db.prepare('SELECT contract,name,symbol,decimals FROM passkey_tokens WHERE account_id=$1 ORDER BY symbol,contract').all(account.id)};},
+    async tokenBalances(account){
+      const state=await service.state(account);
+      const assets=await Promise.all([{contract:NS_TOKEN.address,decimals:NS_TOKEN.decimals},...state.tokens].map(async token=>{
+       if(!state.receiveAvailable)return {...token,balance:null};
+       try{return {...token,balance:await readBalance(token,state.address)};}catch{return {...token,balance:null};}
+      }));
+      return {nsBalance:assets[0].balance,tokens:assets.slice(1)};
+    },
     async state(account){requireAccount(account);const base={accountId:account.id,status:'awaiting_review',address:null,chainId:9,quaiBalance:null,nsBalance:null,
       tokens:await db.prepare('SELECT contract,name,symbol,decimals FROM passkey_tokens WHERE account_id=$1 ORDER BY symbol,contract').all(account.id),
       transfers:await db.prepare('SELECT id,phase,tx_hash,created_at FROM passkey_native_operations WHERE account_id=$1 ORDER BY created_at DESC LIMIT 10').all(account.id),
