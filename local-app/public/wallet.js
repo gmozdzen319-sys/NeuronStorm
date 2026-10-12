@@ -1,8 +1,20 @@
 import {getWalletProvider,isBlip,walletName,blipLink} from './wallet-provider.js';
+import {deviceResponse} from './passkey-ui.js';
 const labels = { connect: 'wallet connection', challenge: 'message preparation', sign: 'message signing', account: 'account check', verify: 'server verification' };
 export function createSignedSender(api,getAccount){
   let pending=null;
   return async function send(path,payload,progress=()=>{}){
+    const owner=getAccount();
+    if(owner?.method==='passkey'){
+      pending=null;
+      const challenge=await api('/api/actions/challenge',{path,payload});
+      if(challenge.method!=='passkey'||getAccount()?.id!==owner.id)throw new Error('Your account changed. Please sign in again.');
+      progress('Confirm this message with your passkey…');
+      const response=await deviceResponse('login',challenge.options);
+      if(getAccount()?.id!==owner.id||getAccount()?.method!=='passkey')throw new Error('Your account changed. Please sign in again.');
+      progress('Sending your confirmed message…');
+      return api(path,{actionId:challenge.id,response});
+    }
     const address=getAccount()?.address,provider=getWalletProvider();
     if(!address||!provider?.request)throw new Error('Open this page in your wallet or Blip and sign in first.');
     const check=async()=>{const accounts=await provider.request({method:'quai_accounts',params:[]});if(accounts?.[0]?.toLowerCase()!==address.toLowerCase()||getAccount()?.address!==address)throw new Error('Select your signed-in account in your wallet, then try again.');};

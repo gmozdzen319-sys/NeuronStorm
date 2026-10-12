@@ -53,7 +53,7 @@ function fillOptions(){for(const control of Object.values(topicSuggestions))cont
 function showEditor() {
   $('#profile-eyebrow').textContent=profile?'KEEP YOUR PROFILE UP TO DATE':'MAKE YOURSELF AT HOME';
   $('#profile-title').textContent=profile?'Edit your profile':'Create your profile';
-  $('#profile-intro').textContent='A little about you and the topics you care about.';
+  $('#profile-intro').textContent=!profile&&currentAccount?.method==='passkey'?'Complete your profile while we prepare your wallet in the background. You can join conversations after saving your profile.':'A little about you and the topics you care about.';
   $('#profile-view').hidden=true;form.hidden=false;
   $('#cancel-edit').hidden=!profile;
   $('#save-profile').textContent=profile?'Save changes':'Save profile';
@@ -80,14 +80,13 @@ async function loadProfile() {
 }
 async function renderSession(account) {
   passkeyUI.setAccount(account);
-  if(account?.method==='passkey'){
-    currentAccount=account;conversations.clear();conversations.setAccount(null);tokenUI.setAccount(null);profileRevision++;loading=false;profile=null;
-    login.hidden=true;logout.hidden=false;$('#landing').hidden=true;$('#profile-area').hidden=true;$('#wallet-button').hidden=false;return;
-  }
-  const changed=currentAccount?.address?.toLowerCase()!==account?.address?.toLowerCase();
-  currentAccount=account;conversations.setAccount(account);tokenUI.setAccount(account);
+  const identity=a=>a?.method==='passkey'?'passkey:'+a.id:a?.address?.toLowerCase();
+  const changed=identity(currentAccount)!==identity(account);
+  if(changed){conversations.clear();profileRevision++;loading=false;profile=null;}
+  currentAccount=account;conversations.setAccount(account);tokenUI.setAccount(account?.method==='passkey'?null:account);
   login.hidden=!!account;logout.hidden=!account;if(changed||!account)$('#landing').hidden=!!account;if(changed||!account)$('#profile-area').hidden=!account;
-  $('#address').textContent=account?.address||'';$('#role').textContent=account?.role==='admin'?'Administrator':'';
+  $('#sign-in-method').textContent=account?.method==='passkey'?'Signed in with Passkey':'Signed in with '+walletName(selectedProvider||getWalletProvider());
+  $('#address').textContent=account?.method==='passkey'?'':account?.address||'';$('#role').textContent=account?.role==='admin'?'Administrator':'';
   if(!account){conversations.clear();profileRevision++;loading=false;profile=null;selected={work:[],hobbies:[]};form.reset();form.hidden=true;$('#profile-view').hidden=true;for(const kind of ['work','hobbies']){$('#saved-'+kind).replaceChildren();$('#'+kind+'-selected').replaceChildren();}$('#saved-nickname').textContent='';$('#saved-name').textContent='';profileNotice();return;}
   if(changed) {await loadProfile();if(!profile)$('#profile-title').focus();}
 }

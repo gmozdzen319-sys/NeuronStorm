@@ -1,6 +1,7 @@
 import {randomBytes, randomUUID, createHash} from 'node:crypto';
 import {generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse} from '@simplewebauthn/server';
 import {assignCloneWallet} from './wallet-infrastructure.mjs';
+import {communityAddress} from './passkey-community.mjs';
 
 const secret=()=>randomBytes(32).toString('base64url');
 export const passkeyHash=value=>createHash('sha256').update(value).digest('hex');
@@ -48,7 +49,7 @@ export function createPasskeyAccounts(db,{config,legal,now=Date.now}){
       JOIN passkey_accounts a ON a.id=s.account_id JOIN passkey_credentials c ON c.id=s.credential_id
       WHERE s.token_hash=$1 AND s.expires>$2 AND c.revoked_at IS NULL AND c.account_id=a.id
       AND a.rp_id=$3 AND a.origin=$4`).get(passkeyHash(raw),now(),config.rpID,config.origin);
-    return row?{id:row.id,method:'passkey',role:'member',address:null,walletStatus:'awaiting_review'}:null;
+    return row?{id:row.id,method:'passkey',role:'member',address:await communityAddress(db,row.id,now),walletStatus:'awaiting_review'}:null;
   }
   async function options(purpose,browser,input={}){
     enabled();if(!['register','login'].includes(purpose))throw fail(400,'Invalid request.');
@@ -97,12 +98,27 @@ export function createPasskeyAccounts(db,{config,legal,now=Date.now}){
         await db.prepare('INSERT INTO passkey_sessions VALUES($1,$2,$3,$4)').run(passkeyHash(raw),owner,credentialID,now()+28800000);
       });
     }catch{throw fail(401,'The passkey could not be verified. Please start again.');}
-    return {raw,account:{id:owner,method:'passkey',role:'member',address:null,walletStatus:'awaiting_review'}};
+    return {raw,account:await session(raw)};
   }
   async function logout(raw){if(raw)await db.prepare('DELETE FROM passkey_sessions WHERE token_hash=$1').run(passkeyHash(raw));}
   async function devices(account){
     if(!account)throw fail(401,'Please sign in.');
     return db.prepare('SELECT label,backed_up,created_at,last_used FROM passkey_credentials WHERE account_id=$1 AND revoked_at IS NULL ORDER BY created_at').all(account.id);
   }
-  return {session,options,verify,logout,devices};
+  const actionChallenge=message=>createHash('sha256').update('Neuron Storm community action\n'+message).digest('base64url');
+  async function actionOptions(account,message){
+    enabled();if(account?.method!=='passkey')throw fail(401,'Please sign in.');
+    const credentials=await db.prepare('SELECT id FROM passkey_credentials WHERE account_id=$1 AND revoked_at IS NULL').all(account.id);
+    return {challenge:actionChallenge(message),rpId:config.rpID,userVerification:'required',timeout:120000,allowCredentials:credentials.map(c=>({id:c.id,type:'public-key'}))};
+  }
+  async function verifyAction(account,response,message){
+    enabled();if(account?.method!=='passkey')throw fail(401,'Please sign in.');
+    strictClientData(response?.response?.clientDataJSON);
+    const c=await db.prepare(`SELECT c.*,a.user_handle,a.rp_id,a.origin FROM passkey_credentials c JOIN passkey_accounts a ON a.id=c.account_id WHERE c.id=$1 AND c.account_id=$2 AND c.revoked_at IS NULL FOR UPDATE OF c`).get(response?.id,account.id);
+    if(!c||c.rp_id!==config.rpID||c.origin!==config.origin||(response.response.userHandle!==null&&response.response.userHandle!==c.user_handle))throw fail(403,'This passkey does not belong to your account.');
+    const checked=await verifyAuthenticationResponse({response,expectedChallenge:actionChallenge(message),expectedOrigin:config.origin,expectedRPID:config.rpID,requireUserVerification:true,credential:{id:c.id,publicKey:Buffer.from(c.public_key,'base64url'),counter:c.counter}});
+    if(!checked.verified)throw fail(403,'Unable to verify your confirmation.');
+    await db.prepare('UPDATE passkey_credentials SET counter=$1,last_used=$2 WHERE id=$3').run(checked.authenticationInfo.newCounter,now(),c.id);
+  }
+  return {session,options,verify,logout,devices,actionOptions,verifyAction};
 }

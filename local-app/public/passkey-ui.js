@@ -56,7 +56,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
     $('#pk-transfers').replaceChildren();
     $('#pk-receive-panel').hidden=true;$('#pk-receive-address').textContent='';$('#pk-receive-qr').removeAttribute('src');$('#pk-send-form').hidden=true;$('#pk-recipient').value='';$('#pk-amount').value='';$('#pk-send-review').hidden=true;$('#pk-send-status').textContent='';
     preview=null;$('#pk-id').textContent='';$('#pk-token-address').value='';$('#pk-token-preview').textContent='';$('#pk-token-submit').textContent='Review token';
-    $('#passkey-home').hidden=!account;$('#pk-tokens').replaceChildren();$('#pk-devices').replaceChildren();$('#pk-status').textContent='';$('#pk-token-form').hidden=true;
+    if(!force||!account)$('#passkey-home').hidden=true;$('#pk-tokens').replaceChildren();$('#pk-devices').replaceChildren();$('#pk-status').textContent='';$('#pk-token-form').hidden=true;
     if(!account)return;
     $('#pk-id').textContent=account.id;$('#pk-status').textContent='Loading your account…';
     try{const state=await api('/api/passkey/wallet');if(revision!==epoch)return;
@@ -110,6 +110,6 @@ export function createPasskeyUI({api,onExternal,onAccount}){
       const note=document.createElement('p');note.className='field-hint';note.textContent='A synced passkey may exist on more than one device. This list shows credentials, not physical devices. Adding or removing a wallet key is unavailable until wallet activation. Account recovery beyond an authorized passkey is not available.';$('#pk-devices').append(note);
     }catch(error){if(revision===epoch)$('#pk-devices').textContent=error.message;}
   });
-  $('#wallet-button').addEventListener('click',event=>{if(account){event.stopImmediatePropagation();$('#passkey-home').hidden=false;$('#pk-title').focus();}},true);
+  $('#wallet-button').addEventListener('click',event=>{if(account){event.stopImmediatePropagation();$('#landing').hidden=true;$('#profile-area').hidden=true;$('#conversations').hidden=true;$('#passkey-home').hidden=false;$('#pk-title').focus();}},true);
   return {open,setAccount};
 }

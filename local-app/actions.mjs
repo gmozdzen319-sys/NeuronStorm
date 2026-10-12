@@ -29,16 +29,26 @@ export async function prepareAction(db,account,session,path,input,origin,now){
   (await db.prepare("INSERT INTO signed_actions(id,address,session_hash,path,payload,message,expires) VALUES($1,$2,$3,$4,$5,$6,$7)").run(id,account.address.toLowerCase(),session,path,JSON.stringify(payload),message,expires));
   return {id,message};
 }
-export async function submitAction(db,account,session,path,input,now){
+export async function submitAction(db,account,session,path,input,now,verifyPasskey){
  return db.transaction(async () => {
  await db.lock("action:"+account?.address.toLowerCase());
 
   (await requireProfile(db,account));
-  if(typeof input.actionId!=='string'||typeof input.signature!=='string'||input.signature.length>300)throw fail(400,'Confirm this message in Pelagus before sending.');
+  if(typeof input.actionId!=='string')throw fail(400,'Confirm this message before sending.');
+  if(account.method!=='passkey'&&(typeof input.signature!=='string'||input.signature.length>300))throw fail(400,'Confirm this message in Pelagus before sending.');
   const row=(await db.prepare("SELECT * FROM signed_actions WHERE id=$1 AND address=$2 AND session_hash=$3 AND path=$4").get(input.actionId,account.address.toLowerCase(),session,path));
   if(!row)throw fail(403,'This signed request does not belong to this session or conversation.');
-  let recovered;try{recovered=verifyMessage(row.message,input.signature).toLowerCase();}catch{throw fail(403,'The message signature could not be verified.');}
-  if(recovered!==row.address)throw fail(403,'The message signature does not match your account.');
+  if(account.method==='passkey'){
+   // Session owns the immutable challenge. A completed submission returns only
+   // its original result; it never consumes a second signature or posts twice.
+   if(row.result)return JSON.parse(row.result);
+   if(row.expires<=now)throw fail(409,'This confirmation expired. Please confirm again.');
+   if(!verifyPasskey)throw fail(403,'Passkey confirmation is unavailable.');
+   try{await verifyPasskey(account,input.response,row.message);}catch{throw fail(403,'The passkey confirmation could not be verified.');}
+  }else{
+   let recovered;try{recovered=verifyMessage(row.message,input.signature).toLowerCase();}catch{throw fail(403,'The message signature could not be verified.');}
+   if(recovered!==row.address)throw fail(403,'The message signature does not match your account.');
+  }
   // A retry returns the original result, never writes a second message.
   if(row.result)return JSON.parse(row.result);
   if(row.expires<=now)throw fail(409,'This signing request expired. Please sign the message again.');

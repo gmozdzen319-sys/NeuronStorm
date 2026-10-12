@@ -40,7 +40,13 @@ export async function debate(db,account,id,session,params,input,now){
   if(params.get('presence')==='1'||input)(await db.prepare("INSERT INTO debate_presence VALUES($1,$2,$3,$4) ON CONFLICT(question_id,address,session_hash) DO UPDATE SET seen=excluded.seen").run(id,address,session,now));
   const messages=(await db.prepare(`SELECT m.id,m.body,m.created_at AS "createdAt",p.nickname AS author,(m.author=$1)::int AS mine FROM debate_messages m JOIN profiles p ON p.address=m.author WHERE m.question_id=$2 AND NOT EXISTS(SELECT 1 FROM blocked_members b WHERE (b.owner=$3 AND b.target=m.author) OR (b.target=$4 AND b.owner=m.author)) ${before?'AND m.id<$5':after?'AND m.id>$5':''} ORDER BY m.id ${after?'ASC':'DESC'} LIMIT 50`).all(address,...(before||after?[id,address,address,before||after]:[id,address,address])));
   if(!after)messages.reverse();
-  const onlineRows=(await db.prepare("SELECT DISTINCT p.address,p.nickname FROM debate_presence d JOIN profiles p ON p.address=d.address JOIN sessions s ON s.token_hash=d.session_hash AND s.expires>$1 WHERE d.question_id=$2 AND d.seen>$3 ORDER BY p.nickname").all(now,id,now-25000));
+  const onlineRows=(await db.prepare(`SELECT DISTINCT p.address,p.nickname FROM debate_presence d JOIN profiles p ON p.address=d.address
+   WHERE d.question_id=$2 AND d.seen>$3 AND (
+    EXISTS(SELECT 1 FROM sessions s WHERE s.token_hash=d.session_hash AND s.address=d.address AND s.expires>$1)
+    OR EXISTS(SELECT 1 FROM passkey_sessions s JOIN passkey_credentials c ON c.id=s.credential_id AND c.account_id=s.account_id
+      JOIN passkey_community_accounts a ON a.account_id=s.account_id
+      WHERE s.token_hash=d.session_hash AND s.expires>$1 AND c.revoked_at IS NULL AND a.address=d.address)
+   ) ORDER BY p.nickname`).all(now,id,now-25000));
   const online=[];for(const p of onlineRows)if(!await isBlocked(db,address,p.address))online.push(p.nickname);
   const oldest=messages[0]?.id;
   const requested=(params.get('ratings')||'').split(',').filter(Boolean).map(Number);

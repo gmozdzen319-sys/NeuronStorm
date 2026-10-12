@@ -23,6 +23,7 @@ export function createConversations({api,onProfile,onExpired}) {
   const node=(tag,text,className)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el;};
   function status(id,text='',error=false){const el=$(id);el.textContent=text;el.classList.toggle('error',error);}
   function shell(next){
+    $('#passkey-home').hidden=true;
     debate.stop();epoch++;view=next;$('#blocked-view').hidden=next!=='blocked';$('#reports-view').hidden=next!=='reports';$('#library-view').hidden=next!=='library';$('#ranking-view').hidden=next!=='ranking';$('#wallet-view').hidden=next!=='wallet';$('#admin-view').hidden=next!=='admin';$('#notifications-view').hidden=next!=='notifications';signature='';revision=0;
     $('#landing').hidden=next!=='ask';root.hidden=next==='profile';$('#profile-area').hidden=next!=='profile';
     $('#questions-list-view').hidden=!['inbox','mine'].includes(next);$('#ask-view').hidden=next!=='ask';$('#thread-view').hidden=next!=='thread';

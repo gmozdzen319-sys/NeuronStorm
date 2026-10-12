@@ -58,12 +58,14 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   const readNeuron=createNeuronReader(tokenFetch);
   const limits = new Map();
   const cookie = (name, value, age) => `${name}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${age}${origin.startsWith('https:') ? '; Secure' : ''}`;
-  async function account(req) {
+  async function externalAccount(req) {
     const session = cookies(req).ns_session;
     if (!session || !/^[a-f0-9]{64}$/.test(session)) return null;
     const row = (await db.prepare("SELECT address FROM sessions WHERE token_hash=$1 AND expires>$2").get(hash(session), now()));
     return row ? { address: getAddress(row.address), role: row.address === ADMIN ? 'admin' : 'member' } : null;
   }
+  async function account(req){const current=await externalAccount(req)||await passkeys.session(cookies(req).ns_passkey_session);return current?.address?current:null;}
+  async function actionSession(req){return hash((await account(req))?.method==='passkey'?cookies(req).ns_passkey_session:cookies(req).ns_session||'');}
   async function body(req) {
     if (req.headers['content-type'] !== 'application/json') throw failure(415, 'JSON format is required.');
     let data = '';
@@ -158,9 +160,13 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if(path==='/api/token/balance'&&req.method==='GET'){const current=(await account(req));if(!current)throw failure(401,'Please sign in to view your balance.');return json(200,await readNeuron(current.address));}
       if(path==='/api/token/confirm'&&req.method==='POST'){const current=(await account(req));if(!current)throw failure(401,'Please sign in first.');const input=await body(req);if(input.contract!==NS_TOKEN.address||input.confirmed!==true)throw failure(400,'Confirm that Neuron Storm is visible in Pelagus.');(await db.prepare("INSERT INTO token_confirmations VALUES($1,$2,$3) ON CONFLICT(address) DO UPDATE SET contract=excluded.contract,confirmed_at=excluded.confirmed_at").run(current.address.toLowerCase(),NS_TOKEN.address,now()));return json(200,{confirmed:true});}
       if(path==='/api/wallet' && req.method==='GET'){const current=(await account(req));if(!current)throw failure(401,'Please sign in to view your wallet.');const neuron=await readNeuron(current.address);return json(200,{address:current.address,network:'Quai Mainnet',assets:[{name:NS_TOKEN.name,symbol:NS_TOKEN.symbol,type:'ERC-20',contract:NS_TOKEN.address,balance:neuron.balance}],updatedAt:neuron.updatedAt||new Date(now()).toISOString()});}
-      if(path==='/api/actions/challenge'&&req.method==='POST'){const input=await body(req);return json(200,(await prepareAction(db,(await account(req)),hash(cookies(req).ns_session||''),input.path,input.payload,origin,now())));}
+      if(path==='/api/actions/challenge'&&req.method==='POST'){
+        const input=await body(req),current=await account(req);
+        const challenge=await prepareAction(db,current,await actionSession(req),input.path,input.payload,origin,now());
+        return json(200,{...challenge,...(current.method==='passkey'?{method:'passkey',options:await passkeys.actionOptions(current,challenge.message)}:{})});
+      }
       const debateRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/debate$/);
-      if(debateRoute&&['GET','POST'].includes(req.method))return json(200,(await debate(db,(await account(req)),debateRoute[1],hash(cookies(req).ns_session||''),new URL(req.url,origin).searchParams,req.method==='POST'?await body(req):null,now())));
+      if(debateRoute&&['GET','POST'].includes(req.method))return json(200,(await debate(db,(await account(req)),debateRoute[1],await actionSession(req),new URL(req.url,origin).searchParams,req.method==='POST'?await body(req):null,now())));
       if (path === '/api/session' && req.method === 'GET') return json(200, { account: (await account(req)) || await passkeys.session(cookies(req).ns_passkey_session) });
       if(path==='/api/notifications'&&req.method==='GET')return json(200,(await listNotifications(db,(await account(req)),new URL(req.url,origin).searchParams)));
       if(['/api/notifications/read','/api/notifications/read-all'].includes(path)&&req.method==='POST')return json(200,(await readNotifications(db,(await account(req)),await body(req),path.endsWith('read-all'),now())));
@@ -189,17 +195,17 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if(path==='/api/questions'){
         const current=(await account(req));
         if(req.method==='GET')return json(200,{questions:(await listQuestions(db,current,new URL(req.url,origin).searchParams.get('view')||'inbox')),serverTime:now()});
-        if(req.method==='POST')return json(201,(await submitAction(db,current,hash(cookies(req).ns_session||''),path,await body(req),now())));
+        if(req.method==='POST')return json(201,(await submitAction(db,current,await actionSession(req),path,await body(req),now(),passkeys.verifyAction)));
       }
       const acceptanceRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/accept$/);
-      if(acceptanceRoute&&req.method==='POST'){const result=(await submitAction(db,(await account(req)),hash(cookies(req).ns_session||''),path,await body(req),now()));return json(200,result);}
+      if(acceptanceRoute&&req.method==='POST'){const result=(await submitAction(db,(await account(req)),await actionSession(req),path,await body(req),now(),passkeys.verifyAction));return json(200,result);}
       const voteRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/replies\/(\d+)\/vote$/);
       if(voteRoute&&req.method==='POST')return json(200,(await voteOnReply(db,(await account(req)),voteRoute[1],Number(voteRoute[2]),await body(req),now())));
       const threadRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})(?:\/(replies|read))?$/);
       if(threadRoute){
         const current=(await account(req)),[,id,action]=threadRoute;
         if(!action&&req.method==='GET')return json(200,{thread:(await readThread(db,current,id)),serverTime:now()});
-        if(action==='replies'&&req.method==='POST')return json(201,(await submitAction(db,current,hash(cookies(req).ns_session||''),path,await body(req),now())));
+        if(action==='replies'&&req.method==='POST')return json(201,(await submitAction(db,current,await actionSession(req),path,await body(req),now(),passkeys.verifyAction)));
         if(action==='read'&&req.method==='POST')return json(200,(await markThreadRead(db,current,id,await body(req))));
       }
       if (path === '/api/profile' || path === '/api/categories') {
@@ -256,8 +262,8 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       }
       if (path === '/api/logout' && req.method === 'POST') {
         const current = cookies(req);
-        await passkeys.logout(current.ns_passkey_session);
         const departing=(await account(req));if(departing)(await db.prepare("DELETE FROM globe_presence WHERE address=$1").run(departing.address.toLowerCase()));
+        await passkeys.logout(current.ns_passkey_session);
         if (current.ns_session) (await db.prepare("DELETE FROM sessions WHERE token_hash=$1").run(hash(current.ns_session)));
         if (current.ns_challenge) (await db.prepare("DELETE FROM challenges WHERE browser_hash=$1").run(hash(current.ns_challenge)));
         res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0),cookie('ns_passkey_session','',0),cookie('ns_passkey_challenge','',0)]);
