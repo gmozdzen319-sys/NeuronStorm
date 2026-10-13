@@ -10,6 +10,13 @@ import {createFeePreflight} from './preflight.mjs';
 import {createNativeFeeQuote} from './fee-quote.mjs';
 import {createNetworkVerification} from './network-verification.mjs';
 
+export function scopedFeeLoader(registry,allowedAccountId){
+ return async(database,accountId)=>{
+  if(allowedAccountId&&accountId!==allowedAccountId)return null;
+  return registry.load(database,accountId);
+ };
+}
+
 // Off until a confirmed reviewed manifest and separate fee grant are installed.
 // Does not assign, provision, migrate funds or create a grant at startup.
 export async function configuredFeeWallet(db,env=process.env){
@@ -29,6 +36,8 @@ export async function configuredFeeWallet(db,env=process.env){
   };
   executor=createFeeExecutor(db,{chain,relayer,grantId:env.NS_FEE_GRANT_ID,signer,sendRaw,preflight:createFeePreflight(verifier),estimateQuote:createNativeFeeQuote(verifier),verifyNetwork:createNetworkVerification(env)});
  }
- const send=createFeeSend(db,{chain,executor,loadWallet:registry.load});
+ // Optional controlled rollout scope. It cannot be selected by request data.
+ const loadWallet=scopedFeeLoader(registry,env.NS_FEE_ALLOWED_ACCOUNT_ID);
+ const send=createFeeSend(db,{chain,executor,loadWallet});
  return {registry,chain,send};
 }
