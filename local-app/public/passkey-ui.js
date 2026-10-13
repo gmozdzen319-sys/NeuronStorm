@@ -1,5 +1,13 @@
 const decode=value=>Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
 const encode=value=>btoa(String.fromCharCode(...new Uint8Array(value))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+export function transferReviewText(review){
+  const base=`Send ${review.amount} ${review.symbol||'QUAI'}\nFrom: ${review.wallet}\nTo: ${review.recipient}\n${review.network}`;
+  if(review.totalFee===undefined)return `${base}\nMaximum network fee: ${review.maximumFee} QUAI · paid by ${review.feePaidBy}`;
+  const units=value=>{if(typeof value!=='string'||!/^(0|[1-9]\d*)(\.\d{1,18})?$/.test(value))throw Error('Unable to verify the fee quote.');const [a,b='']=value.split('.');return BigInt(a)*10n**18n+BigInt(b.padEnd(18,'0'));};
+  const fee=units(review.networkFee),service=units(review.serviceFee),total=units(review.totalFee);
+  if(fee<=0n||service!==(fee+19n)/20n||total!==fee+service||review.feeCurrency!=='QUAI'||review.feePaidBy!=='Your wallet')throw Error('Unable to verify the fee quote.');
+  return `${base}\nToken contract: ${review.token}\nQuoted network fee: ${review.networkFee} QUAI\nService fee (5%): ${review.serviceFee} QUAI\nTotal fee from your wallet: ${review.totalFee} QUAI\nThe recipient receives the full amount. The network fee is a fixed quote; actual network usage may differ.`;
+}
 export async function deviceResponse(kind,options){
   if(!globalThis.isSecureContext||!navigator.credentials||!globalThis.PublicKeyCredential)throw Error('This browser cannot use passkeys. Choose Pelagus or BillPay.');
   const publicKey={...options,challenge:decode(options.challenge)};
@@ -47,8 +55,15 @@ export function createPasskeyUI({api,onExternal,onAccount}){
   }
   $('#passkey-signin').addEventListener('click',()=>authenticate('login'));
   $('#passkey-signup').addEventListener('click',()=>authenticate('register'));
-  let activationTimer,tokenRevision=0;
+  let activationTimer,tokenRevision=0,feeMode=false,baseAssets=[];
+  function renderSendAssets(tokens){
+    if(!feeMode)return;const select=$('#pk-send-token'),chosen=select.value,assets=new Map();
+    for(const token of [...baseAssets,...tokens])assets.set(token.contract.toLowerCase(),token);
+    select.replaceChildren();for(const token of assets.values()){const option=document.createElement('option');option.value=token.contract;option.textContent=token.symbol+(token.contract==='0x'+'0'.repeat(40)?'':' · '+token.contract);select.append(option);}
+    if([...select.options].some(o=>o.value===chosen))select.value=chosen;
+  }
   function renderTokens(tokens){
+    renderSendAssets(tokens);
     $('#pk-tokens').replaceChildren();
     for(const token of tokens){
       const item=document.createElement('div');item.className='pk-token';
@@ -71,6 +86,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
     if(!force&&account?.id===next?.id&&account?.method===next?.method)return;
     clearTimeout(activationTimer);
     const revision=++epoch;account=next?.method==='passkey'?next:null;
+    feeMode=false;baseAssets=[];$('#pk-send-token').replaceChildren();$('#pk-send-token-field').hidden=true;$('#pk-send-title').textContent='Send QUAI';$('#pk-amount-label').textContent='Amount in QUAI';$('#pk-legacy-wallets').replaceChildren();
     $('#pk-ns-balance').textContent=account?'Loading…':'Not available';
     transfer=null;receiveAddress=null;$('#pk-wallet-address').textContent='';$('#pk-quai-balance').textContent='Not available';$('#pk-receive').disabled=true;$('#pk-send').disabled=true;
     $('#pk-transfers').replaceChildren();
@@ -85,6 +101,9 @@ export function createPasskeyUI({api,onExternal,onAccount}){
       if(state.status==='activating')activationTimer=setTimeout(()=>{if(revision===epoch&&!sending)setAccount(account,true);},15000);
       $('#pk-wallet-title').textContent=state.status==='active'?'Your personal wallet':'Wallet setup';
       $('#pk-wallet-address').textContent=state.address||'';$('#pk-quai-balance').textContent=state.quaiBalance??'Not available';$('#pk-receive').disabled=!state.receiveAvailable;$('#pk-send').disabled=!state.sendAvailable;
+      feeMode=state.quotedFees===true;baseAssets=state.sendTokens||[];$('#pk-send-token-field').hidden=!feeMode;
+      if(feeMode){$('#pk-send-title').textContent='Send';$('#pk-amount-label').textContent='Amount';renderSendAssets(state.tokens||[]);}
+      for(const old of state.legacyWallets||[]){const item=document.createElement('section');item.className='pk-summary';const title=document.createElement('h3'),address=document.createElement('p'),balance=document.createElement('p');title.textContent='Previous wallet';address.className='address';address.textContent=old.address;balance.textContent=(old.quaiBalance??'Balance unavailable')+(old.quaiBalance===null?'':' QUAI')+' · Funds have not been moved.';item.append(title,address,balance);$('#pk-legacy-wallets').append(item);}
       const states={awaiting_confirmation:'Awaiting confirmation',verifying:'Checking confirmation',authorized:'Awaiting submission',submitting:'Submitted · awaiting verification',confirmed:'Confirmed',failed:'Failed',stopped:'Stopped'};
       for(const transfer of state.transfers||[]){const item=document.createElement('p');item.className='address';item.textContent=(states[transfer.phase]||'Needs review')+(transfer.tx_hash?' · '+transfer.tx_hash:'');$('#pk-transfers').append(item);}
     }catch(error){if(revision===epoch)$('#pk-status').textContent=error.message;}
@@ -97,10 +116,10 @@ export function createPasskeyUI({api,onExternal,onAccount}){
   });
   $('#pk-copy').addEventListener('click',async()=>{if(!receiveAddress)return;try{await navigator.clipboard.writeText(receiveAddress);$('#pk-status').textContent='Address copied.';}catch{$('#pk-status').textContent='Select and copy the address above.';}});
   $('#pk-send').addEventListener('click',()=>{$('#pk-send-form').hidden=false;$('#pk-recipient').focus();});
-  for(const id of ['#pk-recipient','#pk-amount'])$(id).addEventListener('input',()=>{transfer=null;$('#pk-send-review').hidden=true;});
-  $('#pk-send-form').addEventListener('submit',async event=>{event.preventDefault();if(sending)return;const revision=epoch;sending=true;$('#pk-review-button').disabled=true;$('#pk-send-status').textContent='Preparing…';
-    try{const r=await api('/api/passkey/wallet/send/prepare',{recipient:$('#pk-recipient').value.trim(),amount:$('#pk-amount').value.trim()});if(revision!==epoch)return;transfer=r;
-      $('#pk-review-text').textContent=`Send ${r.review.amount} QUAI\nFrom: ${r.review.wallet}\nTo: ${r.review.recipient}\n${r.review.network}\nMaximum network fee: ${r.review.maximumFee} QUAI · paid by ${r.review.feePaidBy}`;
+  for(const id of ['#pk-recipient','#pk-amount','#pk-send-token'])$(id).addEventListener('input',()=>{transfer=null;$('#pk-send-review').hidden=true;});
+  $('#pk-send-form').addEventListener('submit',async event=>{event.preventDefault();if(sending)return;const revision=epoch;transfer=null;$('#pk-send-review').hidden=true;sending=true;$('#pk-review-button').disabled=true;$('#pk-send-status').textContent='Preparing…';
+    try{const r=await api('/api/passkey/wallet/send/prepare',{recipient:$('#pk-recipient').value.trim(),amount:$('#pk-amount').value.trim(),...(feeMode?{token:$('#pk-send-token').value}:{})});if(revision!==epoch)return;const reviewText=transferReviewText(r.review);transfer=r;
+      $('#pk-review-text').textContent=reviewText;
       $('#pk-send-review').hidden=false;$('#pk-confirm').disabled=false;$('#pk-send-status').textContent='Awaiting confirmation. Review the recipient and amount carefully.';
     }catch(error){if(revision===epoch)$('#pk-send-status').textContent=error.message;}finally{sending=false;if(revision===epoch)$('#pk-review-button').disabled=false;}
   });

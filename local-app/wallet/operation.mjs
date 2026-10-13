@@ -4,6 +4,7 @@ import {verifyAuthenticationResponse} from '@simplewebauthn/server';
 import {strictClientData} from '../passkey-accounts.mjs';
 import {WALLET_INFRASTRUCTURE as infra} from '../wallet-infrastructure.mjs';
 import {NS_TOKEN} from '../neuron-token.mjs';
+import {feeDigest} from './fee-operation.mjs';
 // Use the same reviewed DER conversion from the installed verification library.
 const {unwrapEC2Signature}=await import(new URL('./helpers/iso/isoCrypto/unwrapEC2Signature.js',import.meta.resolve('@simplewebauthn/server')));
 const abi=AbiCoder.defaultAbiCoder();
@@ -21,11 +22,19 @@ export function operationDigest(op){
  return keccak256(abi.encode(['string','uint256','address','uint256','uint256','uint8','bytes32','uint256'],['NS-WALLET-v1',9,op.wallet,op.epoch,op.walletNonce,5,payload,op.deadline]));
 }
 export async function verifyTransferAssertion(op,response,credential){
+ return verifyBoundAssertion(op,response,credential,operationDigest(op));
+}
+// Explicit server-side entry point: callers cannot select an arbitrary digest
+// function or use a login challenge to authorize the fee-bearing action.
+export async function verifyQuotedAssertion(op,response,credential){
+ return verifyBoundAssertion(op,response,credential,feeDigest(op));
+}
+async function verifyBoundAssertion(op,response,credential,digest){
  assert.equal(response.id,credential.credential_id);assert.equal(response.rawId,response.id);
  assert.equal(response.response.userHandle,credential.user_handle,'Wrong Passkey identity');
  assert.equal(credential.rp_id,infra.rpID);assert.equal(credential.origin,infra.origin);assert.equal(credential.revoked_at,null);
  strictClientData(response.response.clientDataJSON);
- const digest=operationDigest(op);assert.equal(op.digest,digest);
+ assert.equal(op.digest,digest);
  const checked=await verifyAuthenticationResponse({response,expectedChallenge:Buffer.from(digest.slice(2),'hex').toString('base64url'),expectedOrigin:infra.origin,expectedRPID:infra.rpID,requireUserVerification:true,credential:{id:credential.credential_id,publicKey:Buffer.from(credential.public_key,'base64url'),counter:credential.counter}});
  assert(checked.verified);
  const ad=Buffer.from(response.response.authenticatorData,'base64url');assert.equal(ad.length,37);const flags=ad[32];assert((flags&5)===5&&(flags&0xe2)===0&&(!(flags&16)||(flags&8)));

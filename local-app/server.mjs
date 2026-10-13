@@ -1,6 +1,8 @@
 import {loadLegal,initLegal,legalPage} from './legal.mjs';
 import {createPasskeyAccounts,passkeyConfiguration} from './passkey-accounts.mjs';
-import {createPasskeyWallet} from './passkey-wallet.mjs';
+import {createPasskeyWallet,createTokenBalanceReader} from './passkey-wallet.mjs';
+import {configuredFeeWallet} from './wallet/configured-fee.mjs';
+import {withFeeWallet} from './wallet/fee-wallet.mjs';
 import {createWalletChain} from './wallet/chain.mjs';
 import {configuredExecutor} from './wallet/configured-executor.mjs';
 import {configuredAutoActivation} from './wallet/auto-activation.mjs';
@@ -47,9 +49,9 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   try{passkeyConfig=passkeyConfiguration(origin);}catch(error){await db.close();throw error;}
   const passkeys=createPasskeyAccounts(db,{config:passkeyConfig,legal,now});
   const walletChain=createWalletChain();
-  let walletExecutor,autoActivation;
-  try{walletExecutor=await configuredExecutor(db,walletChain);autoActivation=configuredAutoActivation(db,walletChain);}catch{await db.close();throw new Error('Invalid wallet execution configuration');}
-  const passkeyWallet=createPasskeyWallet(db,{chain:walletChain,executor:walletExecutor,autoActivation:!!autoActivation,now});
+  let walletExecutor,autoActivation,feeWallet;
+  try{walletExecutor=await configuredExecutor(db,walletChain);autoActivation=configuredAutoActivation(db,walletChain);feeWallet=await configuredFeeWallet(db);}catch{await db.close();throw new Error('Invalid wallet execution configuration');}
+  const passkeyWallet=withFeeWallet(db,createPasskeyWallet(db,{chain:walletChain,executor:walletExecutor,autoActivation:!!autoActivation,now}),feeWallet,{readBalance:createTokenBalanceReader(),now});
   let maintenance;
   const maintain=()=>maintenance??=(async()=>{await expireQuestions(db,now());await remindDeadlines(db,now());})().finally(()=>{maintenance=null;});
   const confirmReward=createRewardConfirmation(db,paymentFetch);

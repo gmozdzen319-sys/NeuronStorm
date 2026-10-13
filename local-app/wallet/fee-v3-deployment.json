@@ -1,0 +1,14 @@
+{
+  "generation": 3,
+  "chainId": 9,
+  "confirmed": true,
+  "rpID": "neuronstorm.onrender.com",
+  "origin": "https://neuronstorm.onrender.com",
+  "implementation": "0x0032FA6A49f1EDDc779aA1FF9C1f7e866Fb2c477",
+  "implementationHash": "0x4f37d819569820aca33a19d8cad26f1cae45d87c254eb3311a4c535bf9185c4c",
+  "implementationTransaction": "0x0042001220981c8b457129c1541e9eb7be3fc652b88856156e382f7b263e4fd9",
+  "factory": "0x003Ee1c3cfD05C9f53e7D8E32814E1deBE9e9015",
+  "factoryHash": "0x3466af289e1aeb2dfb0c781eb410e13defe7a0841e881317a18f3daa4c7ad429",
+  "factoryTransaction": "0x001d0051274e0c3a1d4d2917b96853f789a9b051fa5c276be533bed2fc3aa91b",
+  "sourceHash": "0x66ab2f13b01a9fd8679f7b7e75fc0039a74f6fcca4cccbea0ec15e180f7e6135"
+}

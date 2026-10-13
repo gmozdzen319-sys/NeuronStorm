@@ -4,16 +4,25 @@ import {WALLET_INFRASTRUCTURE as infra,loadCloneWallet} from '../wallet-infrastr
 import {factoryABI} from './chain.mjs';
 import {factoryStorageContext} from './factory-context.mjs';
 import {quoteProvisioning} from './provisioning-quote.mjs';
-import {bound,canonicalACL,PRICE_CAP,SAFETY_MARGIN,fingerprint} from './transaction-policy.mjs';
+import {bound as legacyBound,canonicalACL,PRICE_CAP,SAFETY_MARGIN,fingerprint} from './transaction-policy.mjs';
+import {boundFeeTransaction} from './fee-plan.mjs';
 import {rpcTransaction} from './preflight.mjs';
 import {validateBlock,assertCanonicalBlock,assertCanonicalAdvance,assertContextCompatible,captureAccounts,accountEntries,assertSameAccounts} from './head-guard.mjs';
 import {waitCanonicalReceipt} from './receipt-confirmation.mjs';
 import {observeStability} from './stabilization.mjs';
-const LIMIT=330000n,low=s=>s.toLowerCase();
-export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,preflight,verifyNetwork,stabilize=observeStability,now=Date.now}){
+const low=s=>s.toLowerCase();
+export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,preflight,verifyNetwork,stabilize=observeStability,now=Date.now,registry=null}){
+ const infrastructure=registry?.infrastructure??infra;
+ const fee=registry!==null;if(fee)assert.equal(infrastructure.generation,3);
+ const assignmentDb=db;
+ // Table selection is server-owned, never supplied by an HTTP request. The
+ // shared grant and relayer lane still serialize v2/v3 sends and provisioning.
+ if(fee){const original=db;db={...original,prepare:sql=>original.prepare(sql.replace(/\bpasskey_clone_approvals\b/g,'passkey_fee_approvals').replace(/\bpasskey_clone_wallets\b/g,'passkey_fee_wallets'))};}
+ const load=(database,id)=>registry?registry.load(database,id):loadCloneWallet(database,id);
+ const bound=(tx,limit)=>fee?boundFeeTransaction(tx):legacyBound(tx,limit);
  const rpc=chain.rpc;
  async function quote(accountId){
-  const result=await quoteProvisioning(db,{accountId,relayer,chain,preflight,now});
+  const result=await quoteProvisioning(assignmentDb,{accountId,relayer,chain,preflight,now,registry});
   assert(!result.alreadyProvisioned&&result.native&&!result.nativePreflightRequired);
   // Preparing a quote never approves it; there is no public approval endpoint.
   await db.transaction(async()=>{
@@ -32,13 +41,15 @@ export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,
   if(!approval)throw Error('A fresh separately approved wallet quote is required');
   let stage='STABILIZATION';
   try{
-   const stable=await stabilize({sources:[{name:'official Cyprus-1',rpc}],entries:[{address:relayer,storageKeys:[]},{address:infra.factory,storageKeys:[]}]});assert(stable.stable);
+   const stable=await stabilize({sources:[{name:'official Cyprus-1',rpc}],entries:[{address:relayer,storageKeys:[]},{address:infrastructure.factory,storageKeys:[]}]});assert(stable.stable);
    stage='SAVED_PLAN';
-   const quote=JSON.parse(approval.quote),row=await loadCloneWallet(db,accountId);assert(row&&row.revoked_at===null&&quote.accountId===accountId&&low(quote.address)===row.address);
+   const quote=JSON.parse(approval.quote),row=await load(db,accountId);assert(row&&row.revoked_at===null&&quote.accountId===accountId&&low(quote.address)===row.address);
    assert.equal(quote.commitment,approval.commitment);assert.equal(quote.commitment,fingerprint({transaction:quote.transaction,address:row.plan.address,blockHash:quote.blockHash}));assert(quote.native&&!quote.nativePreflightRequired&&quote.approvalRequired&&quote.broadcastAllowed===false);
-   const src=quote.transaction,tx={type:0,chainId:9,from:relayer,to:infra.factory,nonce:String(BigInt(src.nonce)),value:'0',data:factoryABI.encodeFunctionData('createWallet',[row.plan.x,row.plan.y,row.plan.grind]),gasPrice:String(BigInt(src.gasPrice)),gasLimit:String(LIMIT),accessList:canonicalACL(src.accessList)};
-   assert.equal(low(src.from),low(relayer));assert.equal(low(src.to),low(infra.factory));assert.equal(src.data,tx.data);assert.equal(BigInt(src.value),0n);assert.equal(BigInt(src.gas),LIMIT);bound(tx,LIMIT);
-   const price=BigInt(tx.gasPrice),reserve=price*LIMIT;assert(price>0n&&price<=PRICE_CAP);assert.equal(quote.chainId,9);assert.equal(quote.factory,infra.factory);assert.equal(quote.implementation,infra.implementation);assert.equal(quote.maximumCostQuai,formatUnits(reserve,18));const commitment=fingerprint(bound(tx,LIMIT));let snapshot=quote.native;
+   const LIMIT=BigInt(quote.gasLimit);assert(fee||LIMIT===330000n);
+   const src=quote.transaction,tx={type:0,chainId:9,from:relayer,to:infrastructure.factory,nonce:String(BigInt(src.nonce)),value:'0',data:factoryABI.encodeFunctionData('createWallet',[row.plan.x,row.plan.y,row.plan.grind]),gasPrice:String(BigInt(src.gasPrice)),gasLimit:String(LIMIT),accessList:canonicalACL(src.accessList)};
+   assert.equal(low(src.from),low(relayer));assert.equal(low(src.to),low(infrastructure.factory));assert.equal(src.data,tx.data);assert.equal(BigInt(src.value),0n);assert.equal(BigInt(src.gas),LIMIT);bound(tx,LIMIT);
+   const price=BigInt(tx.gasPrice),reserve=price*LIMIT;assert(price>0n&&(fee||price<=PRICE_CAP));assert.equal(quote.chainId,9);assert.equal(quote.factory,infrastructure.factory);assert.equal(quote.implementation,infrastructure.implementation);assert.equal(quote.maximumCostQuai,formatUnits(reserve,18));const commitment=fingerprint(bound(tx,LIMIT));let snapshot=quote.native;
+   let reserved=false;
    async function gate(){
     stage='EXPIRY_AND_WALLET_STATE';
     assert(approval.expires_at>now());const observed=await chain.snapshot(row.plan);assert(!observed.deployed,'Already provisioned; do not redeploy');
@@ -49,13 +60,13 @@ export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,
     assert.equal(BigInt(await rpc('quai_getTransactionCount',[relayer,tag])),BigInt(tx.nonce));assert.equal(BigInt(await rpc('quai_getTransactionCount',[relayer,'pending'])),BigInt(tx.nonce));
     stage='BALANCE_AND_GRANT';
     assert(BigInt(await rpc('quai_getBalance',[relayer,tag]))>=reserve+SAFETY_MARGIN);
-    const grant=await db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1 AND enabled=TRUE AND expires_at>$2').get(grantId,now());assert(grant&&low(grant.relayer)===low(relayer)&&BigInt(grant.budget_wei)-BigInt(grant.reserved_wei)>=reserve);
+    const grant=await db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1 AND enabled=TRUE AND expires_at>$2').get(grantId,now());assert(grant&&low(grant.relayer)===low(relayer)&&BigInt(grant.budget_wei)-BigInt(grant.reserved_wei)+(reserved?reserve:0n)>=reserve);
     stage='ACCOUNT_SNAPSHOT';
     assertSameAccounts(snapshot.accounts,await captureAccounts(rpc,accountEntries(snapshot.accounts),block));
     stage='ACCESS_LIST';
     const acl=await rpc('quai_createAccessList',[rpcTransaction(tx),tag]);assert(!acl.error);assert.deepEqual(canonicalACL(acl.accessList),tx.accessList);
     stage='NATIVE_PREFLIGHT';
-    const factoryStorageKeys=await factoryStorageContext(rpc,block);const fresh=await preflight(rpc,tx,{...row,factoryStorageKeys},block);
+    const factoryStorageKeys=await factoryStorageContext(rpc,block,infrastructure);const fresh=await preflight(rpc,tx,{...row,factoryStorageKeys},block);
     assertSameAccounts(snapshot.accounts,fresh.accounts);assert.equal(low(factoryABI.decodeFunctionResult('createWallet',fresh.returnValue)[0]),row.address);
     stage='NETWORK_VERIFICATION';
     assert(await verifyNetwork({rpc,block,relayer,wallet:row.plan.address,accounts:fresh.accounts}));await assertCanonicalBlock(rpc,block);assert.equal(fingerprint(bound(tx,LIMIT)),commitment);snapshot=fresh;
@@ -70,6 +81,9 @@ export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,
     await db.prepare('UPDATE passkey_relayer_grants SET reserved_wei=reserved_wei+$1 WHERE id=$2').run(String(reserve),grantId);
     await db.prepare("UPDATE passkey_clone_approvals SET phase='submitting',tx_hash=$1 WHERE account_id=$2").run(signed.hash,accountId);
    });
+   // A concurrent sender may have consumed the nonce before this lane was
+   // acquired. v3 repeats the complete exact-plan gate after its durable claim.
+   if(fee){reserved=true;await gate();}
    stage='BROADCAST';
    assert.equal(low(await sendRaw(raw)),low(signed.hash));
    // Receive reads an anchor three blocks behind the tip. Four observations put
@@ -81,10 +95,10 @@ export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,
    const block=validateBlock(await rpc('quai_getBlockByNumber',[receipt.blockNumber,false]));assert.equal(block.hash,receipt.blockHash);assert(await verifyNetwork({rpc,block,relayer,wallet:row.plan.address}));
    assert.equal(BigInt(await rpc('quai_getTransactionCount',[relayer,receipt.blockNumber])),BigInt(tx.nonce)+1n);
    if(success){const confirmed=await chain.snapshot(row.plan);assert(confirmed.deployed&&confirmed.nonce==='0'&&confirmed.epoch==='0');}
-   const fee=BigInt(receipt.gasUsed)*price;
+   const actualFee=BigInt(receipt.gasUsed)*price;
    await db.transaction(async()=>{
-    await db.prepare('UPDATE passkey_relayer_grants SET reserved_wei=reserved_wei-$1 WHERE id=$2').run(String(reserve-fee),grantId);
-    await db.prepare('UPDATE passkey_clone_approvals SET phase=$1,receipt=$2 WHERE account_id=$3').run(success?'confirmed':'failed',JSON.stringify({...receipt,feeWei:String(fee),feeQuai:formatUnits(fee,18),finalityProven:false}),accountId);
+    await db.prepare('UPDATE passkey_relayer_grants SET reserved_wei=reserved_wei-$1 WHERE id=$2').run(String(reserve-actualFee),grantId);
+    await db.prepare('UPDATE passkey_clone_approvals SET phase=$1,receipt=$2 WHERE account_id=$3').run(success?'confirmed':'failed',JSON.stringify({...receipt,feeWei:String(actualFee),feeQuai:formatUnits(actualFee,18),finalityProven:false}),accountId);
     await db.prepare('DELETE FROM passkey_relayer_lanes WHERE relayer=$1 AND reference=$2').run(low(relayer),accountId);
    });
    return {address:row.plan.address,transactionHash:signed.hash,status:success?'confirmed':'failed'};

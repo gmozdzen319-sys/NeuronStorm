@@ -51,7 +51,10 @@ export function createWalletRPC(fetcher=fetch,endpoint='https://rpc.quai.network
  };
 }
 const low=s=>s.toLowerCase(),zero='0x'+'0'.repeat(40);
-export function createWalletChain({rpc=createWalletRPC(),now=Date.now}={}){
+export function createWalletChain({rpc=createWalletRPC(),now=Date.now,infrastructure=infra}={}){
+ // Infrastructure is supplied only by server configuration, never by a request.
+ // Keep v2 as the default while a separately pinned fee wallet coexists with it.
+ const infra=Object.freeze({...infrastructure});
  const call=async(address,abi,name,args,tag)=>abi.decodeFunctionResult(name,await rpc('quai_call',[{to:address,data:abi.encodeFunctionData(name,args)},tag]));
  async function snapshot(plan){
   assert.equal(BigInt(await rpc('quai_chainId')),9n);

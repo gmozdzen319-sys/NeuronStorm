@@ -50,3 +50,11 @@ test('Incremental factory context retains old storage keys and discovers each ne
  assert.equal(first.length,1);assert.equal(second.length,2);assert(second.includes(first[0]));
  const cold=historyFixture([event(2),event(4)]);assert.deepEqual(second,await factoryStorageContext(cold.rpc,cold.blocks(4)));
 });
+
+test('Shared RPC never reuses v2 factory cache as v3 history',async()=>{
+ const f=historyFixture(),second={...infra,factory:'0x0000000000000000000000000000000000000005',factoryTransaction:hash(99)};
+ const rpc=async(method,args)=>method==='quai_getTransactionReceipt'&&args[0]===second.factoryTransaction
+  ?{status:'0x1',contractAddress:second.factory,blockNumber:'0x1',blockHash:hash(1)}:f.rpc(method,args);
+ await factoryStorageContext(rpc,f.blocks(3));await factoryStorageContext(rpc,f.blocks(4),second);
+ assert.equal(f.ranges.length,2);assert.equal(f.ranges[1].address,second.factory);assert.equal(f.ranges[1].fromBlock,'0x1');
+});

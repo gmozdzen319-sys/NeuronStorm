@@ -8,16 +8,19 @@ const abi=AbiCoder.defaultAbiCoder(),q=n=>'0x'+n.toString(16);
 // No synthetic factory padding, guessed storage size or silent partial result.
 // A long history requires a separately reviewed indexed snapshot, not truncation.
 const histories=new WeakMap(),lanes=new WeakMap();
-export function factoryStorageContext(rpc,block){
+export function factoryStorageContext(rpc,block,infrastructure=infra){
+ const pinned=Object.freeze({...infrastructure});
  const prior=lanes.get(rpc)??Promise.resolve();
- const task=prior.then(()=>readFactoryStorageContext(rpc,block));
+ const task=prior.then(()=>readFactoryStorageContext(rpc,block,pinned));
  lanes.set(rpc,task.catch(()=>{}));return task;
 }
-async function readFactoryStorageContext(rpc,block){
+async function readFactoryStorageContext(rpc,block,infra){
  const receipt=await rpc('quai_getTransactionReceipt',[infra.factoryTransaction]);assert(receipt&&BigInt(receipt.status)===1n&&receipt.contractAddress.toLowerCase()===infra.factory.toLowerCase());
  const first=BigInt(receipt.blockNumber),last=BigInt(block.woHeader.number);assert(last>=first&&last-first<=65535n,'Factory history exceeds bounded snapshot range');
  const anchor=validateBlock(await rpc('quai_getBlockByNumber',[receipt.blockNumber,false]));assert.equal(anchor.hash,receipt.blockHash);
- let startAt=first;const cached=histories.get(rpc);
+ const cacheKey=infra.factory.toLowerCase()+':'+infra.factoryTransaction;
+ let scoped=histories.get(rpc);if(!scoped){scoped=new Map();histories.set(rpc,scoped);}
+ let startAt=first;const cached=scoped.get(cacheKey);
  const keys=new Set(),topic=factoryABI.getEvent('WalletCreated').topicHash;
  if(cached){
   const gap=last-BigInt(cached.block.woHeader.number),dt=BigInt(block.woHeader.timestamp)-BigInt(cached.block.woHeader.timestamp);
@@ -40,6 +43,6 @@ async function readFactoryStorageContext(rpc,block){
   }
  }
  await assertCanonicalBlock(rpc,anchor);await assertCanonicalBlock(rpc,block);
- histories.set(rpc,{block:structuredClone(block),keys:[...keys]});
+ scoped.set(cacheKey,{block:structuredClone(block),keys:[...keys]});
  return [...keys].map(key=>keccak256(abi.encode(['bytes32','uint256'],[key,0]))).sort();
 }
