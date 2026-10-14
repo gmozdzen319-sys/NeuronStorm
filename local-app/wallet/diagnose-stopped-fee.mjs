@@ -38,7 +38,19 @@ try{
  console.log(JSON.stringify({savedPasskeyVerified:true,block:tag,quotedGas:String(BigInt(op.quote.networkFee)/BigInt(prepared.gasPrice)),gasLimit:prepared.gasLimit,broadcasts:0}));
  const tx={type:0,chainId:9,from:prepared.relayer,to:op.wallet,nonce:prepared.relayerNonce,value:'0',gasPrice:prepared.gasPrice,gasLimit:prepared.gasLimit,data:feeWalletABI.encodeFunctionData('sendQuoted',[op.quote,op.deadline,row.plan.keyId,auth])};
  stage='historical-access-list';
- const acl=await rpc('quai_createAccessList',[rpcTransaction(tx),tag]);assert(!acl.error);tx.accessList=feeAccessList(acl.accessList);
+ let acl=await rpc('quai_createAccessList',[rpcTransaction(tx),tag]);
+ if(acl.error){
+  const text=String(acl.error),reason=['out of gas','execution reverted','invalid access list'].find(x=>text.toLowerCase().includes(x))||'other execution error';
+  console.log(JSON.stringify({exactPlanAccessListRejected:true,reason,errorText:text.replace(/[\r\n]/g,' ').slice(0,200),gasUsed:acl.gasUsed,broadcasts:0}));
+  // Diagnostic only: measure unchanged calldata at an affordable network bound.
+  // Never change the persisted plan, quote, grant or signed authorization.
+  stage='read-only-larger-gas-measurement';
+  const funds=BigInt(await rpc('quai_getBalance',[tx.from,tag])),affordable=funds/BigInt(tx.gasPrice),blockLimit=BigInt(block.header.gasLimit);
+  tx.gasLimit=String(affordable<blockLimit?affordable:blockLimit);
+  acl=await rpc('quai_createAccessList',[rpcTransaction(tx),tag]);
+  console.log(JSON.stringify({diagnosticOnly:true,simulationGasLimit:tx.gasLimit,simulationError:acl.error?String(acl.error).replace(/[\r\n]/g,' ').slice(0,200):null,gasUsed:acl.gasUsed,broadcasts:0}));
+ }
+ assert(!acl.error);tx.accessList=feeAccessList(acl.accessList);
  console.log(JSON.stringify({historicalRpcGasUsed:acl.gasUsed,broadcasts:0}));
  stage='exact-historical-native-rpc-preflight';
  const result=await createFeePreflight({binary:process.env.NS_WALLET_NATIVE_VERIFIER,binaryHash:process.env.NS_WALLET_NATIVE_VERIFIER_SHA256,infrastructure:registry.infrastructure})(rpc,tx,row,block);
