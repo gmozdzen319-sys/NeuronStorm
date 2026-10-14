@@ -17,10 +17,11 @@ export function withFeeWallet(db,legacy,fee,{readBalance,now=Date.now}){
    if(!view.deployed)return {...previous,feeUpgradePending:true};
    const pending=await db.prepare("SELECT id FROM passkey_native_operations WHERE account_id=$1 AND (phase IN ('verifying','authorized','submitting') OR (phase='awaiting_confirmation' AND expires_at>$2)) LIMIT 1").get(account.id,now());
    const available=!pending&&await fee.send.available();
+   const blockedReason=pending?'Another transfer is awaiting confirmation or being checked. Wait for its result before preparing another.':!available&&fee.send.unavailableReason?await fee.send.unavailableReason():'Your wallet can receive funds. Sending is temporarily unavailable.';
    return {...previous,status:'active',generation:3,address:row.plan.address,quaiBalance:view.quaiBalance,receiveAvailable:true,sendAvailable:available,quotedFees:true,
     sendTokens:[{contract:ZERO_TOKEN,symbol:'QUAI'},{contract:NS_TOKEN.address,symbol:NS_TOKEN.symbol},...previous.tokens],
     legacyWallets:[{address:previous.address,quaiBalance:previous.quaiBalance,receiveAvailable:previous.receiveAvailable}].filter(w=>w.address),
-    reason:available?'Your wallet is ready. Each send requires your passkey and pays a quoted network fee plus 5%.':'Your wallet can receive funds. Sending is temporarily unavailable.'};
+    reason:available?'Your wallet is ready. Each send requires your passkey and pays a quoted network fee plus 5%.':blockedReason};
   }catch{return {...previous,sendAvailable:false,feeUpgradePending:true,reason:'We could not safely verify the updated wallet. Your existing wallet is shown. No transaction was sent.'};}
  };
  service.receive=async account=>{const state=await service.state(account);if(state.generation!==3)return legacy.receive(account);return {address:state.address,quaiBalance:state.quaiBalance,receiveCompatible:true,network:'Quai Mainnet · Cyprus-1',qr:await QRCode.toDataURL(state.address,{errorCorrectionLevel:'M',width:232,margin:4})};};
@@ -31,7 +32,7 @@ export function withFeeWallet(db,legacy,fee,{readBalance,now=Date.now}){
  };
  const route=async(account,id)=>{owner(account);const row=await db.prepare('SELECT plan FROM passkey_native_operations WHERE id=$1 AND account_id=$2').get(id,account.id);if(!row)throw fail(404,'Transfer not found.');return JSON.parse(row.plan).operation.action===6?fee.send:legacy.send;};
  service.send={
-  prepare:async(account,input)=>{const state=await service.state(account);if(!state.sendAvailable)throw fail(423,'Sending is temporarily unavailable.');return state.generation===3?fee.send.prepare(account,{...input,token:input.token??ZERO_TOKEN}):legacy.send.prepare(account,input);},
+  prepare:async(account,input)=>{const state=await service.state(account);if(!state.sendAvailable)throw fail(423,state.reason||'Sending is temporarily unavailable.');return state.generation===3?fee.send.prepare(account,{...input,token:input.token??ZERO_TOKEN}):legacy.send.prepare(account,input);},
   confirm:async(account,input)=>(await route(account,input.id)).confirm(account,input),
   status:async(account,id)=>(await route(account,id)).status(account,id)
  };

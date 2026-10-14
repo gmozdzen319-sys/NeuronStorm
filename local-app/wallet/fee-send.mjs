@@ -81,5 +81,5 @@ export function createFeeSend(db,{loadWallet,chain,executor=null,now=Date.now}){
   if(!row)throw fail(404,'Transfer not found.');
   return {id:row.id,status:row.phase,transactionHash:row.tx_hash,receipt:row.receipt?JSON.parse(row.receipt):null};
  }
- return {available,prepare,confirm,status};
+ return {available,prepare,confirm,status,unavailableReason:async()=>executor?.unavailableReason?executor.unavailableReason():'Sending is temporarily unavailable. Your funds remain in your wallet.'};
 }

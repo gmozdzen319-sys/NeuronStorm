@@ -17,6 +17,14 @@ export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,prefl
  const call=async(row,name,args,tag)=>walletABI.decodeFunctionResult(name,await rpc('quai_call',[{to:row.plan.address,data:walletABI.encodeFunctionData(name,args)},tag]));
  async function grant(){const g=await db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1 AND enabled=TRUE AND expires_at>$2').get(grantId,now());assert(g&&lower(g.relayer)===lower(relayer),'No approved relayer budget');return g;}
  async function available(){if(!signer||!sendRaw||!preflight||!verifyNetwork||!estimateQuote)return false;try{await grant();return !await db.prepare('SELECT reference FROM passkey_relayer_lanes WHERE relayer=$1').get(lower(relayer));}catch{return false;}}
+ async function unavailableReason(){
+  try{
+   const g=await db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1').get(grantId);
+   if(g&&g.expires_at<=now())return 'The controlled sending window has expired. No transaction was sent. Contact support to arrange a new test window.';
+   if(await db.prepare('SELECT reference FROM passkey_relayer_lanes WHERE relayer=$1').get(lower(relayer)))return 'An earlier transaction is being checked. Do not submit it again.';
+  }catch{}
+  return 'Sending is temporarily unavailable. Your funds remain in your wallet.';
+ }
  async function state(row){
   const view=await chain.snapshot(row.plan);assert(view.deployed);const block=validateBlock(await rpc('quai_getBlockByNumber',['latest',false]));await assertCanonicalAdvance(rpc,view.block,block);
   const tag=block.woHeader.number;
@@ -131,5 +139,5 @@ export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,prefl
    await db.prepare('DELETE FROM passkey_relayer_lanes WHERE relayer=$1 AND reference=$2').run(lower(relayer),id);
   });
  }
- return {available,quote,prepare,execute};
+ return {available,unavailableReason,quote,prepare,execute};
 }
