@@ -50,6 +50,7 @@ try{
   console.log(JSON.stringify({exactPlanAccessListRejected:true,reason,errorText:text.replace(/[\r\n]/g,' ').slice(0,200),gasUsed:acl.gasUsed,broadcasts:0}));
   // Inspect the exact failure at the ORIGINAL limit, never increase it.
   stage='exact-revert-reason';
+  console.log(JSON.stringify({relayerPriceInputs:{senderMatches:tx.from.toLowerCase()===op.quote.relayer.toLowerCase(),priceMatches:BigInt(tx.gasPrice)===BigInt(op.quote.gasPrice),positivePrice:BigInt(op.quote.gasPrice)>0n},broadcasts:0}));
   tx.accessList=feeAccessList(acl.accessList);
   try{await rpc('quai_call',[rpcTransaction(tx),tag]);console.log(JSON.stringify({exactRpcCallPassed:true,broadcasts:0}));}
   catch(error){console.log(JSON.stringify({exactRpcCallError:error.walletRPC||{code:error.code||error.name},broadcasts:0}));}
@@ -69,6 +70,20 @@ try{
    const result=JSON.parse(await readFile(join(dir,'output.json'),'utf8')),out=result.outcome||result.failedDiscovery;
    let reason=null;if(out?.return?.startsWith('0x08c379a0')){const decoded=abi.decode(['string'],'0x'+out.return.slice(10))[0];if(/^[a-z-]{1,40}$/.test(decoded))reason=decoded;}
    console.log(JSON.stringify({exactNativeDiagnostic:{error:out?.error,reason,gasUsed:out?.gas,originalGasLimit:tx.gasLimit,snapshotCommitted:result.snapshotCommitted},broadcasts:0}));
+   // RPC stops before signature verification and returns only a partial ACL.
+   // Discover the complete list with the unchanged price/calldata/gas limit.
+   let discovered=feeAccessList(result.discoveredAccessList);
+   for(let attempt=0;attempt<3;attempt++){
+    for(const item of discovered)add(item.address,item.storageKeys);
+    input.Accounts=await captureAccounts(rpc,[...entries].map(([address,keys])=>({address,storageKeys:[...keys].sort()})),block);
+    input.AccessList=discovered;
+    await writeFile(join(dir,'input.json'),JSON.stringify(input),{mode:0o600});
+    await promisify(execFile)(binary,[join(dir,'input.json'),join(dir,'output.json')],{timeout:30000,windowsHide:true,maxBuffer:1048576});
+    const complete=JSON.parse(await readFile(join(dir,'output.json'),'utf8')),next=feeAccessList(complete.discoveredAccessList);
+    if(JSON.stringify(next)!==JSON.stringify(discovered)){discovered=next;continue;}
+    console.log(JSON.stringify({completeNativeDiagnostic:{passed:!complete.outcome.error,error:complete.outcome.error,gasUsed:complete.outcome.gas,gasLimit:tx.gasLimit,minimumGas:complete.minimumGas,aclStable:true,snapshotCommitted:complete.snapshotCommitted},broadcasts:0}));
+    break;
+   }
   }finally{await rm(dir,{recursive:true,force:true});}
   await assertCanonicalBlock(rpc,block);
  }
