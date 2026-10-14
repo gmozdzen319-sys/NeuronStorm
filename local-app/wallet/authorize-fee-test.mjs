@@ -5,7 +5,11 @@ import {readFile} from 'node:fs/promises';
 import {openDatabase} from '../db/database.mjs';
 import {createFeeAssignments} from './fee-assignment.mjs';
 import {createWalletChain} from './chain.mjs';
-const id='fee-v3-controlled-1000-manual';
+import {assertUnusedExpiredGrant} from './unused-test-grant.mjs';
+const previousId='fee-v3-controlled-1000-manual';
+const replaceUnused=process.argv[3]==='--replace-unused-expired-20261014';
+assert(process.argv.length===3||replaceUnused);
+const id=replaceUnused?'fee-v3-controlled-1000-manual-20261014':previousId;
 const accountId='914c577f-226c-4f1e-a7bb-2a4235f4a1a3';
 const wallet='0x00587af2ac5fd9fc6caff4c74eb0b3c8c47efb52';
 const relayer='0x001893151cdcc11372f6dd067e3424f47ad8534a';
@@ -23,6 +27,12 @@ try{
  await db.transaction(async()=>{
   await db.lock('fee-v3-controlled-grant');
   assert(!await db.prepare('SELECT reference FROM passkey_relayer_lanes WHERE relayer=$1').get(relayer));
+  if(replaceUnused){
+   const previous=await db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1 FOR UPDATE').get(previousId);
+   const history=await db.prepare('SELECT COUNT(*) AS count FROM passkey_relayer_intents WHERE grant_id=$1').get(previousId);
+   assertUnusedExpiredGrant(previous,{relayer,budget,now:Date.now(),intentCount:history.count});
+   await db.prepare('UPDATE passkey_relayer_grants SET enabled=FALSE WHERE id=$1').run(previousId);
+  }
   const existing=await db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1 FOR UPDATE').get(id);
   if(existing){assert(existing.relayer===relayer&&BigInt(existing.budget_wei)===budget&&existing.enabled&&existing.expires_at>Date.now());}
   else await db.prepare('INSERT INTO passkey_relayer_grants(id,relayer,budget_wei,expires_at,enabled) VALUES($1,$2,$3,$4,TRUE)').run(id,relayer,String(budget),Date.now()+7200000);
