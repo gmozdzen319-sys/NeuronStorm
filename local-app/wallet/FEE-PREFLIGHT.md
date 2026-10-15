@@ -32,3 +32,18 @@ The preflight never increases gas, changes quote amounts, creates an assertion,
 or signs/broadcasts. An expired assertion is usable only for historical read-only
 diagnosis, never for a new transaction. Deployment/provisioning and legacy V2
 Send keep their existing preflight paths.
+
+## Fee basis
+
+The user-approved allowance is 15% (1500 basis points), rounded upward,
+on measured execution gas. The execution gas limit retains its existing
+native minimum plus one-third reserve. That entire reserve is NOT charged
+as the fee basis. Relayer balance and budget checks still reserve the full
+gas limit times the frozen gas price. Service fee is 5% of the signed
+network-fee estimate including its allowance, not 5% of a future receipt.
+An exact assertion exceeding the accepted fee stops before signing/sending
+and requires a new quote and a new Passkey approval. No silent repricing.
+
+Tokens are discovered from account token records and validated on-chain;
+there is no manual token whitelist. False-return, taxed/rebasing transfers
+that violate exact balance deltas and unverifiable contracts remain rejected.

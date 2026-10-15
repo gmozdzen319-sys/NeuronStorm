@@ -12,8 +12,9 @@ try{
  const operations=[];
  for(const suffix of ['', '_v2'])operations.push({journal:suffix||'v1',rows:await rows(`SELECT id,phase,created_at,expires_at,tx_hash,assertion IS NOT NULL AS assertion_saved,expires_at>EXTRACT(EPOCH FROM now())*1000 AS unexpired FROM passkey_native_operations${suffix} WHERE account_id=$1 ORDER BY created_at DESC LIMIT 6`,[account])});
  const lanes=await rows('SELECT reference,purpose FROM passkey_relayer_lanes WHERE relayer=$1',[process.env.NS_WALLET_RELAYER_ADDRESS.toLowerCase()]);
+ const rollout=await rows('SELECT (SELECT COUNT(*) FROM passkey_accounts) AS accounts, (SELECT COUNT(*) FROM passkey_fee_wallets) AS fee_wallet_assignments');
  await client.query('COMMIT');
- console.log(JSON.stringify({feeSendReadOnlyAudit:{at:new Date().toISOString(),configured:process.env.NS_FEE_SEND_ENABLED==='true',scopeMatches:process.env.NS_FEE_ALLOWED_ACCOUNT_ID===account,grant,operations,lanes},broadcasts:0}));
+ console.log(JSON.stringify({feeSendReadOnlyAudit:{at:new Date().toISOString(),configured:process.env.NS_FEE_SEND_ENABLED==='true',scopeMatches:process.env.NS_FEE_ALLOWED_ACCOUNT_ID===account,allAccountsAllowed:!process.env.NS_FEE_ALLOWED_ACCOUNT_ID,rollout,grant,operations,lanes},broadcasts:0}));
  const registry=createFeeAssignments(JSON.parse(await readFile(process.env.NS_FEE_WALLET_MANIFEST,'utf8')));
  const row=await registry.load({prepare:sql=>({get:async(...args)=>(await client.query(sql,args)).rows[0]})},account);
  try{const view=await createWalletChain({infrastructure:registry.infrastructure}).snapshot(row.plan);console.log(JSON.stringify({feeSnapshotAudit:{deployed:view.deployed,nonce:view.nonce,balanceWei:view.balanceWei},broadcasts:0}));}

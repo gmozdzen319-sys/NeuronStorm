@@ -7,3 +7,7 @@ test('Controlled fee rollout never loads another account wallet, even with valid
  assert.deepEqual(await load({},'approved-test-account'),{account_id:'approved-test-account'});
  assert.deepEqual(calls,['approved-test-account']);
 });
+test('Unscoped production loader preserves each account identity without test-account whitelist',async()=>{
+ const registry={load:async(db,id)=>({account_id:id})},load=scopedFeeLoader(registry,'');
+ for(const id of ['first-account','new-account'])assert.deepEqual(await load({},id),{account_id:id});
+});

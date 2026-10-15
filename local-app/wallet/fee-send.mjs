@@ -71,8 +71,9 @@ export function createFeeSend(db,{loadWallet,chain,executor=null,now=Date.now}){
    // login nor a second confirmation can send the same operation again.
    await executor.execute({id:job.id,accountId:account.id,row,prepared,auth:verified.auth});
    return status(account,job.id);
-  }catch{
+  }catch(error){
    await db.prepare("UPDATE passkey_native_operations SET phase='stopped' WHERE id=$1 AND phase IN ('verifying','authorized')").run(job.id);
+   if(error.code==='FEE_REQUOTE_REQUIRED'&&(await status(account,job.id)).status==='stopped')throw fail(409,'The required network fee exceeds your approved quote. No transaction was sent. Review a new quote and approve it again with your passkey.');
    throw fail(409,'Transfer stopped. Check its status before creating another transfer. Nothing will be retried automatically.');
   }
  }

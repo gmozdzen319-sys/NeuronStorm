@@ -20,9 +20,9 @@ async function fixture(t,{token=false}={}){
  await db.prepare("INSERT INTO passkey_credentials VALUES($1,$2,$3,0,'Test',FALSE,$4,$4,NULL)").run(credentialId,accountId,cose,now);await assignCloneWallet(db,accountId);const row={...await loadCloneWallet(db,accountId),generation:3},relayer=await signer.getAddress();
  await db.prepare('INSERT INTO passkey_relayer_grants(id,relayer,budget_wei,expires_at,enabled) VALUES($1,$2,$3,$4,TRUE)').run(grantId,relayer,'300000000000000000000',now+600000);
  const operation={chainId:9,wallet:row.plan.address,action:6,epoch:'0',walletNonce:'0',deadline:String(Math.floor(now/1000)+120),quote:{token:token?tokenAddress:ZERO_TOKEN,recipient,amount:token?'7000000':'7000000000000000',requestId:hash(123)}};
- const auth=[hash(1),hash(1),0,0,'0x'+'00'.repeat(37),'{}'];let sent=0,signed,gasPrice=30000000000000n,nonce=0n,alterACL=false,aclDrift=false,preflightFail=false,ambiguous=false,failedReceipt=false,changedData=false;
+ const auth=[hash(1),hash(1),0,0,'0x'+'00'.repeat(37),'{}'];let signCalls=0,gas=400000n,sent=0,signed,gasPrice=30000000000000n,nonce=0n,alterACL=false,aclDrift=false,preflightFail=false,ambiguous=false,failedReceipt=false,changedData=false;
  const block=n=>({hash:hash(n),woHeader:{hash:hash(n),parentHash:hash(n-1),location:'0x0000',number:q(n),timestamp:q(Math.floor(now/1000))},header:{quaiStateSize:'0x1',gasLimit:'0x989680'}});
- const balance=10n**21n,walletBalance=100n*10n**18n,gas=400000n;
+ const balance=10n**21n,walletBalance=100n*10n**18n;
  const rpc=async(method,args=[])=>{
   if(method==='quai_chainId')return '0x9';if(method==='quai_getBlockByNumber')return block(args[0]==='latest'?(sent?18:16):Number(BigInt(args[0])));
   if(method==='quai_gasPrice')return q(gasPrice);
@@ -37,10 +37,10 @@ async function fixture(t,{token=false}={}){
   throw Error(method);
  };
  const chain={rpc,snapshot:async()=>({deployed:true,nonce:'0',epoch:'0',balanceWei:String(walletBalance),block:block(16)})};
- const executor=createFeeExecutor(db,{chain,relayer,grantId,estimateQuote:async()=>({gasLimit:'600000',estimatedGas:'450000'}),stabilize:async()=>({stable:true}),signer:{getAddress:()=>signer.getAddress(),signTransaction:async tx=>{if(changedData)tx.data+='00';return signer.signTransaction(tx);}},sendRaw:async raw=>{sent++;signed=QuaiTransaction.from(raw);if(ambiguous)throw Error('uncertain network');return signed.hash;},verifyNetwork:async()=>true,preflight:async(rpc,tx,row,block)=>{if(preflightFail)throw Error('native mismatch');const accessList=[{address:row.address,storageKeys:alterACL?[hash(9)]:[]}];if(aclDrift)alterACL=true;return {accessList,gasUsed:String(gas),accounts:await captureAccounts(rpc,[{address:row.address,storageKeys:[]}],block),block};}});
+ const executor=createFeeExecutor(db,{chain,relayer,grantId,estimateQuote:async()=>({gasLimit:'600000',estimatedGas:'450000'}),stabilize:async()=>({stable:true}),signer:{getAddress:()=>signer.getAddress(),signTransaction:async tx=>{signCalls++;if(changedData)tx.data+='00';return signer.signTransaction(tx);}},sendRaw:async raw=>{sent++;signed=QuaiTransaction.from(raw);if(ambiguous)throw Error('uncertain network');return signed.hash;},verifyNetwork:async()=>true,preflight:async(rpc,tx,row,block)=>{if(preflightFail)throw Error('native mismatch');const accessList=[{address:row.address,storageKeys:alterACL?[hash(9)]:[]}];if(aclDrift)alterACL=true;return {accessList,gasUsed:String(gas),accounts:await captureAccounts(rpc,[{address:row.address,storageKeys:[]}],block),block};}});
  const prepare=async()=>{const pricing=await executor.quote(row,operation);operation.quote={...operation.quote,relayer,networkFee:pricing.networkFee,gasPrice:pricing.gasPrice};operation.digest=feeDigest(operation);return executor.prepare(row,operation,null,pricing);};
  async function execute(prepared){await db.prepare("INSERT INTO passkey_native_operations(id,account_id,credential_id,phase,plan,assertion,created_at,expires_at) VALUES($1,$2,$3,'authorized',$4,$5,$6,$7)").run(id,accountId,credentialId,JSON.stringify(prepared),JSON.stringify(auth),now,now+120000);return executor.execute({id,accountId,row,prepared,auth});}
- return {db,executor,prepare,execute,id,grantId,get sent(){return sent;},set:(key,value)=>{if(key==='price')gasPrice=value;if(key==='nonce')nonce=value;if(key==='acl')aclDrift=value;if(key==='preflight')preflightFail=value;if(key==='ambiguous')ambiguous=value;if(key==='failed')failedReceipt=value;if(key==='data')changedData=value;},get signed(){return signed;}};
+ return {db,executor,prepare,execute,id,grantId,get sent(){return sent;},get signCalls(){return signCalls;},set:(key,value)=>{if(key==='gas')gas=value;if(key==='price')gasPrice=value;if(key==='nonce')nonce=value;if(key==='acl')aclDrift=value;if(key==='preflight')preflightFail=value;if(key==='ambiguous')ambiguous=value;if(key==='failed')failedReceipt=value;if(key==='data')changedData=value;},get signed(){return signed;}};
 }
 test('Executor freezes fee, checks signed bytes and commits one confirmed transfer',async t=>{const f=await fixture(t),p=await f.prepare();f.set('price',999999999999999n);await f.execute(p);assert.equal(f.sent,1);assert.equal(String(f.signed.gasPrice),p.gasPrice);assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'confirmed');await assert.rejects(f.executor.execute({}));assert.equal(f.sent,1);});
 test('Fee executor rejects insufficient approved budget before signing',async t=>{const f=await fixture(t);await f.db.prepare('UPDATE passkey_relayer_grants SET budget_wei=1 WHERE id=$1').run(f.grantId);await assert.rejects(f.prepare());assert.equal(f.sent,0);});
@@ -56,4 +56,13 @@ test('Nonce consumed before lane acquisition leaves intent stopped before broadc
 });
 
 test('Token Send verifies exact 7 tokens and charges quoted fee only in QUAI',async t=>{const f=await fixture(t,{token:true}),p=await f.prepare();assert.equal(p.operation.quote.amount,'7000000');await f.execute(p);assert.equal(f.sent,1);assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'confirmed');});
+
+for(const token of [false,true])test('Measured fee is separate from full reserve; over-quote '+(token?'token':'QUAI')+' stops before signing',async t=>{
+ const f=await fixture(t,{token}),p=await f.prepare();
+ assert.equal(p.gasLimit,'600000');assert.equal(p.operation.quote.networkFee,String(450000n*BigInt(p.gasPrice)));assert.equal(p.maximumFeeWei,String(600000n*BigInt(p.gasPrice)));
+ const frozen=JSON.stringify(p);f.set('gas',450001n);
+ await assert.rejects(f.execute(p),{code:'FEE_REQUOTE_REQUIRED'});
+ assert.equal(f.sent,0);assert.equal(f.signCalls,0);assert.equal(JSON.stringify(p),frozen);
+ assert.equal(BigInt((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei),0n);
+});
 test('Failed token Send verifies rollback and accounts actual network loss once',async t=>{const f=await fixture(t,{token:true}),p=await f.prepare();f.set('failed',true);await f.execute(p);assert.equal(f.sent,1);assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'failed');});

@@ -11,6 +11,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {AbiCoder,keccak256,toBeHex} from 'quais';
 import {feeDigest,ZERO_TOKEN} from './fee-operation.mjs';
+import {feeGasEstimate,FEE_BUFFER_BPS} from './fee-estimate-policy.mjs';
 import {feeWalletABI,feeAccessList} from './fee-plan.mjs';
 import {captureAccounts,assertCanonicalBlock} from './head-guard.mjs';
 const exec=promisify(execFile),abi=AbiCoder.defaultAbiCoder(),sha=b=>createHash('sha256').update(b).digest();
@@ -44,11 +45,11 @@ export function createNativeFeeQuote({binary,binaryHash,infrastructure}){
   }
   const dir=await mkdtemp(join(tmpdir(),'ns-fee-quote-'));
   try{
-   let quotedGas=0n,accessList=[];
+   let quotedGas=0n,measuredGas=0n,accessList=[];
    // First measure the operation, then measure it including its quoted debit.
    // Bounded read-only estimation only. No private user key, signer or send RPC.
    for(let pricing=0;pricing<2;pricing++){
-    const op={...operation,quote:{...operation.quote,relayer,gasPrice:String(gasPrice),networkFee:String(quotedGas?quotedGas*BigInt(gasPrice):1n)}};
+    const op={...operation,quote:{...operation.quote,relayer,gasPrice:String(gasPrice),networkFee:String(measuredGas?feeGasEstimate(measuredGas)*BigInt(gasPrice):1n)}};
     op.digest=feeDigest(op);const auth=assertion(op.digest);
     const data=feeWalletABI.encodeFunctionData('sendQuoted',[op.quote,op.deadline,row.plan.keyId,auth]);
     let measured=false;
@@ -74,13 +75,17 @@ export function createNativeFeeQuote({binary,binaryHash,infrastructure}){
      if(expanded||changed)continue;
      assert(!result.outcome.error,'Quote simulation failed');
      const estimate=BigInt(result.estimate);assert(estimate>=BigInt(result.minimumGas)&&estimate>=BigInt(result.outcome.gas)&&estimate>0n&&estimate<=blockLimit);
+     if(BigInt(result.outcome.gas)>measuredGas)measuredGas=BigInt(result.outcome.gas);
      if(estimate>quotedGas)quotedGas=estimate;
      measured=true;break;
     }
     assert(measured,'Quote discovery did not stabilize');
    }
    await assertCanonicalBlock(rpc,block);
-   return {estimatedGas:String(quotedGas),gasLimit:String(quotedGas),quoteOnly:true,actualAssertionPreflightRequired:true,blockHash:block.hash};
+   // Keep the established safe execution limit. Only the fee basis changes:
+   // measured receipt-style gas plus the explicit, separately tested allowance.
+   const feeGas=feeGasEstimate(measuredGas);assert(feeGas<=quotedGas,'Fee estimate exceeds safe execution limit');
+   return {estimatedGas:String(feeGas),measuredGas:String(measuredGas),feeBufferBps:String(FEE_BUFFER_BPS),gasLimit:String(quotedGas),quoteOnly:true,actualAssertionPreflightRequired:true,blockHash:block.hash};
   }finally{
    const path=relative(resolve(tmpdir()),resolve(dir));assert(!isAbsolute(path)&&path.startsWith('ns-fee-quote-')&&!path.startsWith('..'));
    await rm(dir,{recursive:true,force:true});

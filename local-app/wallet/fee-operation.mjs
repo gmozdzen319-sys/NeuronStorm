@@ -35,7 +35,7 @@ export function validateFeeExecution(op,{estimatedGas,gasLimit,gasPrice,walletQu
  assert(BigInt(estimatedGas)>0n&&BigInt(gasLimit)>=BigInt(estimatedGas),'Insufficient execution gas');
  // The signed price is an explicit quote. Never silently debit more to chase RPC.
  const fee=quotedFee(1,op.quote.networkFee);
- assert(BigInt(estimatedGas)*BigInt(gasPrice)<=BigInt(op.quote.networkFee),'Actual preflight exceeds quoted network fee');
+ assert(BigInt(estimatedGas)*BigInt(gasPrice)<=BigInt(op.quote.networkFee),Object.assign(new Error('Actual preflight exceeds quoted network fee'),{code:'FEE_REQUOTE_REQUIRED'}));
  const native=op.quote.token===ZERO_TOKEN,amount=BigInt(op.quote.amount);
  assert(BigInt(walletQuai)>=BigInt(fee.totalFee)+(native?amount:0n),'Insufficient QUAI for quoted fee');
  if(!native)assert(BigInt(tokenBalance)>=amount,'Insufficient token balance');
