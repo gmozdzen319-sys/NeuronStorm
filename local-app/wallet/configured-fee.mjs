@@ -6,7 +6,7 @@ import {createWalletChain} from './chain.mjs';
 import {createFeeTokenReader} from './fee-token.mjs';
 import {createFeeSend} from './fee-send.mjs';
 import {createFeeExecutor} from './fee-executor.mjs';
-import {createFeePreflight} from './preflight.mjs';
+import {createFeeSendPreflight} from './fee-native-preflight.mjs';
 import {createNativeFeeQuote} from './fee-quote.mjs';
 import {createNetworkVerification} from './network-verification.mjs';
 
@@ -34,7 +34,7 @@ export async function configuredFeeWallet(db,env=process.env){
    const response=await fetch('https://rpc.quai.network/cyprus1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'quai_sendRawTransaction',params:[raw]}),signal:AbortSignal.timeout(10000)});
    const data=await response.json();assert(response.ok&&data.jsonrpc==='2.0'&&data.id===1&&!data.error&&/^0x[0-9a-f]{64}$/i.test(data.result));return data.result;
   };
-  executor=createFeeExecutor(db,{chain,relayer,grantId:env.NS_FEE_GRANT_ID,signer,sendRaw,preflight:createFeePreflight(verifier),estimateQuote:createNativeFeeQuote(verifier),verifyNetwork:createNetworkVerification(env)});
+  executor=createFeeExecutor(db,{chain,relayer,grantId:env.NS_FEE_GRANT_ID,signer,sendRaw,preflight:createFeeSendPreflight(verifier),estimateQuote:createNativeFeeQuote(verifier),verifyNetwork:createNetworkVerification(env)});
  }
  // Optional controlled rollout scope. It cannot be selected by request data.
  const loadWallet=scopedFeeLoader(registry,env.NS_FEE_ALLOWED_ACCOUNT_ID);

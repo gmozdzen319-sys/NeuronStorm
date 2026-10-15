@@ -5,7 +5,6 @@ import {feeDigest,quotedFee,ZERO_TOKEN,validateFeeExecution} from './fee-operati
 import {feeWalletABI,feeAccessList as canonicalACL,boundFeeTransaction as bound,reserveFee} from './fee-plan.mjs';
 import {Interface} from 'quais';
 import {SAFETY_MARGIN,fingerprint} from './transaction-policy.mjs';
-import {rpcTransaction} from './preflight.mjs';
 import {validateBlock,assertCanonicalAdvance,assertCanonicalBlock,assertContextCompatible,assertSameAccounts,captureAccounts,accountEntries} from './head-guard.mjs';
 import {waitCanonicalReceipt} from './receipt-confirmation.mjs';
 import {observeStability} from './stabilization.mjs';
@@ -49,7 +48,7 @@ export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,prefl
   const s=await state(row);assert.equal(operation.walletNonce,s.walletNonce);assert.equal(operation.epoch,s.epoch);
   const gasPrice=BigInt(await rpc('quai_gasPrice',[]));assert(gasPrice>0n);
   // The estimator is a server-only dependency. Its quote is not proof of final
-  // signature execution: exact native/RPC preflight remains mandatory below.
+  // signature execution: exact native execution on pinned RPC state is mandatory.
   const estimate=await estimateQuote({rpc,row,operation:structuredClone(operation),state:structuredClone(s),gasPrice:String(gasPrice),relayer});
   const gasLimit=BigInt(estimate.gasLimit),estimatedGas=BigInt(estimate.estimatedGas);
   assert(estimatedGas>0n&&gasLimit>=estimatedGas);assert(gasLimit<=BigInt(s.block.header.gasLimit));
@@ -75,15 +74,17 @@ export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,prefl
   if(tokenBefore)assert.equal(tokenBefore.wallet,prepared.tokenBalance);
   assert.equal((await call(row,'verifyProbe',[op.digest,auth,row.plan.x,row.plan.y],s.block.woHeader.number))[0],true);
   const tx={type:0,chainId:9,from:relayer,to:row.plan.address,nonce:s.nonce,value:'0',gasPrice:String(price),gasLimit:String(gasLimit),data:feeWalletABI.encodeFunctionData('sendQuoted',[op.quote,op.deadline,row.plan.keyId,auth])};
-  const acl=await rpc('quai_createAccessList',[rpcTransaction(tx),s.block.woHeader.number]);assert(!acl.error);tx.accessList=canonicalACL(acl.accessList);const commitment=fingerprint(bound(tx));
+  const unlisted=JSON.stringify(tx);
+  let simulation=await preflight(rpc,tx,row,s.block);
+  assert.equal(JSON.stringify(tx),unlisted,'Preflight mutated transaction');
+  tx.accessList=canonicalACL(simulation.accessList);const commitment=fingerprint(bound(tx));
   const validateSimulation=sim=>validateFeeExecution(op,{estimatedGas:sim.gasUsed,gasLimit,gasPrice:price,walletQuai:s.walletBalance,tokenBalance:tokenBefore?.wallet});
-  let simulation=await preflight(rpc,tx,row,s.block);validateSimulation(simulation);assert.equal(fingerprint(bound(tx)),commitment);
+  validateSimulation(simulation);assert.equal(fingerprint(bound(tx)),commitment);
   async function gate(){
    const fresh=await state(row);checkOperation(op,fresh);assert.equal(fresh.nonce,s.nonce);assert.equal(fresh.balance,s.balance);
    await budget(price,fresh,gasLimit);await assertCanonicalAdvance(rpc,s.block,fresh.block);assertContextCompatible(s.block,fresh.block,tx,op);
    assertSameAccounts(simulation.accounts,await captureAccounts(rpc,accountEntries(simulation.accounts),fresh.block));
-   const access=await rpc('quai_createAccessList',[rpcTransaction(tx),fresh.block.woHeader.number]);assert(!access.error);assert.deepEqual(canonicalACL(access.accessList),tx.accessList);
-   const next=await preflight(rpc,tx,row,fresh.block);validateSimulation(next);assertSameAccounts(simulation.accounts,next.accounts);assert.equal(fingerprint(bound(tx)),commitment);
+   const next=await preflight(rpc,tx,row,fresh.block);assert.deepEqual(canonicalACL(next.accessList),tx.accessList);validateSimulation(next);assertSameAccounts(simulation.accounts,next.accounts);assert.equal(fingerprint(bound(tx)),commitment);
    assert(await verifyNetwork({rpc,block:fresh.block,relayer,wallet:row.plan.address,accounts:next.accounts}));
    const tail=await state(row);checkOperation(op,tail);assert.equal(tail.nonce,fresh.nonce);assert.equal(tail.balance,fresh.balance);await budget(price,tail,gasLimit);
    await assertCanonicalAdvance(rpc,fresh.block,tail.block);assertContextCompatible(fresh.block,tail.block,tx,op);assertSameAccounts(next.accounts,await captureAccounts(rpc,accountEntries(next.accounts),tail.block));simulation=next;s=tail;
