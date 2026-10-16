@@ -6,6 +6,7 @@ import {withFeeWallet} from './wallet/fee-wallet.mjs';
 import {createWalletChain} from './wallet/chain.mjs';
 import {configuredExecutor} from './wallet/configured-executor.mjs';
 import {configuredAutoActivation} from './wallet/auto-activation.mjs';
+import {configuredFeeAutoActivation,feeSignupEnrollment} from './wallet/fee-auto-activation.mjs';
 import {blocks,remindDeadlines} from './contact-preferences.mjs';
 import {library,reportContent,adminReports} from './member-tools.mjs';
 import {createRewardConfirmation} from './reward-confirmation.mjs';
@@ -47,11 +48,11 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   try{await initLegal(db,legal);}catch(error){await db.close();throw error;}
   let passkeyConfig;
   try{passkeyConfig=passkeyConfiguration(origin);}catch(error){await db.close();throw error;}
-  const passkeys=createPasskeyAccounts(db,{config:passkeyConfig,legal,now});
   const walletChain=createWalletChain();
-  let walletExecutor,autoActivation,feeWallet;
-  try{walletExecutor=await configuredExecutor(db,walletChain);autoActivation=configuredAutoActivation(db,walletChain);feeWallet=await configuredFeeWallet(db);}catch{await db.close();throw new Error('Invalid wallet execution configuration');}
-  const passkeyWallet=withFeeWallet(db,createPasskeyWallet(db,{chain:walletChain,executor:walletExecutor,autoActivation:!!autoActivation,now}),feeWallet,{readBalance:createTokenBalanceReader(),now});
+  let walletExecutor,autoActivation,feeWallet,feeAutoActivation;
+  try{walletExecutor=await configuredExecutor(db,walletChain);autoActivation=configuredAutoActivation(db,walletChain);feeWallet=await configuredFeeWallet(db);feeAutoActivation=configuredFeeAutoActivation(db,feeWallet);if(feeAutoActivation)autoActivation=feeAutoActivation;}catch{await db.close();throw new Error('Invalid wallet execution configuration');}
+  const passkeys=createPasskeyAccounts(db,{config:passkeyConfig,legal,now,onRegistered:feeAutoActivation?feeSignupEnrollment(feeWallet.registry,now):null});
+  const passkeyWallet=withFeeWallet(db,createPasskeyWallet(db,{chain:walletChain,executor:walletExecutor,autoActivation:!!autoActivation&&!feeAutoActivation,now}),feeWallet,{readBalance:createTokenBalanceReader(),now});
   let maintenance;
   const maintain=()=>maintenance??=(async()=>{await expireQuestions(db,now());await remindDeadlines(db,now());})().finally(()=>{maintenance=null;});
   const confirmReward=createRewardConfirmation(db,paymentFetch);

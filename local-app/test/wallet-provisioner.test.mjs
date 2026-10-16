@@ -209,3 +209,33 @@ test('Fee provisioner rechecks nonce after the durable lane claim and never broa
  assert(await f.db.prepare('SELECT * FROM passkey_relayer_lanes WHERE relayer=$1').get(f.relayer.toLowerCase()));
  await assert.rejects(f.provisioner.execute(f.accountId));assert.equal(f.sends,0);
 });
+
+test('V3 automatic activation ignores existing accounts and activates only enrolled signup once',async t=>{
+ const f=await fixture(t,{fee:true}),before=await loadCloneWallet(f.db,f.accountId);
+ await f.registry.assign(f.db,f.accountId);
+ const worker=createAutoActivation(f.db,f);assert.equal(await worker.runNext(),null);assert.equal(f.sends,0);
+ const {feeSignupEnrollment}=await import('../wallet/fee-auto-activation.mjs');
+ await feeSignupEnrollment(f.registry)(f.db,f.accountId);
+ assert.equal((await worker.runNext()).status,'confirmed');assert.equal(f.sends,1);
+ assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,1);
+ assert.deepEqual(await loadCloneWallet(f.db,f.accountId),before);
+ assert.equal(await f.db.prepare('SELECT * FROM passkey_auto_activations WHERE account_id=$1').get(f.accountId),undefined);
+ assert.equal((await f.db.prepare('SELECT * FROM passkey_fee_auto_activations WHERE account_id=$1').get(f.accountId)).phase,'confirmed');
+});
+for(const failure of ['address','nonce','input','ambiguous'])test('V3 automatic activation stops permanently on '+failure,async t=>{
+ const f=await fixture(t,{fee:true});const {feeSignupEnrollment}=await import('../wallet/fee-auto-activation.mjs');
+ await feeSignupEnrollment(f.registry)(f.db,f.accountId);
+ // Change state AFTER the fresh quote: an initial nonce of 1 is valid, while
+ // changing it after binding the quoted nonce must stop before broadcast.
+ const makeProvisioner=id=>{const p=f.makeProvisioner(id);return {...p,quote:async account=>{const q=await p.quote(account);f.set(failure);return q;}};};
+ const result=await createAutoActivation(f.db,{...f,makeProvisioner}).runNext();assert.equal(result.status,failure==='ambiguous'?'ambiguous':'stopped');
+ assert.equal(f.sends,failure==='ambiguous'?1:0);assert.equal(await createAutoActivation(f.db,f).runNext(),null);
+ assert.equal(f.sends,failure==='ambiguous'?1:0);
+});
+test('V3 fresh dynamic provisioning quote retains 40 QUAI maximum and exact factory',async t=>{
+ const f=await fixture(t,{fee:true}),quote=await f.provisioner.quote(f.accountId),options={accountId:f.accountId,address:quote.address,relayer:f.relayer,infrastructure:f.registry.infrastructure};
+ assert.equal(validateAutoQuote(quote,options),9600000000000000000n);
+ assert.throws(()=>validateAutoQuote({...quote,factory:infra.factory},options));
+ const {formatUnits}=await import('quais'),price=40000000000000000000n/BigInt(quote.gasLimit)+1n;
+ assert.throws(()=>validateAutoQuote({...quote,transaction:{...quote.transaction,gasPrice:String(price)},maximumCostQuai:formatUnits(price*BigInt(quote.gasLimit),18)},options));
+});

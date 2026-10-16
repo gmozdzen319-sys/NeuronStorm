@@ -11,10 +11,18 @@ export function withFeeWallet(db,legacy,fee,{readBalance,now=Date.now}){
  service.state=async account=>{
   owner(account);const previous=await legacy.state(account),row=await fee.registry.load(db,account.id);
   if(!row)return previous;
+  const signup=await db.prepare('SELECT account_id FROM passkey_fee_signup_queue WHERE account_id=$1').get(account.id);
+  const pendingSignup=async()=>{
+   const job=await db.prepare('SELECT phase FROM passkey_fee_auto_activations WHERE account_id=$1').get(account.id);
+   const stopped=job&&['stopped','ambiguous'].includes(job.phase);
+   return {...previous,generation:3,status:stopped?'activation_waiting':'activating',address:null,quaiBalance:null,receiveAvailable:false,sendAvailable:false,feeUpgradePending:true,
+    reason:stopped?'Wallet activation is safely paused and needs review. No automatic retry will be made.':'Your wallet is being prepared. Neuron Storm covers activation fees up to 40 QUAI. Your receiving address will appear after confirmation. Do not send funds yet.'};
+  };
   try{
    if(row.revoked_at!==null)throw Error('Credential revoked');
    const view=await fee.chain.snapshot(row.plan);
-   if(!view.deployed)return {...previous,feeUpgradePending:true};
+   if(!view.deployed)return signup?pendingSignup():{...previous,feeUpgradePending:true};
+   if(signup){const approval=await db.prepare('SELECT phase FROM passkey_fee_approvals WHERE account_id=$1').get(account.id);if(approval?.phase!=='confirmed')return pendingSignup();}
    const pending=await db.prepare("SELECT id FROM passkey_native_operations WHERE account_id=$1 AND (phase IN ('verifying','authorized','submitting') OR (phase='awaiting_confirmation' AND expires_at>$2)) LIMIT 1").get(account.id,now());
    const available=!pending&&await fee.send.available();
    const blockedReason=pending?'Another transfer is awaiting confirmation or being checked. Wait for its result before preparing another.':!available&&fee.send.unavailableReason?await fee.send.unavailableReason():'Your wallet can receive funds. Sending is temporarily unavailable.';
@@ -22,11 +30,12 @@ export function withFeeWallet(db,legacy,fee,{readBalance,now=Date.now}){
     sendTokens:[{contract:ZERO_TOKEN,symbol:'QUAI'},{contract:NS_TOKEN.address,symbol:NS_TOKEN.symbol},...previous.tokens],
     legacyWallets:[{address:previous.address,quaiBalance:previous.quaiBalance,receiveAvailable:previous.receiveAvailable}].filter(w=>w.address),
     reason:available?'Your wallet is ready. Each send requires your passkey and pays a quoted network fee plus 5%.':blockedReason};
-  }catch{return {...previous,sendAvailable:false,feeUpgradePending:true,reason:'We could not safely verify the updated wallet. Your existing wallet is shown. No transaction was sent.'};}
+  }catch{if(signup)return {...await pendingSignup(),reason:'We could not safely verify your wallet. Please check again later. No transaction was sent.'};return {...previous,sendAvailable:false,feeUpgradePending:true,reason:'We could not safely verify the updated wallet. Your existing wallet is shown. No transaction was sent.'};}
  };
- service.receive=async account=>{const state=await service.state(account);if(state.generation!==3)return legacy.receive(account);return {address:state.address,quaiBalance:state.quaiBalance,receiveCompatible:true,network:'Quai Mainnet · Cyprus-1',qr:await QRCode.toDataURL(state.address,{errorCorrectionLevel:'M',width:232,margin:4})};};
+ service.receive=async account=>{const state=await service.state(account);if(state.generation!==3)return legacy.receive(account);if(!state.receiveAvailable||!state.address)throw fail(423,state.reason);return {address:state.address,quaiBalance:state.quaiBalance,receiveCompatible:true,network:'Quai Mainnet · Cyprus-1',qr:await QRCode.toDataURL(state.address,{errorCorrectionLevel:'M',width:232,margin:4})};};
  service.tokenBalances=async account=>{
   const state=await service.state(account);if(state.generation!==3)return legacy.tokenBalances(account);
+  if(!state.receiveAvailable||!state.address)return {nsBalance:null,tokens:state.tokens.map(token=>({...token,balance:null}))};
   const assets=await Promise.all([{contract:NS_TOKEN.address,decimals:NS_TOKEN.decimals},...state.tokens].map(async token=>{try{return {...token,balance:await readBalance(token,state.address)};}catch{return {...token,balance:null};}}));
   return {nsBalance:assets[0].balance,tokens:assets.slice(1)};
  };

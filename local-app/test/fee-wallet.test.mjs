@@ -10,3 +10,27 @@ test('Confirmed fee wallet is Receive while old address and funds remain visible
 test('Unconfirmed assignment never replaces existing Receive',async()=>{const f=fixture();f.set('undeployed');assert.equal((await f.service.state(account)).address,oldAddress);assert.equal((await f.service.receive(account)).address,oldAddress);});
 test('Inconsistent chain disables Send; an unresolved transaction also disables Send',async()=>{for(const condition of ['unavailable','pending']){const f=fixture();f.set(condition);await assert.rejects(f.service.send.prepare(account,{amount:'1'}));assert.equal(f.calls.length,0);}});
 test('Fee routing supplies QUAI default but retains selected token',async()=>{const f=fixture();assert.equal((await f.service.send.prepare(account,{amount:'1'})).token,'0x'+'0'.repeat(40));assert.equal((await f.service.send.prepare(account,{amount:'1',token:oldAddress})).token,oldAddress);assert.deepEqual(await f.service.send.confirm(account,{id:'x'}),{fee:true});await assert.rejects(f.service.state(null));});
+
+test('New v3 signup hides Receive until both receipt and runtime confirmation, then exposes all assets',async()=>{
+ let deployed=false,confirmed=false,phase=null;let balanceReads=0;
+ const db={prepare:sql=>({get:async()=>sql.includes('passkey_fee_signup_queue')?{account_id:'a'}:sql.includes('passkey_fee_auto_activations')?(phase?{phase}:null):sql.includes('passkey_fee_approvals')?(confirmed?{phase:'confirmed'}:null):null})};
+ const token='0x0000000000000000000000000000000000000007';
+ const legacy={state:async()=>({address:null,receiveAvailable:false,sendAvailable:false,tokens:[{contract:token,symbol:'NEW',decimals:18}]}),receive:async()=>{throw Error('Legacy Receive must not be used');}};
+ const fee={registry:{load:async()=>({revoked_at:null,plan:{address:newAddress}})},chain:{snapshot:async()=>({deployed,quaiBalance:'0.0'})},send:{available:async()=>true}};
+ const service=withFeeWallet(db,legacy,fee,{readBalance:async()=>{balanceReads++;return '0.0';}});
+ let view=await service.state(account);assert.equal(view.status,'activating');assert.equal(view.address,null);await assert.rejects(service.receive(account));
+ await service.tokenBalances(account);assert.equal(balanceReads,0);
+ deployed=true;assert.equal((await service.state(account)).receiveAvailable,false);
+ phase='ambiguous';view=await service.state(account);assert.equal(view.status,'activation_waiting');assert.match(view.reason,/No automatic retry/);assert.equal(view.address,null);
+ confirmed=true;view=await service.state(account);assert.equal(view.address,newAddress);assert(view.sendAvailable&&view.receiveAvailable);assert(view.sendTokens.some(t=>t.contract===token));
+ assert.equal((await service.receive(account)).address,newAddress);await service.tokenBalances(account);assert.equal(balanceReads,2);
+});
+
+test('V3 worker configuration requires fee Send, no test scope and no legacy worker; startup does not enroll',async()=>{
+ const {configuredFeeAutoActivation}=await import('../wallet/fee-auto-activation.mjs');
+ const env={NS_FEE_AUTO_ACTIVATE:'true',NS_FEE_SEND_ENABLED:'true',NS_WALLET_NETWORK_POLICY:'official-single-source-v1',NS_WALLET_RELAYER_ADDRESS:'0x001893151cDcc11372f6dd067e3424f47ad8534a'};
+ const db={prepare:()=>{throw Error('Startup must not scan or backfill');}},fee={registry:{infrastructure:{generation:3}},chain:{}};
+ assert(configuredFeeAutoActivation(db,fee,env).runNext);
+ for(const patch of [{NS_FEE_SEND_ENABLED:'false'},{NS_FEE_ALLOWED_ACCOUNT_ID:'old-user'},{NS_WALLET_AUTO_ACTIVATE:'true'},{NS_WALLET_PROVISION_ENABLED:'true'}])assert.throws(()=>configuredFeeAutoActivation(db,fee,{...env,...patch}));
+ assert.equal(configuredFeeAutoActivation(db,null,{}),null);
+});

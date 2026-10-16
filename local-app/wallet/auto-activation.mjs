@@ -6,12 +6,16 @@ import {activationFailure} from './activation-failure.mjs';
 import {randomUUID} from 'node:crypto';
 
 export const AUTO_MAXIMUM=40000000000000000000n;
-export function validateAutoQuote(q,{accountId,address,relayer,now=Date.now()}){
+const legacyInfrastructure=infra;
+export function validateAutoQuote(q,{accountId,address,relayer,now=Date.now(),infrastructure=infra}){
+ const infra=infrastructure,fee=infra.generation===3;
  assert.equal(q.accountId,accountId);assert.equal(q.address.toLowerCase(),address.toLowerCase());
  assert.equal(q.chainId,9);assert.equal(q.factory,infra.factory);assert.equal(q.implementation,infra.implementation);
  assert.equal(q.transaction.from.toLowerCase(),relayer.toLowerCase());assert.equal(q.transaction.to.toLowerCase(),infra.factory.toLowerCase());
- assert.equal(BigInt(q.transaction.value),0n);assert.equal(BigInt(q.transaction.gas),330000n);assert.equal(BigInt(q.gasLimit),330000n);
- const reserve=BigInt(q.transaction.gasPrice)*330000n;
+ const limit=BigInt(q.gasLimit);assert(limit>0n);if(!fee)assert.equal(limit,330000n);
+ assert.equal(BigInt(q.transaction.value),0n);assert.equal(BigInt(q.transaction.gas),limit);
+ assert(BigInt(q.transaction.gasPrice)>0n);
+ const reserve=BigInt(q.transaction.gasPrice)*limit;
  assert(reserve>0n&&reserve<=AUTO_MAXIMUM,'Activation exceeds 40 QUAI');
  assert.equal(parseUnits(q.maximumCostQuai,18),reserve);assert(parseUnits(q.balanceQuai,18)>=reserve+10000000000000000000n);
  assert(q.native&&!q.nativePreflightRequired&&q.approvalRequired&&q.broadcastAllowed===false);
@@ -19,7 +23,12 @@ export function validateAutoQuote(q,{accountId,address,relayer,now=Date.now()}){
  return reserve;
 }
 
-export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now}){
+export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now,registry=null}){
+ const infra=registry?.infrastructure??legacyInfrastructure,fee=registry!==null;
+ if(fee){assert.equal(infra.generation,3);const original=db;
+  const names={passkey_clone_wallets:'passkey_fee_wallets',passkey_clone_approvals:'passkey_fee_approvals',passkey_clone_approval_history:'passkey_fee_approval_history',passkey_auto_activations:'passkey_fee_auto_activations',passkey_activation_events:'passkey_fee_activation_events'};
+  db={...original,prepare:sql=>original.prepare(sql.replace(/\b(passkey_clone_wallets|passkey_clone_approvals|passkey_clone_approval_history|passkey_auto_activations|passkey_activation_events)\b/g,name=>names[name]))};
+ }
  relayer=getAddress(relayer).toLowerCase();
  async function blocked(){
   return await db.prepare("SELECT account_id FROM passkey_auto_activations WHERE relayer=$1 AND phase IN ('running','ambiguous') LIMIT 1").get(relayer)
@@ -32,6 +41,7 @@ export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now}){
    await db.lock('neuron-storm:auto-activation:'+relayer);
    if(await blocked())return null;
    const candidate=await db.prepare(`SELECT w.account_id,w.address FROM passkey_clone_wallets w
+    ${fee?'JOIN passkey_fee_signup_queue signup ON signup.account_id=w.account_id':''}
     JOIN passkey_accounts a ON a.id=w.account_id
     JOIN passkey_credentials c ON c.id=w.credential_id AND c.account_id=w.account_id
     LEFT JOIN passkey_clone_approvals p ON p.account_id=w.account_id
@@ -44,7 +54,7 @@ export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now}){
    if(!candidate)return null;
    // Grants are shared across generations; wallet queues are not. Never collide
    // with or revive a historical v1 sponsorship when assigning this user's v2.
-   const grantId='auto-activation-v'+WALLET_GENERATION+':'+candidate.account_id;
+   const grantId='auto-activation-v'+(fee?3:WALLET_GENERATION)+':'+candidate.account_id;
    await db.prepare('INSERT INTO passkey_relayer_grants(id,relayer,budget_wei,expires_at,enabled) VALUES($1,$2,$3,$4,FALSE)').run(grantId,relayer,String(AUTO_MAXIMUM),now()+300000);
    await db.prepare("INSERT INTO passkey_auto_activations VALUES($1,$2,$3,'running',$4)").run(candidate.account_id,relayer,grantId,now());
    return {...candidate,grantId};
@@ -85,7 +95,7 @@ export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now}){
    stage='QUOTE';
    const quote=await provisioner.quote(job.account_id);
    stage='QUOTE_POLICY';
-   validateAutoQuote(quote,{accountId:job.account_id,address:job.address,relayer,now:now()});
+   validateAutoQuote(quote,{accountId:job.account_id,address:job.address,relayer,now:now(),infrastructure:infra});
    stage='APPROVAL';
    await db.transaction(async()=>{
     const saved=await db.prepare('SELECT * FROM passkey_clone_approvals WHERE account_id=$1 FOR UPDATE').get(job.account_id);

@@ -41,7 +41,7 @@ export function strictClientData(encoded){
   }catch{throw fail(400,'Invalid device response.');}
 }
 
-export function createPasskeyAccounts(db,{config,legal,now=Date.now}){
+export function createPasskeyAccounts(db,{config,legal,now=Date.now,onRegistered=null}){
   function enabled(){if(!config.enabled)throw unavailable();}
   async function session(raw){
     if(!config.enabled||typeof raw!=='string'||!/^[\w-]{43}$/.test(raw))return null;
@@ -87,6 +87,9 @@ export function createPasskeyAccounts(db,{config,legal,now=Date.now}){
           await db.prepare('INSERT INTO passkey_credentials VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULL)').run(c.id,owner,Buffer.from(c.publicKey).toString('base64url'),c.counter,'My passkey',info.credentialBackedUp,now(),now());
           await db.prepare('INSERT INTO passkey_wallets(account_id) VALUES($1)').run(owner);
           await assignCloneWallet(db,owner,now);
+          // Registration-only, in the same transaction. Login never enrolls an
+          // existing account for a paid wallet upgrade.
+          if(onRegistered)await onRegistered(db,owner);
         }else{
           credentialID=input.response.id;
           const c=await db.prepare(`SELECT c.*,a.user_handle,a.rp_id,a.origin FROM passkey_credentials c JOIN passkey_accounts a ON a.id=c.account_id WHERE c.id=$1 AND c.revoked_at IS NULL FOR UPDATE OF c`).get(credentialID);

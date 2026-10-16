@@ -9,12 +9,13 @@ import {createPasskeyWallet,createTokenMetadataReader,createTokenBalanceReader,t
 import {Interface} from 'quais';
 const config={enabled:true,origin:'http://localhost:3000',rpID:'localhost'},legal=loadLegal({published:false,version:'QA'});
 const b64=v=>Buffer.from(v).toString('base64url'),sha=v=>createHash('sha256').update(v).digest();
-function authenticator(){
+function authenticator(settings=config){
+ const config=settings;
  const {publicKey,privateKey}=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),jwk=publicKey.export({format:'jwk'}),id=randomBytes(32);
  const cose=isoCBOR.encode(new Map([[1,2],[3,-7],[-1,1],[-2,new Uint8Array(Buffer.from(jwk.x,'base64url'))],[-3,new Uint8Array(Buffer.from(jwk.y,'base64url'))]]));
  let handle;
  function client(type,challenge,extra={}){return Buffer.from(JSON.stringify({type,challenge,origin:config.origin,crossOrigin:false,...extra}));}
- function ad(flags,counter){const n=Buffer.alloc(4);n.writeUInt32BE(counter);return Buffer.concat([sha('localhost'),Buffer.from([flags]),n]);}
+ function ad(flags,counter){const n=Buffer.alloc(4);n.writeUInt32BE(counter);return Buffer.concat([sha(config.rpID),Buffer.from([flags]),n]);}
  return {
   register(options){handle=options.user.id;const size=Buffer.alloc(2);size.writeUInt16BE(id.length);
    const data=Buffer.concat([ad(0x45,0),Buffer.alloc(16),size,id,Buffer.from(cose)]);
@@ -124,4 +125,38 @@ test('built-in NS balance is read without adding tokens and never confused with 
  assert.deepEqual(await service.tokenBalances({}),{nsBalance:'0.0',tokens:[]});assert.equal(calls,1);
  unavailable=true;assert.equal((await service.tokenBalances({})).nsBalance,null);
  service.state=async()=>({tokens:[],receiveAvailable:false,address:null});await service.tokenBalances({});assert.equal(calls,2);
+});
+
+test('New registration enrolls v3 atomically; old login never enrolls or migrates',async t=>{
+ const {readFile}=await import('node:fs/promises');
+ const {createFeeAssignments}=await import('../wallet/fee-assignment.mjs');
+ const {feeSignupEnrollment}=await import('../wallet/fee-auto-activation.mjs');
+ const registry=createFeeAssignments(JSON.parse(await readFile(new URL('../wallet/fee-v3-deployment.json',import.meta.url),'utf8')));
+ const cfg={enabled:true,rpID:registry.infrastructure.rpID,origin:registry.infrastructure.origin};
+ const app=await createApp({database:':memory:',legal});t.after(()=>app.close());
+ let service=createPasskeyAccounts(app.db,{config:cfg,legal});
+ const old=authenticator(cfg),oldReq=await service.options('register','old');
+ const oldAccount=await service.verify('register','old',{id:oldReq.id,response:old.register(oldReq.options)});
+ const before=await app.db.prepare('SELECT * FROM passkey_clone_wallets WHERE account_id=$1').get(oldAccount.account.id);
+ service=createPasskeyAccounts(app.db,{config:cfg,legal,onRegistered:feeSignupEnrollment(registry)});
+ const login=await service.options('login','old');await service.verify('login','old',{id:login.id,response:old.assertion(login.options)});
+ assert.equal(await registry.load(app.db,oldAccount.account.id),null);
+ assert.deepEqual(await app.db.prepare('SELECT * FROM passkey_clone_wallets WHERE account_id=$1').get(oldAccount.account.id),before);
+ const addresses=[];
+ for(const label of ['new-a','new-b']){
+  const device=authenticator(cfg),request=await service.options('register',label),response=device.register(request.options);
+  const account=await service.verify('register',label,{id:request.id,response});
+  const wallet=await registry.load(app.db,account.account.id);addresses.push(wallet.address);
+  assert(await app.db.prepare('SELECT * FROM passkey_fee_signup_queue WHERE account_id=$1').get(account.account.id));
+  await assert.rejects(service.verify('register',label,{id:request.id,response}));
+  const returned=createPasskeyAccounts(app.db,{config:cfg,legal,onRegistered:feeSignupEnrollment(registry)});
+  const req=await returned.options('login',label);const again=await returned.verify('login',label,{id:req.id,response:device.assertion(req.options)});
+  assert.equal(again.account.id,account.account.id);assert.equal((await registry.load(app.db,again.account.id)).address,wallet.address);
+ }
+ assert.notEqual(addresses[0],addresses[1]);
+ assert.equal((await app.db.prepare('SELECT COUNT(*) AS n FROM passkey_fee_signup_queue').get()).n,2);
+ const broken=createPasskeyAccounts(app.db,{config:cfg,legal,onRegistered:async(db,id)=>{await feeSignupEnrollment(registry)(db,id);throw Error('rollback');}});
+ const d=authenticator(cfg),r=await broken.options('register','rollback');await assert.rejects(broken.verify('register','rollback',{id:r.id,response:d.register(r.options)}));
+ assert.equal((await app.db.prepare('SELECT COUNT(*) AS n FROM passkey_accounts').get()).n,3);
+ assert.equal((await app.db.prepare('SELECT COUNT(*) AS n FROM passkey_fee_signup_queue').get()).n,2);
 });
