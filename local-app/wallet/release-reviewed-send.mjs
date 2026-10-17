@@ -29,14 +29,14 @@ export async function releaseReviewedSend(db,rpc){
   rpc('quai_getTransactionCount',[getAddress(tx.from),tag]),rpc('quai_getTransactionCount',[getAddress(tx.from),'pending']),
   rpc('quai_call',[{to:op.wallet,data:walletABI.encodeFunctionData('nonce',[])},tag])
  ]);
- assert.equal(receipt,null);assert.equal(transaction,null);
+ assert(receipt===null&&transaction===null,'Transaction observed; recovery stopped');
  assert.equal(BigInt(nonce),BigInt(intent.nonce));assert.equal(BigInt(pending),BigInt(intent.nonce));
  assert.equal(walletABI.decodeFunctionResult('nonce',walletNonce)[0],BigInt(op.walletNonce));
  await assertCanonicalBlock(rpc,block);
  return db.transaction(async()=>{
   await db.prepare('SELECT id FROM passkey_relayer_grants WHERE id=$1 FOR UPDATE').get(intent.grant_id);
   const current=await db.prepare('SELECT * FROM passkey_relayer_intents WHERE operation_id=$1 FOR UPDATE').get(intent.operation_id);
-  assert.deepEqual(current,intent,'Incident changed during review');
+  assert(JSON.stringify(current)===JSON.stringify(intent),'Incident changed during review');
   // Historical proof comes from the reviewed pre-broadcast STOP, not RPC absence.
   await db.prepare('UPDATE passkey_relayer_intents SET broadcast_started=FALSE WHERE operation_id=$1').run(intent.operation_id);
   const released=await releaseUnbroadcastSend(db,{id:intent.operation_id,grantId:intent.grant_id,relayer:intent.relayer,hash:HASH});
@@ -47,5 +47,6 @@ if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  assert.equal(process.argv[2],'--reviewed-2026-10-17','Explicit incident selection required');
  const db=await openDatabase(process.env.DATABASE_URL);
  try{console.log('Reviewed pre-broadcast recovery:',JSON.stringify(await releaseReviewedSend(db,createWalletRPC())));}
+ catch{console.error('Reviewed pre-broadcast recovery stopped; reservation retained.');process.exitCode=1;}
  finally{await db.close();}
 }
