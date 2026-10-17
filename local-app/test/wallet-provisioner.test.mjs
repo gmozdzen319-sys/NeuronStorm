@@ -89,6 +89,18 @@ test('Deployment first-review command cannot repeat even a pre-broadcast failed 
  assert.equal(f.sends,0);
  assert.equal((await f.db.prepare("SELECT count(*) AS n FROM passkey_activation_events WHERE account_id=$1 AND stage='OPERATOR_REVIEW'").get(f.accountId)).n,1);
 });
+test('V3 quote STOP stores safe substage and guard without enabling retry',async t=>{
+ const f=await fixture(t,{fee:true});const {feeSignupEnrollment}=await import('../wallet/fee-auto-activation.mjs');
+ await feeSignupEnrollment(f.registry)(f.db,f.accountId);
+ const error=Object.assign(Error('SECRET TEST VALUE'),{code:'ERR_ASSERTION',stack:'Error: SECRET TEST VALUE\n at check (file:///app/wallet/preflight.mjs:43:108)',quoteDiagnostic:{stage:'NATIVE_EXECUTION',gas:{nativeGas:'123'},signature:'SECRET TEST VALUE'}});
+ const worker=createAutoActivation(f.db,{...f,makeProvisioner:()=>({quote:async()=>{throw error;}})});
+ assert.equal((await worker.runNext()).status,'stopped');assert.equal(await worker.runNext(),null);assert.equal(f.sends,0);
+ const rows=await f.db.prepare('SELECT stage,code,details FROM passkey_fee_activation_events WHERE account_id=$1').all(f.accountId);
+ assert.equal(rows.length,1);assert.equal(rows[0].stage,'QUOTE');assert.equal(rows[0].code,'INVARIANT_FAILED');
+ assert.deepEqual(JSON.parse(rows[0].details),{quoteStage:'NATIVE_EXECUTION',subcode:'ASSERTION_FAILED',guard:'preflight:43:108',gas:{nativeGas:'123'}});
+ assert(!JSON.stringify(rows).includes('SECRET TEST VALUE'));
+});
+
 test('Durable failure diagnostics exclude arbitrary SDK data and secrets',async t=>{
  const f=await fixture(t);await createAutoActivation(f.db,{...f,makeProvisioner:async()=>{throw Object.assign(Error('SECRET TEST VALUE'),{privateKey:'SECRET TEST VALUE',provisioningStage:'SECRET TEST VALUE'});}}).runNext();
  const rows=await f.db.prepare('SELECT * FROM passkey_activation_events WHERE account_id=$1').all(f.accountId);

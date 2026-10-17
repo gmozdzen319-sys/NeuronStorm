@@ -114,7 +114,7 @@ export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now,re
    const saved=await db.prepare('SELECT phase,tx_hash FROM passkey_clone_approvals WHERE account_id=$1').get(job.account_id);
    if(saved&&(saved.phase==='submitting'||saved.tx_hash))phase='ambiguous';
    const failure=activationFailure(error,stage);
-   await db.prepare('INSERT INTO passkey_activation_events(account_id,stage,code,created_at) VALUES($1,$2,$3,$4)').run(job.account_id,failure.stage,failure.code,now());
+   await db.prepare('INSERT INTO passkey_activation_events(account_id,stage,code,details,created_at) VALUES($1,$2,$3,$4,$5)').run(job.account_id,failure.stage,failure.code,JSON.stringify(failure.details??{}),now());
   }finally{
    await db.transaction(async()=>{
     await db.prepare('UPDATE passkey_relayer_grants SET enabled=FALSE WHERE id=$1').run(job.grantId);
