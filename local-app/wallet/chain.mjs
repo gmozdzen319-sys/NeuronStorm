@@ -19,9 +19,14 @@ export const walletABI=new Interface([
  'function transferNative(address,uint256,uint256,bytes32,(bytes32 r,bytes32 s,uint256 challengeIndex,uint256 typeIndex,bytes authenticatorData,string clientDataJSON))'
 ]);
 const METHODS=new Set(['quai_chainId','quai_getBlockByNumber','quai_getCode','quai_call','quai_getBalance','quai_getTransactionCount','quai_getStorageAt','quai_getTransactionReceipt','quai_getTransactionByHash','quai_getLogs','quai_gasPrice','quai_createAccessList','quai_estimateGas']);
+// Share log-query capacity across wallet generations and RPC clients in this
+// process. Per-client queues still allowed simultaneous scans of one endpoint.
+const logLanes=new WeakMap();
 export function createWalletRPC(fetcher=fetch,endpoint='https://rpc.quai.network/cyprus1',{sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms))}={}){
  const url=new URL(endpoint);assert(url.protocol==='https:'&&!url.username&&!url.password,'HTTPS RPC required');
- let id=0,logLane=Promise.resolve();
+ let id=0;
+ let endpoints=logLanes.get(fetcher);if(!endpoints){endpoints=new Map();logLanes.set(fetcher,endpoints);}
+ let lane=endpoints.get(url.href);if(!lane){lane={tail:Promise.resolve(),nextAt:0};endpoints.set(url.href,lane);}
  async function request(method,params=[]){
   assert(METHODS.has(method),'Read-only wallet RPC method required');const requestId=++id;
   const r=await fetcher(endpoint,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:requestId,method,params}),signal:AbortSignal.timeout(10000)});
@@ -42,12 +47,15 @@ export function createWalletRPC(fetcher=fetch,endpoint='https://rpc.quai.network
   // Only this exact read-only overload response is retryable. Broadcasts are
   // not supported here; canonicality checks still validate the pinned range.
   const run=async()=>{for(let attempt=0;;attempt++){
+   const wait=lane.nextAt-Date.now();if(wait>0)await sleep(wait);
    try{return await request(method,pinnedParams);}catch(error){
     if(attempt>=2||error.walletRPC?.code!==-32000||error.walletRPC?.message!=='too many concurrent log queries; retry later')throw error;
-    await sleep((attempt+1)*2000);
-   }
+    // Back off only on the explicit read-only capacity rejection. Never retry
+    // signing/broadcast, other RPC failures or canonicality discrepancies.
+    await sleep((attempt+1)*5000);
+   }finally{lane.nextAt=Date.now()+1000;}
   }};
-  const result=logLane.then(run,run);logLane=result.catch(()=>{});return result;
+  const result=lane.tail.then(run,run);lane.tail=result.catch(()=>{});return result;
  };
 }
 const low=s=>s.toLowerCase(),zero='0x'+'0'.repeat(40);
