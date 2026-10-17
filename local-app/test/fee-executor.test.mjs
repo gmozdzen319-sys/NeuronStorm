@@ -109,3 +109,9 @@ test('Reviewed historical pre-broadcast incident releases once; unknown broadcas
  assert.deepEqual(await releaseReviewedSend(f.db,rpc),{alreadyReleased:true});
  assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei,'0');
 });
+
+for(const token of [false,true])test('Inclusion headroom policy preserves native QUAI and stops short-lived token approvals: '+token,async t=>{
+ const f=await fixture(t,{token}),p=await f.prepare();p.operation.deadline=String(Math.floor(Date.now()/1000)+70);p.operation.digest=feeDigest(p.operation);
+ if(token){await assert.rejects(f.execute(p),/Token approval too close/);assert.equal(f.sent,0);assert.equal(f.signCalls,0);}
+ else{await f.execute(p);assert.equal(f.sent,1);}
+});

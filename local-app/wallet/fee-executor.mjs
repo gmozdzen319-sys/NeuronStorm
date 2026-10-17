@@ -43,7 +43,15 @@ export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,prefl
  const tokenABI=new Interface(['function balanceOf(address) view returns(uint256)']);
  const tokenBalance=async(token,owner,tag)=>String(tokenABI.decodeFunctionResult('balanceOf',await rpc('quai_call',[{to:token,data:tokenABI.encodeFunctionData('balanceOf',[owner])},tag]))[0]);
  async function budget(price,s,gasLimit){const g=await grant();return BigInt(reserveFee({gasPrice:price,gasLimit,relayerBalance:s.balance,remainingBudget:BigInt(g.budget_wei)-BigInt(g.reserved_wei),safetyMargin:SAFETY_MARGIN}));}
- const checkOperation=(op,s)=>{assert.equal(op.digest,feeDigest(op));assert.equal(op.walletNonce,s.walletNonce);assert.equal(op.epoch,s.epoch);assert.equal(lower(op.quote.relayer),lower(relayer));assert(BigInt(op.deadline)>BigInt(Math.floor(now()/1000))+30n);};
+ const checkOperation=(op,s)=>{assert.equal(op.digest,feeDigest(op));assert.equal(op.walletNonce,s.walletNonce);assert.equal(op.epoch,s.epoch);assert.equal(lower(op.quote.relayer),lower(relayer));assert(BigInt(op.deadline)>BigInt(Math.floor(now()/1000))+30n);
+  // All compatible tokens use one bounded policy, with no token whitelist.
+  // Leave native QUAI unchanged; a short token window requires a fresh approval.
+  if(op.quote.token!==ZERO_TOKEN){
+   const deadline=BigInt(op.deadline);
+   assert(deadline>BigInt(Math.floor(now()/1000))+90n,'Token approval too close to expiry; prepare a new quote');
+   assert(deadline>BigInt(s.block.woHeader.timestamp)+90n,'Token approval too close to block time; prepare a new quote');
+  }
+ };
  async function quote(row,operation){
   assert(await available());assert.equal(row.generation,3);
   sendStage('quote.stabilization');

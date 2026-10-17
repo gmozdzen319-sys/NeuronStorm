@@ -10,6 +10,8 @@ const reasons=new Map([
  ['Native access-list discovery did not stabilize','ACCESS_LIST_UNSTABLE'],
  ['No approved relayer budget','RELAYER_BUDGET_UNAVAILABLE'],
  ['Expired operation','OPERATION_EXPIRED'],
+ ['Token approval too close to expiry; prepare a new quote','TOKEN_APPROVAL_WINDOW_TOO_SHORT'],
+ ['Token approval too close to block time; prepare a new quote','TOKEN_BLOCK_WINDOW_TOO_SHORT'],
  ['This confirmation expired or was already used. No retry was sent.','CONFIRMATION_EXPIRED_OR_USED'],
  ['Sending is temporarily unavailable. Your funds remain in your wallet.','SEND_UNAVAILABLE'],
  ['Production chain verification unavailable','NETWORK_VERIFICATION_FAILED'],

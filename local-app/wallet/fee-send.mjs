@@ -32,7 +32,10 @@ export function createFeeSend(db,{loadWallet,chain,executor=null,now=Date.now}){
   const asset=token===ZERO_TOKEN?{decimals:18,symbol:'QUAI',balanceWei:view.balanceWei}:await chain.token(row.plan,token,view.block);
   let amount;try{amount=tokenAmount(input.amount,asset.decimals);}catch{throw fail(400,'Enter a positive amount within the token’s decimal precision.');}
   if(BigInt(asset.balanceWei)<BigInt(amount))throw fail(409,'Insufficient token balance.');
-  const id=randomUUID();let expires=now()+120000;
+  // Token calls need additional state capture/preflight and inclusion time.
+  // Keep native QUAI's existing window unchanged. Never extend a signed plan.
+  const validityMs=token===ZERO_TOKEN?120000:300000;
+  const id=randomUUID();let expires=now()+validityMs;
   const op={chainId:9,action:6,wallet:row.plan.address,epoch:view.epoch,walletNonce:view.nonce,deadline:String(Math.floor(expires/1000)),quote:{token,recipient,amount,requestId:'0x'+randomBytes(32).toString('hex')}};
   // Executor quotes without a signature. Final exact-assertion preflight is
   // mandatory after user presence; it must stop if this quote is insufficient.
@@ -40,7 +43,7 @@ export function createFeeSend(db,{loadWallet,chain,executor=null,now=Date.now}){
   const pricing=await executor.quote(row,structuredClone(op),view);
   // User-presence time starts after the read-only estimate, not while RPC and
   // native simulation are running. Nothing has been signed at this point.
-  expires=now()+120000;op.deadline=String(Math.floor(expires/1000));
+  expires=now()+validityMs;op.deadline=String(Math.floor(expires/1000));
   op.quote={...op.quote,relayer:feeAddress(pricing.relayer),networkFee:String(pricing.networkFee),gasPrice:String(pricing.gasPrice)};
   op.digest=feeDigest(op);
   const fee=quotedFee(1,op.quote.networkFee);
