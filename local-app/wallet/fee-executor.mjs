@@ -1,3 +1,4 @@
+import {sendStage} from './send-diagnostics.mjs';
 import assert from 'node:assert/strict';
 import {QuaiTransaction} from 'quais';
 import {walletABI} from './chain.mjs';
@@ -44,14 +45,17 @@ export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,prefl
  const checkOperation=(op,s)=>{assert.equal(op.digest,feeDigest(op));assert.equal(op.walletNonce,s.walletNonce);assert.equal(op.epoch,s.epoch);assert.equal(lower(op.quote.relayer),lower(relayer));assert(BigInt(op.deadline)>BigInt(Math.floor(now()/1000))+30n);};
  async function quote(row,operation){
   assert(await available());assert.equal(row.generation,3);
+  sendStage('quote.stabilization');
   const stable=await stabilize({sources:[{name:'official Cyprus-1',rpc}],entries:[{address:relayer,storageKeys:[]},{address:row.plan.address,storageKeys:[]}]});assert(stable.stable);
   const s=await state(row);assert.equal(operation.walletNonce,s.walletNonce);assert.equal(operation.epoch,s.epoch);
   const gasPrice=BigInt(await rpc('quai_gasPrice',[]));assert(gasPrice>0n);
   // The estimator is a server-only dependency. Its quote is not proof of final
   // signature execution: exact native execution on pinned RPC state is mandatory.
+  sendStage('quote.estimation');
   const estimate=await estimateQuote({rpc,row,operation:structuredClone(operation),state:structuredClone(s),gasPrice:String(gasPrice),relayer});
   const gasLimit=BigInt(estimate.gasLimit),estimatedGas=BigInt(estimate.estimatedGas);
   assert(estimatedGas>0n&&gasLimit>=estimatedGas);assert(gasLimit<=BigInt(s.block.header.gasLimit));
+  sendStage('quote.reserve');
   const maximumFeeWei=String(await budget(gasPrice,s,gasLimit));
   return {relayer,gasPrice:String(gasPrice),gasLimit:String(gasLimit),networkFee:String(estimatedGas*gasPrice),estimatedGas:String(estimatedGas),maximumFeeWei,state:s};
  }
@@ -65,35 +69,51 @@ export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,prefl
   return {operation:structuredClone(operation),gasPrice:pricing.gasPrice,gasLimit:pricing.gasLimit,relayer,relayerNonce:s.nonce,relayerBalance:s.balance,walletBalance:s.walletBalance,tokenBalance:tokenFunds,maximumFeeWei:pricing.maximumFeeWei};
  }
  async function execute({id,accountId,row,prepared,auth}){
+  sendStage('execute.availability');
   assert(await available());assert.equal(accountId,row.account_id);assert.equal(lower(prepared.relayer),lower(relayer));assert.equal(row.generation,3);const gasLimit=BigInt(prepared.gasLimit);assert(gasLimit>0n);
+  sendStage('execute.state_and_operation');
   const op=prepared.operation;assert.equal(op.wallet,row.plan.address);let s=await state(row);checkOperation(op,s);assert.equal(s.nonce,prepared.relayerNonce);
   assert.equal(s.balance,prepared.relayerBalance);assert.equal(s.walletBalance,prepared.walletBalance);
+  sendStage('execute.reserve');
   const price=BigInt(prepared.gasPrice);assert.equal(String(await budget(price,s,gasLimit)),prepared.maximumFeeWei);
+  sendStage('execute.recipient_and_token');
   const recipient=op.quote.recipient,token=op.quote.token;const recipientBalance=BigInt(await rpc('quai_getBalance',[recipient,s.block.woHeader.number]));
   const tokenBefore=token===ZERO_TOKEN?null:{wallet:await tokenBalance(token,op.wallet,s.block.woHeader.number),recipient:await tokenBalance(token,recipient,s.block.woHeader.number)};
   if(tokenBefore)assert.equal(tokenBefore.wallet,prepared.tokenBalance);
+  sendStage('execute.passkey_contract');
   assert.equal((await call(row,'verifyProbe',[op.digest,auth,row.plan.x,row.plan.y],s.block.woHeader.number))[0],true);
   const tx={type:0,chainId:9,from:relayer,to:row.plan.address,nonce:s.nonce,value:'0',gasPrice:String(price),gasLimit:String(gasLimit),data:feeWalletABI.encodeFunctionData('sendQuoted',[op.quote,op.deadline,row.plan.keyId,auth])};
   const unlisted=JSON.stringify(tx);
+  sendStage('execute.preflight');
   let simulation=await preflight(rpc,tx,row,s.block);
   assert.equal(JSON.stringify(tx),unlisted,'Preflight mutated transaction');
   tx.accessList=canonicalACL(simulation.accessList);const commitment=fingerprint(bound(tx));
   const validateSimulation=sim=>validateFeeExecution(op,{estimatedGas:sim.gasUsed,gasLimit,gasPrice:price,walletQuai:s.walletBalance,tokenBalance:tokenBefore?.wallet});
+  sendStage('execute.quote_validation');
   validateSimulation(simulation);assert.equal(fingerprint(bound(tx)),commitment);
   async function gate(){
+   sendStage('gate.fresh_state');
    const fresh=await state(row);checkOperation(op,fresh);assert.equal(fresh.nonce,s.nonce);assert.equal(fresh.balance,s.balance);
+   sendStage('gate.reserve_and_ancestry');
    await budget(price,fresh,gasLimit);await assertCanonicalAdvance(rpc,s.block,fresh.block);assertContextCompatible(s.block,fresh.block,tx,op);
+   sendStage('gate.accounts');
    assertSameAccounts(simulation.accounts,await captureAccounts(rpc,accountEntries(simulation.accounts),fresh.block));
+   sendStage('gate.exact_preflight');
    const next=await preflight(rpc,tx,row,fresh.block);assert.deepEqual(canonicalACL(next.accessList),tx.accessList);validateSimulation(next);assertSameAccounts(simulation.accounts,next.accounts);assert.equal(fingerprint(bound(tx)),commitment);
+   sendStage('gate.network');
    assert(await verifyNetwork({rpc,block:fresh.block,relayer,wallet:row.plan.address,accounts:next.accounts}));
+   sendStage('gate.final_state');
    const tail=await state(row);checkOperation(op,tail);assert.equal(tail.nonce,fresh.nonce);assert.equal(tail.balance,fresh.balance);await budget(price,tail,gasLimit);
+   sendStage('gate.final_ancestry');
    await assertCanonicalAdvance(rpc,fresh.block,tail.block);assertContextCompatible(fresh.block,tail.block,tx,op);assertSameAccounts(next.accounts,await captureAccounts(rpc,accountEntries(next.accounts),tail.block));simulation=next;s=tail;
   }
-  await gate();assert.equal(lower(await signer.getAddress()),lower(relayer));const raw=await signer.signTransaction(structuredClone(tx));
+  await gate();sendStage('execute.sign');assert.equal(lower(await signer.getAddress()),lower(relayer));const raw=await signer.signTransaction(structuredClone(tx));
   const decode=()=>{const t=QuaiTransaction.from(raw);return {hash:t.hash,tx:{type:t.type,chainId:t.chainId,from:t.from,to:t.to,nonce:t.nonce,value:t.value,gasPrice:t.gasPrice,gasLimit:t.gasLimit,data:t.data,accessList:t.accessList}};};
+  sendStage('execute.signed_plan');
   let signed=decode();assert.deepEqual(bound(signed.tx),bound(tx));assert(/^0x[0-9a-f]{64}$/i.test(signed.hash));await gate();signed=decode();assert.deepEqual(bound(signed.tx),bound(tx));
   // Hold only short DB transactions. The persistent unique relayer intent blocks
   // concurrent spend and restart/resubmission after any ambiguous result.
+  sendStage('execute.journal');
   await db.transaction(async()=>{
    const g=await db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1 FOR UPDATE').get(grantId);const maximum=price*gasLimit;
    assert(g?.enabled&&g.expires_at>now()&&BigInt(g.budget_wei)-BigInt(g.reserved_wei)>=maximum);
@@ -109,18 +129,23 @@ export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,prefl
   // Close the gap between the pre-sign checks and acquiring the shared lane:
   // another completed sender may have consumed this nonce in that interval.
   // The reserve is already debited, so do not count it a second time here.
+  sendStage('execute.locked_state');
   const locked=await state(row);checkOperation(op,locked);
   assert.equal(locked.nonce,s.nonce);assert.equal(locked.balance,s.balance);assert.equal(locked.walletBalance,s.walletBalance);
   await assertCanonicalAdvance(rpc,s.block,locked.block);assertContextCompatible(s.block,locked.block,tx,op);
   assertSameAccounts(simulation.accounts,await captureAccounts(rpc,accountEntries(simulation.accounts),locked.block));
   assert.equal(fingerprint(bound(tx)),commitment);s=locked;
+  sendStage('execute.broadcast');
   assert.equal(lower(await sendRaw(raw)),lower(signed.hash));
+  sendStage('execute.receipt');
   const confirmed=await waitCanonicalReceipt(rpc,signed.hash,{confirmations:3,timeoutMs:180000,pollMs:2000,maxPolls:90});const receipt=confirmed.receipt;
+  sendStage('execute.mined_transaction');
   const mined=await rpc('quai_getTransactionByHash',[signed.hash]);assert(mined);
   assert.deepEqual(bound({type:mined.type,chainId:mined.chainId,from:mined.from,to:mined.to,nonce:mined.nonce,value:mined.value,gasPrice:mined.gasPrice,gasLimit:mined.gas??mined.gasLimit,data:mined.input??mined.data,accessList:mined.accessList}),bound(tx));
   assert.equal(BigInt(receipt.effectiveGasPrice??mined.gasPrice),price);assert(BigInt(receipt.gasUsed)<=gasLimit);
   const success=BigInt(receipt.status)===1n;
   // Nonce and wallet effects at the canonical receipt block, not at an unstable tip.
+  sendStage('execute.receipt_effects');
   const tag=receipt.blockNumber;const receiptBlock=validateBlock(await rpc('quai_getBlockByNumber',[tag,false]));assert.equal(receiptBlock.hash,receipt.blockHash);
   assert.equal(BigInt(await rpc('quai_getTransactionCount',[relayer,tag])),BigInt(tx.nonce)+1n);
   assert.equal((await call(row,'nonce',[],tag))[0],BigInt(op.walletNonce)+(success?1n:0n));await assertCanonicalBlock(rpc,receiptBlock);
@@ -133,6 +158,7 @@ export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,prefl
   if(tokenBefore){assert.equal(BigInt(await tokenBalance(token,op.wallet,tag)),BigInt(tokenBefore.wallet)-amount);assert.equal(BigInt(await tokenBalance(token,recipient,tag)),BigInt(tokenBefore.recipient)+amount);}
   await assertCanonicalBlock(rpc,receiptBlock);
   assert(await verifyNetwork({rpc,block:receiptBlock,relayer,wallet:row.plan.address}),'Receipt network verification failed');
+  sendStage('execute.journal');
   await db.transaction(async()=>{
    await db.prepare('UPDATE passkey_relayer_grants SET reserved_wei=reserved_wei-$1 WHERE id=$2').run(String(price*gasLimit-fee),grantId);
    await db.prepare('UPDATE passkey_relayer_intents SET phase=$1 WHERE operation_id=$2').run(success?'confirmed':'failed',id);
