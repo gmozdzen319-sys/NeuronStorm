@@ -4,7 +4,7 @@ const quoteStages=new Set(['ASSIGNMENT','WALLET_SNAPSHOT','QUOTE_HEAD','RELAYER_
 // Never persist message, full stack, assertion values or RPC/signing payloads.
 function quoteDetails(error){
  const diagnostic=error?.quoteDiagnostic;
- const site=String(error?.stack??'').match(/[/\\](provisioning-quote|provisioner|provisioning-gas|fee-assignment|wallet-infrastructure|wallet-clone-plan|fee-operation|transaction-policy|fee-plan|chain|head-guard|factory-context|preflight)\.mjs:(\d{1,6}):(\d{1,6})(?=[\s)]|$)/);
+ const site=String(error?.stack??'').match(/[/\\](provisioning-quote|provisioner|provisioning-gas|fee-assignment|wallet-infrastructure|wallet-clone-plan|fee-operation|transaction-policy|fee-plan|chain|head-guard|factory-context|factory-checkpoint|preflight)\.mjs:(\d{1,6}):(\d{1,6})(?=[\s)]|$)/);
  const details={quoteStage:quoteStages.has(diagnostic?.stage)?diagnostic.stage:'UNKNOWN',subcode:error?.code==='ERR_ASSERTION'?'ASSERTION_FAILED':'DEPENDENCY_FAILED',guard:site?`${site[1]}:${site[2]}:${site[3]}`:'unavailable'};
  const gas={};
  for(const name of ['accessListGas','estimatedGas','gasLimit','nativeGas']){

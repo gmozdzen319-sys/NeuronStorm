@@ -37,7 +37,7 @@ export async function quoteProvisioning(db,{accountId,relayer,chain,preflight,no
   let native=null;
   if(preflight){
    quoteStage='FACTORY_STORAGE';
-   const factoryStorageKeys=await factoryStorageContext(rpc,block,infrastructure);
+   const factoryStorageKeys=await factoryStorageContext(rpc,block,infrastructure,registry?db:null);
    quoteStage='NATIVE_EXECUTION';
    native=await preflight(rpc,{...transaction,chainId:9,type:0,gasLimit:String(LIMIT)}, {...row,factoryStorageKeys},block);
    quoteStage='NATIVE_GAS_MATCH';gasEvidence.nativeGas=String(BigInt(native.gasUsed));

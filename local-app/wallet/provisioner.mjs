@@ -66,7 +66,7 @@ export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,
     stage='ACCESS_LIST';
     const acl=await rpc('quai_createAccessList',[rpcTransaction(tx),tag]);assert(!acl.error);assert.deepEqual(canonicalACL(acl.accessList),tx.accessList);
     stage='NATIVE_PREFLIGHT';
-    const factoryStorageKeys=await factoryStorageContext(rpc,block,infrastructure);const fresh=await preflight(rpc,tx,{...row,factoryStorageKeys},block);
+    const factoryStorageKeys=await factoryStorageContext(rpc,block,infrastructure,registry?assignmentDb:null);const fresh=await preflight(rpc,tx,{...row,factoryStorageKeys},block);
     assertSameAccounts(snapshot.accounts,fresh.accounts);assert.equal(low(factoryABI.decodeFunctionResult('createWallet',fresh.returnValue)[0]),row.address);
     stage='NETWORK_VERIFICATION';
     assert(await verifyNetwork({rpc,block,relayer,wallet:row.plan.address,accounts:fresh.accounts}));await assertCanonicalBlock(rpc,block);assert.equal(fingerprint(bound(tx,LIMIT)),commitment);snapshot=fresh;

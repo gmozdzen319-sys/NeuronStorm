@@ -2,13 +2,15 @@ import assert from 'node:assert/strict';
 import {AbiCoder,keccak256} from 'quais';
 import {WALLET_INFRASTRUCTURE as infra} from '../wallet-infrastructure.mjs';
 import {factoryABI} from './chain.mjs';
+import {checkpointFactoryContext} from './factory-checkpoint.mjs';
 import {assertCanonicalBlock,assertCanonicalAdvance,validateBlock,MAX_ADVANCE,MAX_TIME_ADVANCE} from './head-guard.mjs';
 const abi=AbiCoder.defaultAbiCoder(),q=n=>'0x'+n.toString(16);
 // Bounded reconstruction of this immutable factory's only storage mapping.
 // No synthetic factory padding, guessed storage size or silent partial result.
 // A long history requires a separately reviewed indexed snapshot, not truncation.
 const histories=new WeakMap(),lanes=new WeakMap();
-export function factoryStorageContext(rpc,block,infrastructure=infra){
+export function factoryStorageContext(rpc,block,infrastructure=infra,db=null){
+ if(infrastructure.generation===3)return checkpointFactoryContext(rpc,block,infrastructure,db);
  const pinned=Object.freeze({...infrastructure});
  const prior=lanes.get(rpc)??Promise.resolve();
  const task=prior.then(()=>readFactoryStorageContext(rpc,block,pinned));

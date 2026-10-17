@@ -1,6 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';
 import {randomUUID,generateKeyPairSync} from 'node:crypto';
-import {Wallet,QuaiTransaction} from 'quais';import {isoCBOR} from '@simplewebauthn/server/helpers';
+import {Wallet,QuaiTransaction,keccak256} from 'quais';import {isoCBOR} from '@simplewebauthn/server/helpers';
 import {createApp} from './database.mjs';
 import {assignCloneWallet,loadCloneWallet,WALLET_INFRASTRUCTURE as infra,WALLET_GENERATION} from '../wallet-infrastructure.mjs';
 import {createFeeAssignments} from '../wallet/fee-assignment.mjs';
@@ -12,7 +12,7 @@ import {diagnoseProvisioning} from '../wallet/provisioning-diagnosis.mjs';
 const hash=n=>'0x'+BigInt(n).toString(16).padStart(64,'0'),q=n=>'0x'+BigInt(n).toString(16);
 let signer;for(let n=1;n<10000;n++){const s=new Wallet(hash(n));if(/^0x00[0-7]/i.test(s.address)){signer=s;break;}}assert(signer);
 async function fixture(t,{fee=false}={}){
- const infrastructure=fee?{...infra,generation:3,confirmed:true,factory:'0x0000000000000000000000000000000000000005',implementation:'0x0000000000000000000000000000000000000006',implementationTransaction:hash(99)}:infra;
+ const infrastructure=fee?{...infra,generation:3,confirmed:true,factory:'0x0000000000000000000000000000000000000005',factoryHash:keccak256('0x'),implementation:'0x0000000000000000000000000000000000000006',implementationTransaction:hash(99)}:infra;
  const registry=fee?createFeeAssignments(infrastructure):null;
  const app=await createApp({database:':memory:'});t.after(()=>app.close());const db=app.db,accountId=randomUUID(),credentialId=randomUUID(),grantId=randomUUID(),now=Date.now();
  const {publicKey}=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),jwk=publicKey.export({format:'jwk'}),cose=Buffer.from(isoCBOR.encode(new Map([[1,2],[3,-7],[-1,1],[-2,new Uint8Array(Buffer.from(jwk.x,'base64url'))],[-3,new Uint8Array(Buffer.from(jwk.y,'base64url'))]]))).toString('base64url');
@@ -22,7 +22,7 @@ async function fixture(t,{fee=false}={}){
  const block=n=>({hash:hash(n),woHeader:{hash:hash(n),parentHash:hash(n-1),location:'0x0000',number:q(n),timestamp:q(Math.floor(now/1000))},header:{quaiStateSize:'0x1',gasLimit:'0x989680'}});
  const rpc=async(method,args=[])=>{
   if(method==='quai_chainId')return '0x9';if(method==='quai_getBlockByNumber')return block(args[0]==='latest'?(sends?19:16):Number(BigInt(args[0])));
-  if(method==='quai_getTransactionCount'){const claimed=nonceAfterClaim&&await db.prepare('SELECT * FROM passkey_relayer_lanes WHERE relayer=$1').get(relayer.toLowerCase());return q(sends||wrongNonce||claimed?1:0);}if(method==='quai_getBalance')return q(10n**21n);if(method==='quai_gasPrice')return q(30000000000000n);
+  if(method==='quai_getTransactionCount'){if(fee&&args[0].toLowerCase()===infrastructure.factory.toLowerCase())return '0x1';const claimed=nonceAfterClaim&&await db.prepare('SELECT * FROM passkey_relayer_lanes WHERE relayer=$1').get(relayer.toLowerCase());return q(sends||wrongNonce||claimed?1:0);}if(method==='quai_getBalance')return q(10n**21n);if(method==='quai_gasPrice')return q(30000000000000n);
   if(method==='quai_getCode')return '0x';if(method==='quai_getStorageAt')return hash(0);
   if(method==='quai_getTransactionReceipt'){if(args[0]===infrastructure.factoryTransaction)return {status:'0x1',contractAddress:infrastructure.factory,blockNumber:'0x1',blockHash:hash(1)};return {status:'0x1',blockNumber:'0x10',blockHash:hash(16),transactionHash:signed.hash,transactionIndex:'0x0',gasUsed:q(240000),effectiveGasPrice:q(signed.gasPrice)};}
   if(method==='quai_getLogs')return [];if(method==='quai_createAccessList')return {gasUsed:q(240000),accessList:[{address:infrastructure.factory.toLowerCase(),storageKeys:[]}]};if(method==='quai_estimateGas')return q(320000);
@@ -250,4 +250,25 @@ test('V3 fresh dynamic provisioning quote retains 40 QUAI maximum and exact fact
  assert.throws(()=>validateAutoQuote({...quote,factory:infra.factory},options));
  const {formatUnits}=await import('quais'),price=40000000000000000000n/BigInt(quote.gasLimit)+1n;
  assert.throws(()=>validateAutoQuote({...quote,transaction:{...quote.transaction,gasPrice:String(price)},maximumCostQuai:formatUnits(price*BigInt(quote.gasLimit),18)},options));
+});
+
+test('V3 quote reuses PostgreSQL checkpoint with a new RPC client after cold restart',async t=>{
+ const f=await fixture(t,{fee:true});await f.provisioner.quote(f.accountId);
+ const cp=await f.db.prepare('SELECT checkpoint FROM passkey_factory_checkpoints').get();assert(cp);assert.equal(JSON.parse(cp.checkpoint).version,1);
+ let logReads=0;const rpc=async(method,args)=>{if(method==='quai_getLogs')logReads++;return f.chain.rpc(method,args);};
+ const result=await quoteProvisioning(f.db,{...f,chain:{...f.chain,rpc}});assert(result.native);assert.equal(logReads,0);assert.equal(f.sends,0);
+});
+
+test('Production history catch-up cannot claim an account when verification fails',async t=>{
+ const f=await fixture(t,{fee:true});const {feeSignupEnrollment,configuredFeeAutoActivation}=await import('../wallet/fee-auto-activation.mjs');
+ await feeSignupEnrollment(f.registry)(f.db,f.accountId);
+ const env={NS_FEE_AUTO_ACTIVATE:'true',NS_FEE_SEND_ENABLED:'true',NS_WALLET_NETWORK_POLICY:'official-single-source-v1',NS_WALLET_RELAYER_ADDRESS:'0x001893151cdcc11372f6dd067e3424f47ad8534a'};
+ let reads=0;const chain={rpc:async()=>{reads++;throw Error('read-only checkpoint failure');}};
+ const worker=configuredFeeAutoActivation(f.db,{registry:f.registry,chain},env);
+ await assert.rejects(worker.runNext(),/checkpoint failure/);
+ assert.equal(await f.db.prepare('SELECT * FROM passkey_fee_auto_activations WHERE account_id=$1').get(f.accountId),undefined);
+ assert.equal(f.sends,0);
+ // Existing permanent STOP stays excluded even from history warm-up.
+ await f.db.prepare("INSERT INTO passkey_fee_auto_activations VALUES($1,$2,$3,'stopped',$4)").run(f.accountId,env.NS_WALLET_RELAYER_ADDRESS.toLowerCase(),(await f.db.prepare('SELECT id FROM passkey_relayer_grants LIMIT 1').get()).id,Date.now());
+ const before=reads;assert.equal(await worker.runNext(),null);assert.equal(reads,before);
 });

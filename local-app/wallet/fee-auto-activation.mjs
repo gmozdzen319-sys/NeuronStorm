@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import {createAutoActivation} from './auto-activation.mjs';
 import {configuredExecutor} from './configured-executor.mjs';
+import {factoryStorageContext} from './factory-context.mjs';
+import {validateBlock} from './head-guard.mjs';
 
 // Called only inside successful NEW registration's transaction. Never scan or
 // backfill existing accounts: an empty queue at deployment protects all old users.
@@ -19,8 +21,18 @@ export function configuredFeeAutoActivation(db,fee,env=process.env){
  assert.notEqual(env.NS_WALLET_PROVISION_ENABLED,'true');
  assert.equal(env.NS_WALLET_NETWORK_POLICY,'official-single-source-v1');
  assert.equal(env.NS_WALLET_RELAYER_ADDRESS.toLowerCase(),'0x001893151cdcc11372f6dd067e3424f47ad8534a');
- return createAutoActivation(db,{registry:fee.registry,relayer:env.NS_WALLET_RELAYER_ADDRESS,makeProvisioner:async grantId=>{
+ const worker=createAutoActivation(db,{registry:fee.registry,relayer:env.NS_WALLET_RELAYER_ADDRESS,makeProvisioner:async grantId=>{
   const executor=await configuredExecutor(db,fee.chain,{...env,NS_WALLET_SEND_ENABLED:'false',NS_WALLET_PROVISION_ENABLED:'true',NS_WALLET_GRANT_ID:grantId},{registry:fee.registry});
   return executor.provisioner;
  }});
+ return {...worker,runNext:async()=>{
+  // Catch up history before claiming a new account or loading any signer.
+  // Previously stopped/ambiguous activations never re-enter this path.
+  const pending=await db.prepare(`SELECT q.account_id FROM passkey_fee_signup_queue q
+   WHERE NOT EXISTS(SELECT 1 FROM passkey_fee_auto_activations a WHERE a.account_id=q.account_id) LIMIT 1`).get();
+  if(!pending)return null;
+  const block=validateBlock(await fee.chain.rpc('quai_getBlockByNumber',['latest',false]));
+  await factoryStorageContext(fee.chain.rpc,block,fee.registry.infrastructure,db);
+  return worker.runNext();
+ }};
 }
