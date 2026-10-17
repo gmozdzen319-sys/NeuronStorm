@@ -1,3 +1,5 @@
+import {releaseReviewedSend} from '../wallet/release-reviewed-send.mjs';
+import {releaseUnbroadcastSend} from '../wallet/send-reservation.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,generateKeyPairSync} from 'node:crypto';
@@ -20,11 +22,11 @@ async function fixture(t,{token=false}={}){
  await db.prepare("INSERT INTO passkey_credentials VALUES($1,$2,$3,0,'Test',FALSE,$4,$4,NULL)").run(credentialId,accountId,cose,now);await assignCloneWallet(db,accountId);const row={...await loadCloneWallet(db,accountId),generation:3},relayer=await signer.getAddress();
  await db.prepare('INSERT INTO passkey_relayer_grants(id,relayer,budget_wei,expires_at,enabled) VALUES($1,$2,$3,$4,TRUE)').run(grantId,relayer,'300000000000000000000',now+600000);
  const operation={chainId:9,wallet:row.plan.address,action:6,epoch:'0',walletNonce:'0',deadline:String(Math.floor(now/1000)+120),quote:{token:token?tokenAddress:ZERO_TOKEN,recipient,amount:token?'7000000':'7000000000000000',requestId:hash(123)}};
- const auth=[hash(1),hash(1),0,0,'0x'+'00'.repeat(37),'{}'];let signCalls=0,gas=400000n,sent=0,signed,gasPrice=30000000000000n,nonce=0n,alterACL=false,aclDrift=false,preflightFail=false,ambiguous=false,failedReceipt=false,changedData=false;
+ const auth=[hash(1),hash(1),0,0,'0x'+'00'.repeat(37),'{}'];let signCalls=0,gas=400000n,sent=0,signed,gasPrice=30000000000000n,nonce=0n,alterACL=false,aclDrift=false,preflightFail=false,ambiguous=false,failedReceipt=false,changedData=false,reorg=false;
  const block=n=>({hash:hash(n),woHeader:{hash:hash(n),parentHash:hash(n-1),location:'0x0000',number:q(n),timestamp:q(Math.floor(now/1000))},header:{quaiStateSize:'0x1',gasLimit:'0x989680'}});
  const balance=10n**21n,walletBalance=100n*10n**18n;
  const rpc=async(method,args=[])=>{
-  if(method==='quai_chainId')return '0x9';if(method==='quai_getBlockByNumber')return block(args[0]==='latest'?(sent?18:16):Number(BigInt(args[0])));
+  if(method==='quai_chainId')return '0x9';if(method==='quai_getBlockByNumber'){const b=block(args[0]==='latest'?(sent?18:16):Number(BigInt(args[0])));if(reorg&&args[0]!=='latest'){b.hash=hash(999);b.woHeader.hash=b.hash;}return b;}
   if(method==='quai_gasPrice')return q(gasPrice);
   if(method==='quai_getTransactionCount')return q(sent?1:nonce);
   if(method==='quai_getCode')return '0x6000';if(method==='quai_getStorageAt')return hash(0);
@@ -40,7 +42,7 @@ async function fixture(t,{token=false}={}){
  const executor=createFeeExecutor(db,{chain,relayer,grantId,estimateQuote:async()=>({gasLimit:'600000',estimatedGas:'450000'}),stabilize:async()=>({stable:true}),signer:{getAddress:()=>signer.getAddress(),signTransaction:async tx=>{signCalls++;if(changedData)tx.data+='00';return signer.signTransaction(tx);}},sendRaw:async raw=>{sent++;signed=QuaiTransaction.from(raw);if(ambiguous)throw Error('uncertain network');return signed.hash;},verifyNetwork:async()=>true,preflight:async(rpc,tx,row,block)=>{if(preflightFail)throw Error('native mismatch');const accessList=[{address:row.address,storageKeys:alterACL?[hash(9)]:[]}];if(aclDrift)alterACL=true;return {accessList,gasUsed:String(gas),accounts:await captureAccounts(rpc,[{address:row.address,storageKeys:[]}],block),block};}});
  const prepare=async()=>{const pricing=await executor.quote(row,operation);operation.quote={...operation.quote,relayer,networkFee:pricing.networkFee,gasPrice:pricing.gasPrice};operation.digest=feeDigest(operation);return executor.prepare(row,operation,null,pricing);};
  async function execute(prepared){await db.prepare("INSERT INTO passkey_native_operations(id,account_id,credential_id,phase,plan,assertion,created_at,expires_at) VALUES($1,$2,$3,'authorized',$4,$5,$6,$7)").run(id,accountId,credentialId,JSON.stringify(prepared),JSON.stringify(auth),now,now+120000);return executor.execute({id,accountId,row,prepared,auth});}
- return {db,executor,prepare,execute,id,grantId,get sent(){return sent;},get signCalls(){return signCalls;},set:(key,value)=>{if(key==='gas')gas=value;if(key==='price')gasPrice=value;if(key==='nonce')nonce=value;if(key==='acl')aclDrift=value;if(key==='preflight')preflightFail=value;if(key==='ambiguous')ambiguous=value;if(key==='failed')failedReceipt=value;if(key==='data')changedData=value;},get signed(){return signed;}};
+ return {db,executor,prepare,execute,id,grantId,get sent(){return sent;},get signCalls(){return signCalls;},set:(key,value)=>{if(key==='gas')gas=value;if(key==='price')gasPrice=value;if(key==='nonce')nonce=value;if(key==='acl')aclDrift=value;if(key==='preflight')preflightFail=value;if(key==='ambiguous')ambiguous=value;if(key==='failed')failedReceipt=value;if(key==='data')changedData=value;if(key==='reorg')reorg=value;},get signed(){return signed;}};
 }
 test('Executor freezes fee, checks signed bytes and commits one confirmed transfer',async t=>{const f=await fixture(t),p=await f.prepare();f.set('price',999999999999999n);await f.execute(p);assert.equal(f.sent,1);assert.equal(String(f.signed.gasPrice),p.gasPrice);assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'confirmed');await assert.rejects(f.executor.execute({}));assert.equal(f.sent,1);});
 test('Fee executor rejects insufficient approved budget before signing',async t=>{const f=await fixture(t);await f.db.prepare('UPDATE passkey_relayer_grants SET budget_wei=1 WHERE id=$1').run(f.grantId);await assert.rejects(f.prepare());assert.equal(f.sent,0);});
@@ -48,11 +50,23 @@ for(const kind of ['nonce','preflight','data','acl'])test('Executor stops '+kind
 test('Ambiguous submission leaves durable intent and never broadcasts a second time',async t=>{const f=await fixture(t),p=await f.prepare();f.set('ambiguous',true);await assert.rejects(f.execute(p));assert.equal(f.sent,1);assert.equal((await f.db.prepare('SELECT phase FROM passkey_relayer_intents WHERE operation_id=$1').get(f.id)).phase,'submitting');assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'submitting');});
 test('Failed canonical receipt stays failed, charged once and not retried',async t=>{const f=await fixture(t),p=await f.prepare();f.set('failed',true);await f.execute(p);assert.equal(f.sent,1);assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'failed');});
 
-test('Nonce consumed before lane acquisition leaves intent stopped before broadcast',async t=>{
+test('Nonce consumed before broadcast releases reservation once and permits a fresh operation',async t=>{
  const f=await fixture(t),p=await f.prepare(),original=f.db.prepare;
  f.db.prepare=sql=>{const statement=original(sql);if(sql.startsWith('INSERT INTO passkey_relayer_intents')){const run=statement.run;statement.run=async(...args)=>{const result=await run(...args);f.set('nonce',1n);return result;};}return statement;};
  await assert.rejects(f.execute(p));assert.equal(f.sent,0);
- assert.equal((await f.db.prepare('SELECT phase FROM passkey_relayer_intents WHERE operation_id=$1').get(f.id)).phase,'submitting');
+ const intent=await f.db.prepare('SELECT * FROM passkey_relayer_intents WHERE operation_id=$1').get(f.id);
+ assert.equal(intent.phase,'failed');assert.equal(intent.broadcast_started,false);
+ const op=await f.db.prepare('SELECT * FROM passkey_native_operations WHERE id=$1').get(f.id);
+ assert.equal(op.phase,'stopped');assert.equal(op.tx_hash,null);assert.equal(JSON.parse(op.receipt).broadcast,false);
+ assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei,'0');
+ assert.equal((await f.db.prepare('SELECT * FROM passkey_relayer_lanes').all()).length,0);
+ assert.equal(await releaseUnbroadcastSend(f.db,{id:f.id,grantId:f.grantId,relayer:intent.relayer,hash:intent.tx_hash}),false);
+ assert(await f.executor.available());
+ // The consumed nonce was NOT broadcast by this operation; the journal stays,
+ // but must not prevent a new independently approved plan using that nonce.
+ const nextId=randomUUID(),nextPlan=JSON.parse(op.plan);nextPlan.operation.digest=hash(777);
+ await f.db.prepare("INSERT INTO passkey_native_operations(id,account_id,credential_id,phase,plan,created_at,expires_at) VALUES($1,$2,$3,'authorized',$4,$5,$6)").run(nextId,op.account_id,op.credential_id,JSON.stringify(nextPlan),op.created_at,op.expires_at);
+ await f.db.prepare("INSERT INTO passkey_relayer_intents(operation_id,relayer,nonce,tx_hash,transaction_plan,grant_id,maximum_fee_wei,phase,broadcast_started) VALUES($1,$2,$3,$4,$5,$6,$7,'submitting',FALSE)").run(nextId,intent.relayer,intent.nonce,hash(778),intent.transaction_plan,intent.grant_id,intent.maximum_fee_wei);
 });
 
 test('Token Send verifies exact 7 tokens and charges quoted fee only in QUAI',async t=>{const f=await fixture(t,{token:true}),p=await f.prepare();assert.equal(p.operation.quote.amount,'7000000');await f.execute(p);assert.equal(f.sent,1);assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'confirmed');});
@@ -66,3 +80,32 @@ for(const token of [false,true])test('Measured fee is separate from full reserve
  assert.equal(BigInt((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei),0n);
 });
 test('Failed token Send verifies rollback and accounts actual network loss once',async t=>{const f=await fixture(t,{token:true}),p=await f.prepare();f.set('failed',true);await f.execute(p);assert.equal(f.sent,1);assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'failed');});
+
+test('Pinned block mismatch after reservation stops without broadcast and releases full reserve',async t=>{
+ const f=await fixture(t),p=await f.prepare(),original=f.db.prepare;
+ f.db.prepare=sql=>{const st=original(sql);if(sql.startsWith('INSERT INTO passkey_relayer_intents')){const run=st.run;st.run=async(...args)=>{const r=await run(...args);f.set('reorg',true);return r;};}return st;};
+ await assert.rejects(f.execute(p),/noncanonical snapshot/);assert.equal(f.sent,0);
+ assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'stopped');
+ assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei,'0');
+});
+test('Ambiguous broadcast cannot release reserve even when no receipt is available',async t=>{
+ const f=await fixture(t),p=await f.prepare();f.set('ambiguous',true);await assert.rejects(f.execute(p));
+ const intent=await f.db.prepare('SELECT * FROM passkey_relayer_intents WHERE operation_id=$1').get(f.id);assert.equal(intent.broadcast_started,true);
+ await assert.rejects(releaseUnbroadcastSend(f.db,{id:f.id,grantId:f.grantId,relayer:intent.relayer,hash:intent.tx_hash}),/Broadcast may have started/);
+ assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei,p.maximumFeeWei);assert.equal(f.sent,1);
+});
+
+test('Reviewed historical pre-broadcast incident releases once; unknown broadcasts stay protected',async t=>{
+ const f=await fixture(t),p=await f.prepare();f.set('ambiguous',true);await assert.rejects(f.execute(p));
+ const h='0x00330077752e324f5b14f17f197d6b20915c59c099b04819c4c8a4592994b32f';
+ await f.db.prepare('UPDATE passkey_relayer_intents SET tx_hash=$1 WHERE operation_id=$2').run(h,f.id);
+ await f.db.prepare('UPDATE passkey_native_operations SET tx_hash=$1,created_at=$2,expires_at=$3 WHERE id=$4').run(h,Date.parse('2026-10-17T15:53:00Z'),Date.parse('2026-10-17T15:55:00Z'),f.id);
+ const block={hash:hash(16),woHeader:{hash:hash(16),parentHash:hash(15),location:'0x0000',number:'0x10',timestamp:'0x1'},header:{quaiStateSize:'0x1',gasLimit:'0x989680'}};
+ const rpc=async m=>{if(m==='quai_chainId')return '0x9';if(m==='quai_getBlockByNumber')return block;if(m==='quai_getTransactionCount')return '0x0';if(m==='quai_call')return walletABI.encodeFunctionResult('nonce',[0]);if(m==='quai_getTransactionReceipt'||m==='quai_getTransactionByHash')return null;throw Error('Unexpected RPC');};
+ await assert.rejects(releaseReviewedSend(f.db,rpc),/Not the historical incident/);
+ await f.db.prepare('UPDATE passkey_relayer_intents SET broadcast_started=NULL WHERE operation_id=$1').run(f.id);
+ await assert.rejects(releaseReviewedSend(f.db,async m=>m==='quai_getTransactionReceipt'?{status:'0x1'}:rpc(m)));
+ assert.deepEqual(await releaseReviewedSend(f.db,rpc),{released:true,broadcasts:0});
+ assert.deepEqual(await releaseReviewedSend(f.db,rpc),{alreadyReleased:true});
+ assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei,'0');
+});

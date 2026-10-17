@@ -1,4 +1,5 @@
-import {sendStage} from './send-diagnostics.mjs';
+import {releaseUnbroadcastSend} from './send-reservation.mjs';
+import {sendStage,sendStopped} from './send-diagnostics.mjs';
 import assert from 'node:assert/strict';
 import {QuaiTransaction} from 'quais';
 import {walletABI} from './chain.mjs';
@@ -121,20 +122,35 @@ export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,prefl
    assert(saved&&saved.plan===JSON.stringify(prepared)&&saved.assertion===JSON.stringify(auth)&&saved.expires_at>now());
    const credential=await db.prepare('SELECT revoked_at FROM passkey_credentials WHERE id=$1 AND account_id=$2 FOR UPDATE').get(row.credential_id,accountId);assert(credential&&credential.revoked_at===null);
    await db.prepare("INSERT INTO passkey_relayer_lanes VALUES($1,$2,'send')").run(lower(relayer),id);
-   await db.prepare("INSERT INTO passkey_relayer_intents VALUES($1,$2,$3,$4,$5,$6,$7,'submitting')").run(id,lower(relayer),s.nonce,signed.hash,JSON.stringify(bound(tx)),grantId,String(maximum));
+   await db.prepare("INSERT INTO passkey_relayer_intents(operation_id,relayer,nonce,tx_hash,transaction_plan,grant_id,maximum_fee_wei,phase,broadcast_started) VALUES($1,$2,$3,$4,$5,$6,$7,'submitting',FALSE)").run(id,lower(relayer),s.nonce,signed.hash,JSON.stringify(bound(tx)),grantId,String(maximum));
    await db.prepare('UPDATE passkey_relayer_grants SET reserved_wei=reserved_wei+$1 WHERE id=$2').run(String(maximum),grantId);
-   await db.prepare("UPDATE passkey_native_operations SET phase='submitting',tx_hash=$1 WHERE id=$2").run(signed.hash,id);
+   // Keep the operation authorized until the durable broadcast boundary.
   });
-  // Any failure after the durable intent needs read-only investigation. No retry.
+  // Only a proven pre-broadcast exception may release this reservation.
   // Close the gap between the pre-sign checks and acquiring the shared lane:
   // another completed sender may have consumed this nonce in that interval.
   // The reserve is already debited, so do not count it a second time here.
+  try{
   sendStage('execute.locked_state');
   const locked=await state(row);checkOperation(op,locked);
   assert.equal(locked.nonce,s.nonce);assert.equal(locked.balance,s.balance);assert.equal(locked.walletBalance,s.walletBalance);
   await assertCanonicalAdvance(rpc,s.block,locked.block);assertContextCompatible(s.block,locked.block,tx,op);
   assertSameAccounts(simulation.accounts,await captureAccounts(rpc,accountEntries(simulation.accounts),locked.block));
   assert.equal(fingerprint(bound(tx)),commitment);s=locked;
+  }catch(error){
+   sendStopped(error);
+   await releaseUnbroadcastSend(db,{id,grantId,relayer:lower(relayer),hash:signed.hash});
+   throw error;
+  }
+  // Commit the uncertainty boundary BEFORE calling the network. A crash or
+  // thrown sendRaw after this point retains the lane, hash and full reserve.
+  sendStage('execute.broadcast_boundary');
+  await db.transaction(async()=>{
+   const intent=await db.prepare("UPDATE passkey_relayer_intents SET broadcast_started=TRUE WHERE operation_id=$1 AND phase='submitting' AND broadcast_started=FALSE RETURNING operation_id").get(id);
+   assert(intent,'Broadcast boundary already consumed');
+   const operation=await db.prepare("UPDATE passkey_native_operations SET phase='submitting',tx_hash=$1 WHERE id=$2 AND phase='authorized' RETURNING id").get(signed.hash,id);
+   assert(operation,'Operation no longer authorized');
+  });
   sendStage('execute.broadcast');
   assert.equal(lower(await sendRaw(raw)),lower(signed.hash));
   sendStage('execute.receipt');

@@ -104,7 +104,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
       feeMode=state.quotedFees===true;baseAssets=state.sendTokens||[];$('#pk-send-token-field').hidden=!feeMode;
       if(feeMode){$('#pk-send-title').textContent='Send';$('#pk-amount-label').textContent='Amount';renderSendAssets(state.tokens||[]);}
       for(const old of state.legacyWallets||[]){const item=document.createElement('section');item.className='pk-summary';const title=document.createElement('h3'),address=document.createElement('p'),balance=document.createElement('p');title.textContent='Previous wallet';address.className='address';address.textContent=old.address;balance.textContent=(old.quaiBalance??'Balance unavailable')+(old.quaiBalance===null?'':' QUAI')+' · Funds have not been moved.';item.append(title,address,balance);$('#pk-legacy-wallets').append(item);}
-      const states={awaiting_confirmation:'Awaiting confirmation',verifying:'Checking confirmation',authorized:'Awaiting submission',submitting:'Submitted · awaiting verification',confirmed:'Confirmed',failed:'Failed',stopped:'Stopped'};
+      const states={awaiting_confirmation:'Awaiting confirmation',verifying:'Checking confirmation',authorized:'Awaiting submission',submitting:'Submitted · awaiting verification',confirmed:'Confirmed',failed:'Failed',stopped:'Stopped before submission · No transaction sent'};
       for(const transfer of state.transfers||[]){const item=document.createElement('p');item.className='address';item.textContent=(states[transfer.phase]||'Needs review')+(transfer.tx_hash?' · '+transfer.tx_hash:'');$('#pk-transfers').append(item);}
     }catch(error){if(revision===epoch)$('#pk-status').textContent=error.message;}
   }
