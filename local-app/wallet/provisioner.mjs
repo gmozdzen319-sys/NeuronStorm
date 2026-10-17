@@ -40,6 +40,7 @@ export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,
   const approval=await db.prepare("UPDATE passkey_clone_approvals SET phase='preparing' WHERE account_id=$1 AND approved=TRUE AND phase='quoted' AND expires_at>$2 RETURNING *").get(accountId,now());
   if(!approval)throw Error('A fresh separately approved wallet quote is required');
   let stage='STABILIZATION';
+  let signingOccurred=false,sendRawEntered=false,preparedHash=null,preparedReserve=null,intentStarted=false;
   try{
    const stable=await stabilize({sources:[{name:'official Cyprus-1',rpc}],entries:[{address:relayer,storageKeys:[]},{address:infrastructure.factory,storageKeys:[]}]});assert(stable.stable);
    stage='SAVED_PLAN';
@@ -72,8 +73,10 @@ export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,
     assert(await verifyNetwork({rpc,block,relayer,wallet:row.plan.address,accounts:fresh.accounts}));await assertCanonicalBlock(rpc,block);assert.equal(fingerprint(bound(tx,LIMIT)),commitment);snapshot=fresh;
    }
    await gate();stage='SIGNING';assert.equal(low(await signer.getAddress()),low(relayer));const raw=await signer.signTransaction(structuredClone(tx));
-   const signed=QuaiTransaction.from(raw),decoded={type:signed.type,chainId:signed.chainId,from:signed.from,to:signed.to,nonce:signed.nonce,value:signed.value,data:signed.data,gasPrice:signed.gasPrice,gasLimit:signed.gasLimit,accessList:signed.accessList};assert.deepEqual(bound(decoded,LIMIT),bound(tx,LIMIT));await gate();
+   signingOccurred=true;
+   const signed=QuaiTransaction.from(raw),decoded={type:signed.type,chainId:signed.chainId,from:signed.from,to:signed.to,nonce:signed.nonce,value:signed.value,data:signed.data,gasPrice:signed.gasPrice,gasLimit:signed.gasLimit,accessList:signed.accessList};preparedHash=signed.hash;preparedReserve=reserve;assert.deepEqual(bound(decoded,LIMIT),bound(tx,LIMIT));await gate();
    stage='DURABLE_SEND_INTENT';
+   intentStarted=true;
    await db.transaction(async()=>{
     const current=await db.prepare('SELECT * FROM passkey_clone_approvals WHERE account_id=$1 FOR UPDATE').get(accountId);assert(current.approved&&current.phase==='preparing'&&current.quote===approval.quote&&current.expires_at>now());
     const grant=await db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1 FOR UPDATE').get(grantId);assert(grant.enabled&&grant.expires_at>now()&&low(grant.relayer)===low(relayer)&&BigInt(grant.budget_wei)-BigInt(grant.reserved_wei)>=reserve);
@@ -85,6 +88,7 @@ export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,
    // acquired. v3 repeats the complete exact-plan gate after its durable claim.
    if(fee){reserved=true;await gate();}
    stage='BROADCAST';
+   sendRawEntered=true;
    assert.equal(low(await sendRaw(raw)),low(signed.hash));
    // Receive reads an anchor three blocks behind the tip. Four observations put
    // the deployment at/before that anchor; this is not a PoEM finality claim.
@@ -102,7 +106,33 @@ export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,
     await db.prepare('DELETE FROM passkey_relayer_lanes WHERE relayer=$1 AND reference=$2').run(low(relayer),accountId);
    });
    return {address:row.plan.address,transactionHash:signed.hash,status:success?'confirmed':'failed'};
-  }catch(error){await db.prepare("UPDATE passkey_clone_approvals SET phase='stopped' WHERE account_id=$1 AND phase='preparing'").run(accountId);error.provisioningStage=stage;throw error;}
+  }catch(error){
+   error.provisioningStage=stage;
+   error.activationLifecycle={approvalExisted:true,signingOccurred,sendRawEntered,outcome:sendRawEntered?'UNKNOWN':'NEVER_BROADCAST'};
+   if(fee&&!sendRawEntered){
+    try{await db.transaction(async()=>{
+     const p=await db.prepare('SELECT * FROM passkey_clone_approvals WHERE account_id=$1 FOR UPDATE').get(accountId);
+     assert(p&&!p.receipt);
+     if(p.phase==='submitting'){
+      assert(intentStarted&&preparedHash&&p.tx_hash===preparedHash&&preparedReserve>0n);
+      const lane=await db.prepare('SELECT * FROM passkey_relayer_lanes WHERE relayer=$1 FOR UPDATE').get(low(relayer));
+      assert(lane&&lane.reference===accountId&&lane.purpose==='provision');
+      const g=await db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1 FOR UPDATE').get(grantId);
+      assert(g&&low(g.relayer)===low(relayer)&&BigInt(g.reserved_wei)===preparedReserve);
+      await db.prepare('UPDATE passkey_relayer_grants SET reserved_wei=reserved_wei-$1,enabled=FALSE WHERE id=$2').run(String(preparedReserve),grantId);
+      await db.prepare("DELETE FROM passkey_relayer_lanes WHERE relayer=$1 AND reference=$2 AND purpose='provision'").run(low(relayer),accountId);
+     }else assert(p.phase==='preparing'&&!p.tx_hash);
+     await db.prepare('UPDATE passkey_relayer_grants SET enabled=FALSE WHERE id=$1').run(grantId);
+     await db.prepare("UPDATE passkey_clone_approvals SET phase='stopped',approved=FALSE,tx_hash=COALESCE(tx_hash,$2) WHERE account_id=$1").run(accountId,preparedHash);
+     await db.prepare("UPDATE passkey_fee_auto_activations SET phase='stopped' WHERE account_id=$1 AND phase='running'").run(accountId);
+     await db.prepare('INSERT INTO passkey_fee_activation_events(account_id,stage,code,details,created_at) VALUES($1,$2,$3,$4,$5)').run(accountId,stage,'NEVER_BROADCAST',JSON.stringify(error.activationLifecycle),now());
+    });}catch(cleanupError){
+     // Failed/uncertain cleanup retains the durable blockers. Never guess at release.
+     cleanupError.provisioningStage=stage;cleanupError.activationLifecycle={approvalExisted:true,signingOccurred,sendRawEntered,outcome:'UNKNOWN'};throw cleanupError;
+    }
+   }else await db.prepare("UPDATE passkey_clone_approvals SET phase='stopped' WHERE account_id=$1 AND phase='preparing'").run(accountId);
+   throw error;
+  }
  }
  return {quote,execute};
 }

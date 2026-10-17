@@ -10,6 +10,61 @@ import {createCloneProvisioner} from '../wallet/provisioner.mjs';
 import {quoteProvisioning} from '../wallet/provisioning-quote.mjs';
 import {diagnoseProvisioning} from '../wallet/provisioning-diagnosis.mjs';
 const hash=n=>'0x'+BigInt(n).toString(16).padStart(64,'0'),q=n=>'0x'+BigInt(n).toString(16);
+function mismatch(){return Object.assign(Error('noncanonical snapshot/reorg'),{code:'ERR_ASSERTION',quoteDiagnostic:{stage:'FACTORY_STORAGE'},canonicalityEvidence:{requestedHeight:'0x10',expected:{hash:hash(16)},observed:{hash:hash(999)}}});}
+
+async function enroll(f){const {feeSignupEnrollment}=await import('../wallet/fee-auto-activation.mjs');await feeSignupEnrollment(f.registry)(f.db,f.accountId);}
+test('V3 transient quote mismatch discards quote; fresh worker after backoff succeeds',async t=>{
+ const f=await fixture(t,{fee:true});await enroll(f);let clock=Date.now(),reads=0,failedProvisioner;
+ const options={...f,now:()=>clock,makeProvisioner:id=>{
+  const p=f.makeProvisioner(id);if(++reads===1){failedProvisioner=p;return {...p,quote:async()=>{throw mismatch();}};}
+  assert.notEqual(p,failedProvisioner);return p;
+ }};
+ assert.equal((await createAutoActivation(f.db,options).runNext()).status,'quote_retry_wait');
+ assert.equal(await f.db.prepare('SELECT * FROM passkey_fee_approvals WHERE account_id=$1').get(f.accountId),undefined);
+ assert.equal(await createAutoActivation(f.db,options).runNext(),null);assert.equal(reads,1);assert.equal(f.sends,0);
+ clock+=30000;assert.equal((await createAutoActivation(f.db,options).runNext()).status,'confirmed');assert.equal(reads,2);assert.equal(f.sends,1);
+ const e=await f.db.prepare('SELECT details FROM passkey_fee_activation_events WHERE account_id=$1 ORDER BY id LIMIT 1').get(f.accountId);
+ assert.deepEqual(JSON.parse(e.details).canonicality,{blockHeight:'0x10',originalHash:hash(16),observedHash:hash(999)});
+});
+test('V3 persistent warm-up mismatch is counted, survives restart and stops at three',async t=>{
+ const f=await fixture(t,{fee:true});await enroll(f);let clock=Date.now(),reads=0,signerLoads=0;
+ const options={...f,now:()=>clock,prepareQuote:async()=>{reads++;throw mismatch();},makeProvisioner:()=>{signerLoads++;throw Error('must not load');}};
+ for(const delay of [0,30000,120000]){clock+=delay;const result=await createAutoActivation(f.db,options).runNext();assert.equal(result.status,reads===3?'stopped':'quote_retry_wait');}
+ clock+=600000;assert.equal(await createAutoActivation(f.db,options).runNext(),null);assert.equal(reads,3);assert.equal(signerLoads,0);assert.equal(f.sends,0);
+});
+test('V3 expired retry window stops without another RPC/quote or signer',async t=>{
+ const f=await fixture(t,{fee:true});await enroll(f);let clock=Date.now(),reads=0;
+ const options={...f,now:()=>clock,prepareQuote:async()=>{reads++;throw mismatch();}};
+ await createAutoActivation(f.db,options).runNext();clock+=600000;
+ assert.equal(await createAutoActivation(f.db,options).runNext(),null);assert.equal(reads,1);
+ assert.equal((await f.db.prepare('SELECT phase FROM passkey_fee_auto_activations WHERE account_id=$1').get(f.accountId)).phase,'stopped');
+});
+test('V3 signed pre-broadcast mismatch atomically releases exactly its own resources, preserves evidence',async t=>{
+ const f=await fixture(t,{fee:true});await enroll(f);f.set('claimed-canonical');
+ const result=await createAutoActivation(f.db,f).runNext();assert.equal(result.status,'stopped');assert.equal(f.sends,0);
+ const p=await f.db.prepare('SELECT * FROM passkey_fee_approvals WHERE account_id=$1').get(f.accountId);assert.equal(p.phase,'stopped');assert.equal(p.approved,false);assert.match(p.tx_hash,/^0x[0-9a-f]{64}$/);assert.equal(p.receipt,null);
+ const g=await f.db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1').get('auto-activation-v3:'+f.accountId);assert.equal(g.reserved_wei,'0');assert.equal(g.enabled,false);
+ assert.equal(await f.db.prepare('SELECT * FROM passkey_relayer_lanes WHERE relayer=$1').get(f.relayer.toLowerCase()),undefined);
+ const e=await f.db.prepare("SELECT details FROM passkey_fee_activation_events WHERE account_id=$1 AND code='NEVER_BROADCAST'").get(f.accountId);
+ assert.deepEqual(JSON.parse(e.details),{approvalExisted:true,signingOccurred:true,sendRawEntered:false,outcome:'NEVER_BROADCAST'});
+ assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,0);assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(g.id)).reserved_wei,'0');
+ // Another enrolled account can be claimed without clearing any global guard.
+ const id=randomUUID(),cred=randomUUID(),old=await f.db.prepare('SELECT * FROM passkey_accounts WHERE id=$1').get(f.accountId),c=await f.db.prepare('SELECT * FROM passkey_credentials WHERE account_id=$1').get(f.accountId);
+ await f.db.prepare('INSERT INTO passkey_accounts VALUES($1,$2,$3,NULL,$4,$5)').run(id,randomUUID(),Date.now(),old.rp_id,old.origin);
+ await f.db.prepare("INSERT INTO passkey_credentials VALUES($1,$2,$3,0,'Other',FALSE,$4,$4,NULL)").run(cred,id,c.public_key,Date.now());
+ // Different public key is required; generate it independently.
+ const {publicKey}=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),j=publicKey.export({format:'jwk'}),key=Buffer.from(isoCBOR.encode(new Map([[1,2],[3,-7],[-1,1],[-2,new Uint8Array(Buffer.from(j.x,'base64url'))],[-3,new Uint8Array(Buffer.from(j.y,'base64url'))]]))).toString('base64url');
+ await f.db.prepare('UPDATE passkey_credentials SET public_key=$1 WHERE id=$2').run(key,cred);
+ await assignCloneWallet(f.db,id);
+ const {feeSignupEnrollment}=await import('../wallet/fee-auto-activation.mjs');await feeSignupEnrollment(f.registry)(f.db,id);
+ let selected=false;await createAutoActivation(f.db,{...f,prepareQuote:async()=>{selected=true;throw Error('test stop');}}).runNext();assert(selected);assert.equal(f.sends,0);
+});
+test('V3 uncertain send preserves reservation, lane and ambiguous activation',async t=>{
+ const f=await fixture(t,{fee:true});await enroll(f);f.set('ambiguous');
+ assert.equal((await createAutoActivation(f.db,f).runNext()).status,'ambiguous');assert.equal(f.sends,1);
+ const g=await f.db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1').get('auto-activation-v3:'+f.accountId);assert(BigInt(g.reserved_wei)>0n);
+ assert(await f.db.prepare('SELECT * FROM passkey_relayer_lanes WHERE reference=$1').get(f.accountId));assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,1);
+});
 let signer;for(let n=1;n<10000;n++){const s=new Wallet(hash(n));if(/^0x00[0-7]/i.test(s.address)){signer=s;break;}}assert(signer);
 async function fixture(t,{fee=false}={}){
  const infrastructure=fee?{...infra,generation:3,confirmed:true,factory:'0x0000000000000000000000000000000000000005',factoryHash:keccak256('0x'),implementation:'0x0000000000000000000000000000000000000006',implementationTransaction:hash(99)}:infra;
@@ -18,7 +73,7 @@ async function fixture(t,{fee=false}={}){
  const {publicKey}=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),jwk=publicKey.export({format:'jwk'}),cose=Buffer.from(isoCBOR.encode(new Map([[1,2],[3,-7],[-1,1],[-2,new Uint8Array(Buffer.from(jwk.x,'base64url'))],[-3,new Uint8Array(Buffer.from(jwk.y,'base64url'))]]))).toString('base64url');
  await db.prepare('INSERT INTO passkey_accounts VALUES($1,$2,$3,NULL,$4,$5)').run(accountId,randomUUID(),now,infrastructure.rpID,infrastructure.origin);await db.prepare("INSERT INTO passkey_credentials VALUES($1,$2,$3,0,'Test',FALSE,$4,$4,NULL)").run(credentialId,accountId,cose,now);await assignCloneWallet(db,accountId);const row=await loadCloneWallet(db,accountId),relayer=await signer.getAddress();
  await db.prepare('INSERT INTO passkey_relayer_grants(id,relayer,budget_wei,expires_at,enabled) VALUES($1,$2,$3,$4,TRUE)').run(grantId,relayer,'100000000000000000000',now+600000);
- let sends=0,signed,ambiguous=false,wrongReturn=false,wrongNonce=false,mutateInput=false,nonceAfterClaim=false;
+ let sends=0,signed,ambiguous=false,wrongReturn=false,wrongNonce=false,mutateInput=false,nonceAfterClaim=false,canonicalAfterClaim=false;
  const block=n=>({hash:hash(n),woHeader:{hash:hash(n),parentHash:hash(n-1),location:'0x0000',number:q(n),timestamp:q(Math.floor(now/1000))},header:{quaiStateSize:'0x1',gasLimit:'0x989680'}});
  const rpc=async(method,args=[])=>{
   if(method==='quai_chainId')return '0x9';if(method==='quai_getBlockByNumber')return block(args[0]==='latest'?(sends?19:16):Number(BigInt(args[0])));
@@ -29,11 +84,11 @@ async function fixture(t,{fee=false}={}){
   if(method==='quai_getTransactionByHash')return {type:'0x0',chainId:'0x9',from:relayer,to:infrastructure.factory,nonce:'0x0',value:'0x0',gasPrice:q(signed.gasPrice),gas:q(signed.gasLimit),input:signed.data,accessList:signed.accessList};
   throw Error(method);
  };
- const chain={rpc,snapshot:async()=>({deployed:sends>0,nonce:'0',epoch:'0',block:block(16)})};
+ const chain={rpc,snapshot:async()=>{if(canonicalAfterClaim&&await db.prepare('SELECT reference FROM passkey_relayer_lanes WHERE relayer=$1').get(relayer.toLowerCase()))throw mismatch();return {deployed:sends>0,nonce:'0',epoch:'0',block:block(16)};}};
  const preflight=async(rpc,tx,row,block)=>({block,accounts:[],gasUsed:'240000',returnValue:factoryABI.encodeFunctionResult('createWallet',[wrongReturn?infrastructure.implementation:row.plan.address])});
  const makeProvisioner=id=>createCloneProvisioner(db,{chain,relayer,grantId:id,registry,stabilize:async()=>({stable:true}),signer:{getAddress:()=>signer.getAddress(),signTransaction:tx=>{if(mutateInput)tx.data+='00';return signer.signTransaction(tx);}},sendRaw:async raw=>{sends++;signed=QuaiTransaction.from(raw);if(ambiguous)throw Error('uncertain network');return signed.hash;},preflight,verifyNetwork:async()=>true});
  const provisioner=makeProvisioner(grantId);
- return {db,accountId,relayer,registry,chain,preflight,provisioner,makeProvisioner,get sends(){return sends;},set:k=>{if(k==='ambiguous')ambiguous=true;if(k==='address')wrongReturn=true;if(k==='nonce')wrongNonce=true;if(k==='input')mutateInput=true;if(k==='claimed-nonce')nonceAfterClaim=true;},approve:()=>db.prepare('UPDATE '+(fee?'passkey_fee_approvals':'passkey_clone_approvals')+' SET approved=TRUE WHERE account_id=$1').run(accountId)};
+ return {db,accountId,relayer,registry,chain,preflight,provisioner,makeProvisioner,get sends(){return sends;},set:k=>{if(k==='ambiguous')ambiguous=true;if(k==='address')wrongReturn=true;if(k==='nonce')wrongNonce=true;if(k==='input')mutateInput=true;if(k==='claimed-nonce')nonceAfterClaim=true;if(k==='claimed-canonical')canonicalAfterClaim=true;},approve:()=>db.prepare('UPDATE '+(fee?'passkey_fee_approvals':'passkey_clone_approvals')+' SET approved=TRUE WHERE account_id=$1').run(accountId)};
 }
 test('Read-only production rehearsal reaches signing boundary without writes or signing',async t=>{
  const f=await fixture(t),before=await f.db.prepare('SELECT * FROM passkey_relayer_grants ORDER BY id').all();
@@ -217,8 +272,8 @@ for(const kind of ['address','nonce','input','ambiguous'])test('Fee provisioning
 test('Fee provisioner rechecks nonce after the durable lane claim and never broadcasts stale bytes',async t=>{
  const f=await fixture(t,{fee:true});await f.provisioner.quote(f.accountId);await f.approve();f.set('claimed-nonce');
  await assert.rejects(f.provisioner.execute(f.accountId));assert.equal(f.sends,0);
- assert.equal((await f.db.prepare('SELECT phase FROM passkey_fee_approvals WHERE account_id=$1').get(f.accountId)).phase,'submitting');
- assert(await f.db.prepare('SELECT * FROM passkey_relayer_lanes WHERE relayer=$1').get(f.relayer.toLowerCase()));
+ assert.equal((await f.db.prepare('SELECT phase FROM passkey_fee_approvals WHERE account_id=$1').get(f.accountId)).phase,'stopped');
+ assert.equal(await f.db.prepare('SELECT * FROM passkey_relayer_lanes WHERE relayer=$1').get(f.relayer.toLowerCase()),undefined);
  await assert.rejects(f.provisioner.execute(f.accountId));assert.equal(f.sends,0);
 });
 
@@ -259,16 +314,16 @@ test('V3 quote reuses PostgreSQL checkpoint with a new RPC client after cold res
  const result=await quoteProvisioning(f.db,{...f,chain:{...f.chain,rpc}});assert(result.native);assert.equal(logReads,0);assert.equal(f.sends,0);
 });
 
-test('Production history catch-up cannot claim an account when verification fails',async t=>{
+test('Production history failure is durable before any signer is loaded',async t=>{
  const f=await fixture(t,{fee:true});const {feeSignupEnrollment,configuredFeeAutoActivation}=await import('../wallet/fee-auto-activation.mjs');
  await feeSignupEnrollment(f.registry)(f.db,f.accountId);
  const env={NS_FEE_AUTO_ACTIVATE:'true',NS_FEE_SEND_ENABLED:'true',NS_WALLET_NETWORK_POLICY:'official-single-source-v1',NS_WALLET_RELAYER_ADDRESS:'0x001893151cdcc11372f6dd067e3424f47ad8534a'};
  let reads=0;const chain={rpc:async()=>{reads++;throw Error('read-only checkpoint failure');}};
  const worker=configuredFeeAutoActivation(f.db,{registry:f.registry,chain},env);
- await assert.rejects(worker.runNext(),/checkpoint failure/);
- assert.equal(await f.db.prepare('SELECT * FROM passkey_fee_auto_activations WHERE account_id=$1').get(f.accountId),undefined);
+ assert.equal((await worker.runNext()).status,'stopped');
+ assert.equal((await f.db.prepare('SELECT phase FROM passkey_fee_auto_activations WHERE account_id=$1').get(f.accountId)).phase,'stopped');
  assert.equal(f.sends,0);
  // Existing permanent STOP stays excluded even from history warm-up.
- await f.db.prepare("INSERT INTO passkey_fee_auto_activations VALUES($1,$2,$3,'stopped',$4)").run(f.accountId,env.NS_WALLET_RELAYER_ADDRESS.toLowerCase(),(await f.db.prepare('SELECT id FROM passkey_relayer_grants LIMIT 1').get()).id,Date.now());
+ // The durable STOP above remains excluded.
  const before=reads;assert.equal(await worker.runNext(),null);assert.equal(reads,before);
 });

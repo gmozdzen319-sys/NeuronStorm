@@ -22,22 +22,16 @@ export function configuredFeeAutoActivation(db,fee,env=process.env){
  assert.notEqual(env.NS_WALLET_PROVISION_ENABLED,'true');
  assert.equal(env.NS_WALLET_NETWORK_POLICY,'official-single-source-v1');
  assert.equal(env.NS_WALLET_RELAYER_ADDRESS.toLowerCase(),'0x001893151cdcc11372f6dd067e3424f47ad8534a');
- const worker=createAutoActivation(db,{registry:fee.registry,relayer:env.NS_WALLET_RELAYER_ADDRESS,makeProvisioner:async grantId=>{
+ const worker=createAutoActivation(db,{registry:fee.registry,relayer:env.NS_WALLET_RELAYER_ADDRESS,prepareQuote:async()=>{
+  try{
+   activationPreStage('HEAD_READ');
+   const block=validateBlock(await fee.chain.rpc('quai_getBlockByNumber',['latest',false]));
+   activationPreStage('FACTORY_CONTEXT');
+   await factoryStorageContext(fee.chain.rpc,block,fee.registry.infrastructure,db);
+  }catch(error){error.quoteDiagnostic={stage:'FACTORY_STORAGE'};throw error;}
+ },makeProvisioner:async grantId=>{
   const executor=await configuredExecutor(db,fee.chain,{...env,NS_WALLET_SEND_ENABLED:'false',NS_WALLET_PROVISION_ENABLED:'true',NS_WALLET_GRANT_ID:grantId},{registry:fee.registry});
   return executor.provisioner;
  }});
- return {...worker,runNext:()=>diagnoseActivationPreAttempt(async()=>{
-  // Catch up history before claiming a new account or loading any signer.
-  // Previously stopped/ambiguous activations never re-enter this path.
-  const pending=await db.prepare(`SELECT q.account_id FROM passkey_fee_signup_queue q
-   WHERE NOT EXISTS(SELECT 1 FROM passkey_fee_auto_activations a WHERE a.account_id=q.account_id) LIMIT 1`).get();
-  if(!pending)return null;
-  activationPreStage('HEAD_READ');
-  const rawBlock=await fee.chain.rpc('quai_getBlockByNumber',['latest',false]);
-  activationPreStage('HEAD_VALIDATE');
-  const block=validateBlock(rawBlock);
-  activationPreStage('FACTORY_CONTEXT');
-  await factoryStorageContext(fee.chain.rpc,block,fee.registry.infrastructure,db);
-  return worker.runNext();
- })};
+ return {...worker,runNext:()=>diagnoseActivationPreAttempt(()=>worker.runNext())};
 }

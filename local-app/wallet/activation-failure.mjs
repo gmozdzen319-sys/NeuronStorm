@@ -24,5 +24,16 @@ export function activationFailure(error,stage){
  else if(error?.message?.startsWith('gas-relevant Quai state size changed'))code='STATE_SIZE_CHANGED';
  const result={stage:stages.has(selected)?selected:'UNKNOWN',code};
  if(selected==='QUOTE')result.details=quoteDetails(error);
+ const evidence=error?.canonicalityEvidence;
+ if(code==='CANONICALITY_MISMATCH'&&evidence){
+  const canonicality={};
+  const values={blockHeight:evidence.requestedHeight,originalHash:evidence.expected?.hash,observedHash:evidence.observed?.hash};
+  for(const [key,value] of Object.entries(values))if(typeof value==='string'&&(key==='blockHeight'?/^0x[0-9a-f]{1,64}$/i:/^0x[0-9a-f]{64}$/i).test(value))canonicality[key]=value;
+  result.details={...quoteDetails(error),canonicality};
+ }
+ const life=error?.activationLifecycle;
+ if(life&&['NEVER_BROADCAST','UNKNOWN'].includes(life.outcome)&&['approvalExisted','signingOccurred','sendRawEntered'].every(k=>typeof life[k]==='boolean')){
+  result.details={...result.details,lifecycle:{approvalExisted:life.approvalExisted,signingOccurred:life.signingOccurred,sendRawEntered:life.sendRawEntered,outcome:life.outcome}};
+ }
  return result;
 }

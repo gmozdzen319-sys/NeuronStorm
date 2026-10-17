@@ -5,6 +5,7 @@ import {configuredExecutor} from './configured-executor.mjs';
 import {WALLET_INFRASTRUCTURE as infra,WALLET_GENERATION} from '../wallet-infrastructure.mjs';
 import {activationFailure} from './activation-failure.mjs';
 import {randomUUID} from 'node:crypto';
+import {claimQuoteRetry,deferQuote,provenHashMismatch} from './activation-retry.mjs';
 
 export const AUTO_MAXIMUM=40000000000000000000n;
 const legacyInfrastructure=infra;
@@ -24,7 +25,7 @@ export function validateAutoQuote(q,{accountId,address,relayer,now=Date.now(),in
  return reserve;
 }
 
-export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now,registry=null}){
+export function createAutoActivation(db,{relayer,makeProvisioner,prepareQuote=async()=>{},now=Date.now,registry=null}){
  const infra=registry?.infrastructure??legacyInfrastructure,fee=registry!==null;
  if(fee){assert.equal(infra.generation,3);const original=db;
   const names={passkey_clone_wallets:'passkey_fee_wallets',passkey_clone_approvals:'passkey_fee_approvals',passkey_clone_approval_history:'passkey_fee_approval_history',passkey_auto_activations:'passkey_fee_auto_activations',passkey_activation_events:'passkey_fee_activation_events'};
@@ -37,13 +38,14 @@ export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now,re
    ||await db.prepare("SELECT account_id FROM passkey_clone_approvals WHERE phase IN ('preparing','submitting') OR (phase='quoted' AND approved=TRUE) LIMIT 1").get();
  }
  async function runNext(){
-  // Claim before any quote/signing. The permanent attempt is never recycled.
+  // Claim before any quote/signing. Only explicit, bounded quote-only waits resume.
   activationPreStage('CLAIM_TRANSACTION');
   const job=await db.transaction(async()=>{
    activationPreStage('CLAIM_LOCK');
    await db.lock('neuron-storm:auto-activation:'+relayer);
    activationPreStage('CLAIM_BLOCKERS');
    if(await blocked())return null;
+   if(fee){const retry=await claimQuoteRetry(db,relayer,infra,now());if(retry)return retry;}
    activationPreStage('CLAIM_CANDIDATE');
    const candidate=await db.prepare(`SELECT w.account_id,w.address FROM passkey_clone_wallets w
     ${fee?'JOIN passkey_fee_signup_queue signup ON signup.account_id=w.account_id':''}
@@ -98,8 +100,10 @@ export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now,re
   return runClaimed(job);
  }
  async function runClaimed(job){
-  let phase='stopped',stage='CONFIGURATION';
+  let phase='stopped',stage='CONFIGURATION',failureFinalized=false;
   try{
+   // Count history warm-up as part of this durable attempt, before loading a signer.
+   stage='QUOTE';await prepareQuote();stage='CONFIGURATION';
    const provisioner=await makeProvisioner(job.grantId);
    stage='QUOTE';
    const quote=await provisioner.quote(job.account_id);
@@ -120,12 +124,23 @@ export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now,re
    phase=result.status==='confirmed'?'confirmed':'stopped';
   }catch(error){
    // No exception details: SDK errors can contain sensitive signing input.
-   const saved=await db.prepare('SELECT phase,tx_hash FROM passkey_clone_approvals WHERE account_id=$1').get(job.account_id);
-   if(saved&&(saved.phase==='submitting'||saved.tx_hash))phase='ambiguous';
-   const failure=activationFailure(error,stage);
-   await db.prepare('INSERT INTO passkey_activation_events(account_id,stage,code,details,created_at) VALUES($1,$2,$3,$4,$5)').run(job.account_id,failure.stage,failure.code,JSON.stringify(failure.details??{}),now());
-  }finally{
    await db.transaction(async()=>{
+   const saved=await db.prepare('SELECT phase,tx_hash FROM passkey_clone_approvals WHERE account_id=$1').get(job.account_id);
+   if(saved&&(saved.phase==='submitting'||saved.tx_hash)&&!(fee&&error?.activationLifecycle?.outcome==='NEVER_BROADCAST'))phase='ambiguous';
+   const failure=activationFailure(error,stage);
+   if(stage==='QUOTE'&&failure.code==='CANONICALITY_MISMATCH')failure.details={...failure.details,lifecycle:{approvalExisted:!!saved,signingOccurred:false,sendRawEntered:false,outcome:'NEVER_BROADCAST'}};
+   if(fee&&stage==='QUOTE'&&failure.code==='CANONICALITY_MISMATCH'&&provenHashMismatch(error)){
+    const decision=await deferQuote(db,job,now());
+    if(decision){phase=decision.retry?'quote_retry_wait':'stopped';failure.details={...failure.details,retry:decision};}
+   }
+   await db.prepare('INSERT INTO passkey_activation_events(account_id,stage,code,details,created_at) VALUES($1,$2,$3,$4,$5)').run(job.account_id,failure.stage,failure.code,JSON.stringify(failure.details??{}),now());
+   await db.prepare('UPDATE passkey_relayer_grants SET enabled=FALSE WHERE id=$1').run(job.grantId);
+   await db.prepare("UPDATE passkey_clone_approvals SET approved=FALSE,phase='stopped' WHERE account_id=$1 AND phase IN ('quoted','preparing')").run(job.account_id);
+   await db.prepare('UPDATE passkey_auto_activations SET phase=$1 WHERE account_id=$2').run(phase,job.account_id);
+   });
+   failureFinalized=true;
+  }finally{
+   if(!failureFinalized)await db.transaction(async()=>{
     await db.prepare('UPDATE passkey_relayer_grants SET enabled=FALSE WHERE id=$1').run(job.grantId);
     await db.prepare("UPDATE passkey_clone_approvals SET approved=FALSE,phase='stopped' WHERE account_id=$1 AND phase IN ('quoted','preparing')").run(job.account_id);
     await db.prepare('UPDATE passkey_auto_activations SET phase=$1 WHERE account_id=$2').run(phase,job.account_id);
