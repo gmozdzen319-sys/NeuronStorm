@@ -1,3 +1,4 @@
+import {activationPreStage,activationAttemptClaimed} from './activation-pre-attempt.mjs';
 import assert from 'node:assert/strict';
 import {parseUnits,getAddress} from 'quais';
 import {configuredExecutor} from './configured-executor.mjs';
@@ -37,9 +38,13 @@ export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now,re
  }
  async function runNext(){
   // Claim before any quote/signing. The permanent attempt is never recycled.
+  activationPreStage('CLAIM_TRANSACTION');
   const job=await db.transaction(async()=>{
+   activationPreStage('CLAIM_LOCK');
    await db.lock('neuron-storm:auto-activation:'+relayer);
+   activationPreStage('CLAIM_BLOCKERS');
    if(await blocked())return null;
+   activationPreStage('CLAIM_CANDIDATE');
    const candidate=await db.prepare(`SELECT w.account_id,w.address FROM passkey_clone_wallets w
     ${fee?'JOIN passkey_fee_signup_queue signup ON signup.account_id=w.account_id':''}
     JOIN passkey_accounts a ON a.id=w.account_id
@@ -55,11 +60,15 @@ export function createAutoActivation(db,{relayer,makeProvisioner,now=Date.now,re
    // Grants are shared across generations; wallet queues are not. Never collide
    // with or revive a historical v1 sponsorship when assigning this user's v2.
    const grantId='auto-activation-v'+(fee?3:WALLET_GENERATION)+':'+candidate.account_id;
+   activationPreStage('CLAIM_GRANT_INSERT');
    await db.prepare('INSERT INTO passkey_relayer_grants(id,relayer,budget_wei,expires_at,enabled) VALUES($1,$2,$3,$4,FALSE)').run(grantId,relayer,String(AUTO_MAXIMUM),now()+300000);
+   activationPreStage('CLAIM_ATTEMPT_INSERT');
    await db.prepare("INSERT INTO passkey_auto_activations VALUES($1,$2,$3,'running',$4)").run(candidate.account_id,relayer,grantId,now());
+   activationPreStage('CLAIM_TRANSACTION');
    return {...candidate,grantId};
   });
   if(!job)return null;
+  activationAttemptClaimed();
   return runClaimed(job);
  }
  // Operator-only, explicit ONE new attempt after reviewing pre-broadcast STOP.

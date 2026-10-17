@@ -1,3 +1,4 @@
+import {activationPreStage} from './activation-pre-attempt.mjs';
 import assert from 'node:assert/strict';
 import {AbiCoder,keccak256} from 'quais';
 import {factoryABI} from './chain.mjs';
@@ -14,18 +15,24 @@ export function checkpointFactoryContext(rpc,block,infra,db){
 async function read(rpc,target,infra,db){
  assert.equal(infra.generation,3);validateBlock(target);
  const identity=JSON.stringify([9,infra.factory,infra.factoryTransaction,infra.factoryHash,infra.implementation,infra.implementationHash]);
+ activationPreStage('FACTORY_RECEIPT');
  const receipt=await rpc('quai_getTransactionReceipt',[infra.factoryTransaction]);
  assert(receipt&&BigInt(receipt.status)===1n&&low(receipt.contractAddress)===low(infra.factory));
  const first=BigInt(receipt.blockNumber),last=BigInt(target.woHeader.number);assert(last>=first);
+ activationPreStage('FACTORY_ANCHOR');
  const anchor=validateBlock(await rpc('quai_getBlockByNumber',[receipt.blockNumber,false]));assert.equal(anchor.hash,receipt.blockHash);
+ activationPreStage('FACTORY_RUNTIME');
  assert.equal(keccak256(await rpc('quai_getCode',[infra.factory,target.woHeader.number])),infra.factoryHash,'Factory runtime mismatch');
  const readCount=async block=>{
+ activationPreStage('FACTORY_NONCE');
   const nonce=BigInt(await rpc('quai_getTransactionCount',[infra.factory,block.woHeader.number]));
   assert(nonce>=1n,'Invalid factory creation nonce');return nonce-1n;
  };
  const wanted=await readCount(target),entries=new Map();let previous=0n,start=first,checkpointBlock=null;
+ activationPreStage('CHECKPOINT_LOAD');
  const saved=db?await db.prepare('SELECT checkpoint FROM passkey_factory_checkpoints WHERE identity=$1').get(identity):null;
  if(saved){
+ activationPreStage('CHECKPOINT_VALIDATE');
   const cp=JSON.parse(saved.checkpoint);assert.equal(cp.version,1);validateBlock(cp.block);
   await assertCanonicalBlock(rpc,cp.block); // Never silently discard a forked checkpoint.
   assert(BigInt(cp.block.woHeader.number)>=first);
@@ -35,11 +42,13 @@ async function read(rpc,target,infra,db){
   if(BigInt(cp.block.woHeader.number)>last)throw Error('Factory checkpoint newer than requested snapshot');
   previous=BigInt(entries.size);start=BigInt(cp.block.woHeader.number)+1n;checkpointBlock=cp.block;
   const gap=last-BigInt(cp.block.woHeader.number),dt=BigInt(target.woHeader.timestamp)-BigInt(cp.block.woHeader.timestamp);
+ activationPreStage('CHECKPOINT_ANCESTRY');
   if(gap<=MAX_ADVANCE&&dt>=0n&&dt<=MAX_TIME_ADVANCE)await assertCanonicalAdvance(rpc,cp.block,target);
  }
  assert(wanted>=previous,'Factory nonce regressed');
  async function verifyMappings(block){
   for(const [key,wallet] of entries){
+ activationPreStage('FACTORY_MAPPINGS');
    const assigned=factoryABI.decodeFunctionResult('walletOf',await rpc('quai_call',[{to:infra.factory,data:factoryABI.encodeFunctionData('walletOf',[key])},block.woHeader.number]))[0];
    assert.equal(low(assigned),wallet,'Factory mapping mismatch');
   }
@@ -48,6 +57,7 @@ async function read(rpc,target,infra,db){
  const topic=factoryABI.getEvent('WalletCreated').topicHash;
  let requests=0;
  async function scan(from,to,before,after,endBlock){
+ activationPreStage('HISTORY_SCAN');
   assert(after>=before,'Factory nonce regressed');
   if(after===before)return; // Proven no successful CREATE2 in this interval.
   assert(++requests<=4096,'Factory checkpoint catch-up work budget exceeded');
@@ -56,7 +66,9 @@ async function read(rpc,target,infra,db){
    assert.equal(BigInt(b.woHeader.number),mid);const count=await readCount(b);assert(count>=before&&count<=after);
    await scan(from,mid,before,count,b);await scan(mid+1n,to,count,after,endBlock);await assertCanonicalBlock(rpc,b);return;
   }
+ activationPreStage('HISTORY_LOGS');
   const logs=await rpc('quai_getLogs',[{address:infra.factory,fromBlock:hex(from),toBlock:hex(to),topics:[topic]}]);
+ activationPreStage('HISTORY_LOG_VALIDATE');
   assert(Array.isArray(logs)&&logs.length<10000&&BigInt(logs.length)===after-before,'Incomplete factory log range');
   for(const log of logs){
    assert(!log.removed&&low(log.address)===low(infra.factory)&&BigInt(log.blockNumber)>=from&&BigInt(log.blockNumber)<=to);
@@ -78,8 +90,10 @@ async function read(rpc,target,infra,db){
   await scan(from,to,previous,count,end);assert.equal(BigInt(entries.size),count,'Incomplete factory history');
   // Validate all persisted mappings, including those loaded after a restart.
   await verifyMappings(end);
+ activationPreStage('CHECKPOINT_CANONICALITY');
   if(checkpointBlock)await assertCanonicalBlock(rpc,checkpointBlock);
   await assertCanonicalBlock(rpc,anchor);await assertCanonicalBlock(rpc,end);await assertCanonicalBlock(rpc,target);
+ activationPreStage('CHECKPOINT_SAVE');
   if(db)await db.transaction(async()=>{
    await db.lock('factory-checkpoint:'+identity);
    const current=await db.prepare('SELECT checkpoint FROM passkey_factory_checkpoints WHERE identity=$1').get(identity);
@@ -88,6 +102,7 @@ async function read(rpc,target,infra,db){
   });
   checkpointBlock=end;previous=count;
  }
+ activationPreStage('FACTORY_FINAL_VERIFY');
  assert.equal(BigInt(entries.size),wanted);await assertCanonicalBlock(rpc,anchor);await assertCanonicalBlock(rpc,target);
  return [...entries.keys()].map(key=>keccak256(abi.encode(['bytes32','uint256'],[key,0]))).sort();
 }
