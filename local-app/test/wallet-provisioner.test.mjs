@@ -314,6 +314,19 @@ test('V3 quote reuses PostgreSQL checkpoint with a new RPC client after cold res
  const result=await quoteProvisioning(f.db,{...f,chain:{...f.chain,rpc}});assert(result.native);assert.equal(logReads,0);assert.equal(f.sends,0);
 });
 
+test('Normal v3 worker rebuilds orphan factory evidence before local activation succeeds',async t=>{
+ const f=await fixture(t,{fee:true});await enroll(f);
+ const {factoryStorageContext}=await import('../wallet/factory-context.mjs');
+ const block=await f.chain.rpc('quai_getBlockByNumber',['latest',false]);
+ await factoryStorageContext(f.chain.rpc,block,f.registry.infrastructure,f.db);
+ const saved=await f.db.prepare('SELECT * FROM passkey_factory_checkpoints').get(),orphan=JSON.parse(saved.checkpoint);
+ orphan.block.hash=hash(888);orphan.block.woHeader.hash=hash(888);
+ await f.db.prepare('UPDATE passkey_factory_checkpoints SET checkpoint=$1 WHERE identity=$2').run(JSON.stringify(orphan),saved.identity);
+ assert.equal((await createAutoActivation(f.db,f).runNext()).status,'confirmed');assert.equal(f.sends,1);
+ assert.equal((await f.db.prepare('SELECT checkpoint FROM passkey_factory_checkpoint_history').get()).checkpoint,JSON.stringify(orphan));
+ assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,1);
+});
+
 test('Production history failure is durable before any signer is loaded',async t=>{
  const f=await fixture(t,{fee:true});const {feeSignupEnrollment,configuredFeeAutoActivation}=await import('../wallet/fee-auto-activation.mjs');
  await feeSignupEnrollment(f.registry)(f.db,f.accountId);

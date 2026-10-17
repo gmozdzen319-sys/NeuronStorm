@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {AbiCoder,keccak256} from 'quais';
 import {factoryABI} from './chain.mjs';
 import {validateBlock,assertCanonicalBlock,assertCanonicalAdvance,MAX_ADVANCE,MAX_TIME_ADVANCE} from './head-guard.mjs';
+import {provenHashMismatch} from './activation-retry.mjs';
 const abi=AbiCoder.defaultAbiCoder(),hex=n=>'0x'+BigInt(n).toString(16),low=s=>s.toLowerCase();
 const lanes=new WeakMap();
 // Only the pinned immutable v3 factory: initial nonce 1, exactly one CREATE2
@@ -12,7 +13,7 @@ export function checkpointFactoryContext(rpc,block,infra,db){
  const prior=lanes.get(rpc)??Promise.resolve();
  const work=prior.then(()=>read(rpc,block,infra,db));lanes.set(rpc,work.catch(()=>{}));return work;
 }
-async function read(rpc,target,infra,db){
+async function read(rpc,target,infra,db,rebuilding=false){
  assert.equal(infra.generation,3);validateBlock(target);
  const identity=JSON.stringify([9,infra.factory,infra.factoryTransaction,infra.factoryHash,infra.implementation,infra.implementationHash]);
  activationPreStage('FACTORY_RECEIPT');
@@ -34,7 +35,12 @@ async function read(rpc,target,infra,db){
  if(saved){
  activationPreStage('CHECKPOINT_VALIDATE');
   const cp=JSON.parse(saved.checkpoint);assert.equal(cp.version,1);validateBlock(cp.block);
-  await assertCanonicalBlock(rpc,cp.block); // Never silently discard a forked checkpoint.
+  try{await assertCanonicalBlock(rpc,cp.block);}catch(error){
+   if(!provenHashMismatch(error))throw error;
+   if(rebuilding){error.rebuildCheckpointOrphaned=true;throw error;}
+   // The mismatched checkpoint is evidence only; none of its entries are reused.
+   return rebuild(rpc,target,infra,db,identity,saved.checkpoint);
+  }
   assert(BigInt(cp.block.woHeader.number)>=first);
   assert(Array.isArray(cp.entries));
   for(const [key,wallet] of cp.entries){assert(/^0x[0-9a-f]{64}$/.test(key)&&/^0x[0-9a-f]{40}$/.test(wallet)&&!entries.has(key));entries.set(key,wallet);}
@@ -105,4 +111,52 @@ async function read(rpc,target,infra,db){
  activationPreStage('FACTORY_FINAL_VERIFY');
  assert.equal(BigInt(entries.size),wanted);await assertCanonicalBlock(rpc,anchor);await assertCanonicalBlock(rpc,target);
  return [...entries.keys()].map(key=>keccak256(abi.encode(['bytes32','uint256'],[key,0]))).sort();
+}
+
+async function rebuild(rpc,target,infra,db,identity,source){
+ assert(db,'Durable rebuild storage required');
+ let ignoreCandidate=false;
+ // Reuse the exact receipt/runtime/nonce/log/mapping/canonicality verifier.
+ // Only its storage destination changes; the active checkpoint stays untouched.
+ const candidateDB={
+  transaction:fn=>db.transaction(fn),lock:key=>db.lock(key),
+  prepare:sql=>({
+   get:async()=>{
+    if(ignoreCandidate)return undefined;
+    const row=await db.prepare('SELECT source_checkpoint,checkpoint FROM passkey_factory_rebuilds WHERE identity=$1').get(identity);
+    return row?.source_checkpoint===source?{checkpoint:row.checkpoint}:undefined;
+   },
+   run:async(_identity,checkpoint)=>{
+    assert(sql.startsWith('INSERT INTO passkey_factory_checkpoints'));
+    const current=await db.prepare('SELECT checkpoint FROM passkey_factory_checkpoints WHERE identity=$1').get(identity);
+    assert(current?.checkpoint===source,'Factory checkpoint changed during rebuild');
+    await db.prepare('INSERT INTO passkey_factory_rebuilds(identity,source_checkpoint,checkpoint) VALUES($1,$2,$3) ON CONFLICT(identity) DO UPDATE SET source_checkpoint=excluded.source_checkpoint,checkpoint=excluded.checkpoint').run(identity,source,checkpoint);
+    ignoreCandidate=false;
+   }
+  })
+ };
+ let keys;
+ try{keys=await read(rpc,target,infra,candidateDB,true);}catch(error){
+  if(!error.rebuildCheckpointOrphaned)throw error;
+  // At most one restart from the deployment anchor in this call. No reuse of
+  // orphaned rebuild progress, no recursive retries of an unstable RPC view.
+  ignoreCandidate=true;keys=await read(rpc,target,infra,candidateDB,true);
+ }
+ await db.transaction(async()=>{
+  await db.lock('factory-checkpoint:'+identity);
+  const current=await db.prepare('SELECT checkpoint FROM passkey_factory_checkpoints WHERE identity=$1').get(identity);
+  assert(current?.checkpoint===source,'Factory checkpoint changed during rebuild');
+  const candidate=await db.prepare('SELECT source_checkpoint,checkpoint FROM passkey_factory_rebuilds WHERE identity=$1').get(identity);
+  assert(candidate?.source_checkpoint===source);
+  const cp=JSON.parse(candidate.checkpoint);
+  assert.equal(cp.block.hash,target.hash);assert.deepEqual(cp.block,target);
+  const expected=[...cp.entries].map(([key])=>keccak256(abi.encode(['bytes32','uint256'],[key,0]))).sort();assert.deepEqual(expected,keys);
+  // Re-run every invariant at the pinned target immediately before promotion.
+  const readonly={prepare:()=>({get:async()=>({checkpoint:candidate.checkpoint}),run:async()=>{throw Error('Unexpected rebuild write');}})};
+  assert.deepEqual(await read(rpc,target,infra,readonly,true),keys);
+  await db.prepare('INSERT INTO passkey_factory_checkpoint_history(identity,checkpoint,replacement_hash,created_at) VALUES($1,$2,$3,$4)').run(identity,source,target.hash,Date.now());
+  await db.prepare('UPDATE passkey_factory_checkpoints SET checkpoint=$2 WHERE identity=$1').run(identity,candidate.checkpoint);
+  await db.prepare('DELETE FROM passkey_factory_rebuilds WHERE identity=$1 AND source_checkpoint=$2').run(identity,source);
+ });
+ return keys;
 }
