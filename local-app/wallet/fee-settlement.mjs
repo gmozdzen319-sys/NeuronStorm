@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {keccak256} from 'quais';
+import {getAddress,keccak256} from 'quais';
 import {feeWalletABI,boundFeeTransaction as bound} from './fee-plan.mjs';
 import {feeDigest,quotedFee} from './fee-operation.mjs';
 import {walletABI,factoryABI} from './chain.mjs';
@@ -46,7 +46,7 @@ export async function verifyFeeSettlement({rpc,row,job,intent,infrastructure,ver
  const success=receipt.status==='0x1';
  assert.equal((await call(op.wallet,walletABI,'nonce'))[0],BigInt(op.walletNonce)+(success?1n:0n));
  assert.equal((await call(op.wallet,walletABI,'epoch'))[0],BigInt(op.epoch));
- assert.equal(BigInt(await rpc('quai_getTransactionCount',[intent.relayer,tag])),BigInt(intent.nonce)+1n);
+ assert.equal(BigInt(await rpc('quai_getTransactionCount',[getAddress(intent.relayer),tag])),BigInt(intent.nonce)+1n);
  sendStage('reconcile.execution_event');
  const topic=feeWalletABI.getEvent('QuotedSend').topicHash;
  assert(Array.isArray(receipt.logs));

@@ -3,7 +3,7 @@ import {releaseUnbroadcastSend} from '../wallet/send-reservation.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,generateKeyPairSync} from 'node:crypto';
-import {Wallet,QuaiTransaction,Interface,keccak256} from 'quais';
+import {Wallet,QuaiTransaction,Interface,keccak256,getAddress} from 'quais';
 import {createFeeReconciler} from '../wallet/fee-settlement.mjs';
 import {feeWalletABI} from '../wallet/fee-plan.mjs';
 import {factoryABI} from '../wallet/chain.mjs';
@@ -35,7 +35,7 @@ async function fixture(t,{token=false}={}){
  const rpc=async(method,args=[])=>{
   if(method==='quai_chainId')return '0x9';if(method==='quai_getBlockByNumber'){const b=block(args[0]==='latest'?(sent?18:16):Number(BigInt(args[0])));if(reorg&&args[0]!=='latest'){b.hash=hash(999);b.woHeader.hash=b.hash;}return b;}
   if(method==='quai_gasPrice')return q(gasPrice);
-  if(method==='quai_getTransactionCount')return q(sent?1:nonce);
+  if(method==='quai_getTransactionCount'){assert.equal(args[0],getAddress(args[0]),'Official RPC requires checksum address');return q(sent?1:nonce);}
   if(method==='quai_getCode')return '0x6000';if(method==='quai_getStorageAt')return hash(0);
   if(method==='quai_getBalance'){const address=args[0].toLowerCase(),amount=sent&&!failedReceipt&&!token?BigInt(operation.quote.amount):0n,refund=sent&&!failedReceipt?BigInt(quotedFee(1,operation.quote.networkFee).totalFee):0n;return q(address===relayer.toLowerCase()?balance-(sent?gas*BigInt(signed.gasPrice):0n)+refund:address===row.address?walletBalance-amount-refund:amount+(sent&&recipientConcurrent?900000n:0n));}
   if(method==='quai_call'&&args[0].to.toLowerCase()===infra.factory.toLowerCase()){const p=factoryABI.parseTransaction({data:args[0].data});return factoryABI.encodeFunctionResult(p.name,[p.name==='implementation'?infra.implementation:p.name==='implementationCodeHash'?infrastructure.implementationHash:row.plan.address]);}
