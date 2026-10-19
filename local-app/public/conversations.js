@@ -203,8 +203,8 @@ export function createConversations({api,onProfile,onExpired}) {
   async function showWallet(){if(!identity)return;shell('wallet');threadId=null;$('#wallet-title').focus();await loadWallet();}
   async function loadWallet(){
     if(!identity||view!=='wallet')return;const current=epoch,owner=identity.address;
-    $('#wallet-address').textContent=owner;$('#wallet-assets').replaceChildren();$('#wallet-updated').textContent='';$('#wallet-refresh').disabled=true;status('#wallet-status','Loading your balances…');
-    try{const result=await api('/api/wallet');if(current!==epoch||identity?.address!==owner)return;
+    $('#wallet-address').textContent='';$('#wallet-assets').replaceChildren();$('#wallet-updated').textContent='';$('#wallet-refresh').disabled=true;status('#wallet-status','Loading your balances…');
+    try{const result=await api('/api/wallet');if(current!==epoch||identity?.address!==owner)return;$('#wallet-address').textContent=result.address;
       for(const asset of result.assets){const card=node('article',undefined,'wallet-asset'),heading=node('div');heading.append(node('h2',asset.name),node('span',asset.symbol+' · '+asset.type,'muted'));card.append(heading,node('strong',asset.balance+(asset.rawUnits?' raw units':''),'wallet-balance'));if(asset.contract)card.append(node('p',asset.contract,'address'));$('#wallet-assets').append(card);}
       status('#wallet-status',result.warning||'',!!result.warning);$('#wallet-updated').textContent='Last checked: '+date(result.updatedAt);
     }catch(error){if(current===epoch)await failure(error,'#wallet-status');}finally{if(current===epoch)$('#wallet-refresh').disabled=false;}

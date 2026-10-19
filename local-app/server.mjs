@@ -1,3 +1,4 @@
+import {currentWalletForIdentity} from './current-wallet.mjs';
 import {loadLegal,initLegal,legalPage} from './legal.mjs';
 import {createPasskeyAccounts,passkeyConfiguration} from './passkey-accounts.mjs';
 import {createPasskeyWallet,createTokenBalanceReader} from './passkey-wallet.mjs';
@@ -51,6 +52,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   const walletChain=createWalletChain();
   let walletExecutor,autoActivation,feeWallet,feeAutoActivation;
   try{walletExecutor=await configuredExecutor(db,walletChain);autoActivation=configuredAutoActivation(db,walletChain);feeWallet=await configuredFeeWallet(db);feeAutoActivation=configuredFeeAutoActivation(db,feeWallet);if(feeAutoActivation)autoActivation=feeAutoActivation;}catch{await db.close();throw new Error('Invalid wallet execution configuration');}
+  db.verifyCurrentWallet=async id=>{if(!feeWallet)return null;const row=await feeWallet.registry.load(db,id);if(!row)return null;return {row,view:await feeWallet.chain.snapshot(row.plan)};};
   const passkeys=createPasskeyAccounts(db,{config:passkeyConfig,legal,now,onRegistered:feeAutoActivation?feeSignupEnrollment(feeWallet.registry,now):null});
   const passkeyWallet=withFeeWallet(db,createPasskeyWallet(db,{chain:walletChain,executor:walletExecutor,autoActivation:!!autoActivation&&!feeAutoActivation,now}),feeWallet,{readBalance:createTokenBalanceReader(),now});
   let maintenance;
@@ -162,9 +164,9 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if(path==='/api/version'&&req.method==='GET')return json(200,{version:runningVersion});
       if(path==='/api/token/market'&&req.method==='GET')return json(200,await readMarket());
       if(path==='/api/token'&&req.method==='GET')return json(200,await readNeuron());
-      if(path==='/api/token/balance'&&req.method==='GET'){const current=(await account(req));if(!current)throw failure(401,'Please sign in to view your balance.');return json(200,await readNeuron(current.address));}
+      if(path==='/api/token/balance'&&req.method==='GET'){const current=(await account(req));if(!current)throw failure(401,'Please sign in to view your balance.');return json(200,await readNeuron(await currentWalletForIdentity(db,current.address,{required:true})));}
       if(path==='/api/token/confirm'&&req.method==='POST'){const current=(await account(req));if(!current)throw failure(401,'Please sign in first.');const input=await body(req);if(input.contract!==NS_TOKEN.address||input.confirmed!==true)throw failure(400,'Confirm that Neuron Storm is visible in Pelagus.');(await db.prepare("INSERT INTO token_confirmations VALUES($1,$2,$3) ON CONFLICT(address) DO UPDATE SET contract=excluded.contract,confirmed_at=excluded.confirmed_at").run(current.address.toLowerCase(),NS_TOKEN.address,now()));return json(200,{confirmed:true});}
-      if(path==='/api/wallet' && req.method==='GET'){const current=(await account(req));if(!current)throw failure(401,'Please sign in to view your wallet.');const neuron=await readNeuron(current.address);return json(200,{address:current.address,network:'Quai Mainnet',assets:[{name:NS_TOKEN.name,symbol:NS_TOKEN.symbol,type:'ERC-20',contract:NS_TOKEN.address,balance:neuron.balance}],updatedAt:neuron.updatedAt||new Date(now()).toISOString()});}
+      if(path==='/api/wallet' && req.method==='GET'){const current=(await account(req));if(!current)throw failure(401,'Please sign in to view your wallet.');const address=await currentWalletForIdentity(db,current.address,{required:true});const neuron=await readNeuron(address);return json(200,{address,network:'Quai Mainnet',assets:[{name:NS_TOKEN.name,symbol:NS_TOKEN.symbol,type:'ERC-20',contract:NS_TOKEN.address,balance:neuron.balance}],updatedAt:neuron.updatedAt||new Date(now()).toISOString()});}
       if(path==='/api/actions/challenge'&&req.method==='POST'){
         const input=await body(req),current=await account(req);
         const challenge=await prepareAction(db,current,await actionSession(req),input.path,input.payload,origin,now());
@@ -187,7 +189,9 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
           if(!Number.isSafeInteger(page)||page<1||page>100000||search.length>100)throw failure(400,'Invalid member search.');
           const filter="($1='' OR strpos(lower(COALESCE(p.nickname,'')),lower($2))>0 OR strpos(a.address,lower($3))>0)";
           const args=[search,search,search],total=(await db.prepare(`SELECT count(*) AS n FROM accounts a LEFT JOIN profiles p ON p.address=a.address WHERE ${filter}`).get(...args)).n;
-          return json(200,{page,pages:Math.max(1,Math.ceil(total/50)),members:(await db.prepare(`SELECT a.address,COALESCE(p.nickname,'Profile incomplete') AS nickname FROM accounts a LEFT JOIN profiles p ON p.address=a.address WHERE ${filter} ORDER BY a.created_at,a.address LIMIT 50 OFFSET $4`).all(...args,(page-1)*50))});
+          const members=await db.prepare(`SELECT a.address,COALESCE(p.nickname,'Profile incomplete') AS nickname FROM accounts a LEFT JOIN profiles p ON p.address=a.address WHERE ${filter} ORDER BY a.created_at,a.address LIMIT 50 OFFSET $4`).all(...args,(page-1)*50);
+          for(const member of members)member.address=await currentWalletForIdentity(db,member.address);
+          return json(200,{page,pages:Math.max(1,Math.ceil(total/50)),members});
         }
         if(path==='/api/admin/conversations'&&req.method==='GET')return json(200,(await adminList(db,current,new URL(req.url,origin).searchParams)));
         const route=path.match(/^\/api\/admin\/conversations\/([a-f0-9-]{36})(?:\/(delete|restore))?$/);

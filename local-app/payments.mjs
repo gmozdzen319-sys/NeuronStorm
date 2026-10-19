@@ -1,3 +1,4 @@
+import {currentWalletForIdentity} from './current-wallet.mjs';
 import {QUESTION_LIFETIME} from './lifecycle.mjs';
 import {randomUUID} from 'node:crypto';
 import {id as hashEvent} from 'quais';
@@ -25,7 +26,7 @@ export function createPayments(db,fetcher=fetch,clock=null){
       const row=(await reply(account,input.replyId)),payer=account.address.toLowerCase(),action=input.action;
       if(action!=='tip'&&row.author!==payer)throw fail(403,'Only the author can change this answer.');
       if(action==='tip'&&row.author===payer)throw fail(400,'You cannot tip your own answer.');
-      const recipient=action==='tip'?row.author:REWARD_ADDRESS;
+      const recipient=action==='tip'?await currentWalletForIdentity(db,row.author,{required:true}):REWARD_ADDRESS;
       if(!/^0x00[0-9a-f]{38}$/i.test(payer)||!/^0x00[0-9a-f]{38}$/i.test(recipient))throw fail(400,'NS payments require Quai accounts in Cyprus-1.');
       const units=action==='tip'?nsUnits(input.amount):'1000000000000000000';
       const body=action==='edit'?input.body?.trim():'';
@@ -35,6 +36,7 @@ export function createPayments(db,fetcher=fetch,clock=null){
       return db.transaction(async()=>{
       await db.lock('question:'+row.question_id);
       const current=(await reply(account,input.replyId));if(current.version!==row.version)throw fail(409,'The answer changed. Please review it again.');
+      if(action==='tip'&&(await currentWalletForIdentity(db,current.author,{required:true})).toLowerCase()!==recipient.toLowerCase())throw fail(409,'The recipient changed. Please review the tip again.');
       (await db.prepare("INSERT INTO payment_intents(id,payer,reply_id,action,recipient,units,body,reply_version,start_block,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)").run(intentId,payer,row.id,action,recipient,units,body,row.version,start.toString(),now));
       return output((await db.prepare("SELECT * FROM payment_intents WHERE id=$1").get(intentId)));
       });

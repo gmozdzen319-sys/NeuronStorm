@@ -1,3 +1,4 @@
+import {currentWalletForIdentity} from './current-wallet.mjs';
 // Hosting-independent scoring API. PostgreSQL's append-only ledger is authoritative.
 export const WEEK=604800000;
 export function roundStart(now){return Math.floor((now-345600000)/WEEK)*WEEK+345600000;}
@@ -45,6 +46,7 @@ export async function reputationRanking(db,params,now,includeAddresses=false,add
  (SELECT c.name FROM reputation_events e JOIN reputation_event_categories ec ON ec.event_id=e.id JOIN categories c ON c.id=ec.category_id WHERE e.recipient=s.recipient GROUP BY c.id ORDER BY sum(ec.units) DESC,c.id LIMIT 1) AS expertise
  FROM ranked s JOIN profiles p ON p.address=s.recipient ORDER BY s.position,p.nickname,s.recipient LIMIT $3`).all(round,category,limit);
  const result=rows.map(({recipient,...r})=>({...r,...(includeAddresses?{address:recipient}:{}),stars:r.weeklyUnits/100}));
+ if(includeAddresses)for(const row of result)row.currentWalletAddress=await currentWalletForIdentity(db,row.address);
  return {weekStart:round,weekEnd:round+WEEK,round:history.find(r=>r.round_id===round),rounds:history,rows:result,
  categories:await db.prepare('SELECT id,name,kind FROM categories ORDER BY kind,name').all(),
  me:address?await reputation(db,address,now,round):null};

@@ -35,6 +35,7 @@ test('Passkey registration joins profiles and Q&A before wallet deployment, with
  const aa=await register(a,da),bb=await register(b,db);
  await t.test('independent persistent identity and reserved wallet, no paid execution',async()=>{
   assert(aa.address&&bb.address);assert.notEqual(aa.address,bb.address);
+  assert.equal((await app.db.prepare('SELECT count(*) AS n FROM passkey_current_wallet_accounts').get()).n,2);
   assert.equal((await a('/api/profile')).data.profile,null);
   assert.equal(await communityAddress(app.db,aa.id),aa.address);
   assert.equal((await app.db.prepare('SELECT count(*) AS n FROM passkey_clone_approvals').get()).n,0);

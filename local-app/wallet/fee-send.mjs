@@ -1,3 +1,4 @@
+import {currentAccountWallet} from '../current-wallet.mjs';
 import {diagnoseSend,sendStage,sendStopped,sendExpired} from './send-diagnostics.mjs';
 import assert from 'node:assert/strict';
 import {randomBytes,randomUUID} from 'node:crypto';
@@ -29,6 +30,7 @@ export function createFeeSend(db,{loadWallet,chain,executor=null,now=Date.now}){
   if([row.plan.address,row.plan.implementation,row.plan.factory,token].some(a=>a?.toLowerCase()===recipient.toLowerCase()))throw fail(400,'This recipient is not supported.');
   // Metadata and balances are read by the server, never accepted from the UI.
   const view=await chain.snapshot(row.plan);if(!view.deployed)throw unavailable();
+  await currentAccountWallet(db,account.id,{row,view});
   const asset=token===ZERO_TOKEN?{decimals:18,symbol:'QUAI',balanceWei:view.balanceWei}:await chain.token(row.plan,token,view.block);
   let amount;try{amount=tokenAmount(input.amount,asset.decimals);}catch{throw fail(400,'Enter a positive amount within the token’s decimal precision.');}
   if(BigInt(asset.balanceWei)<BigInt(amount))throw fail(409,'Insufficient token balance.');

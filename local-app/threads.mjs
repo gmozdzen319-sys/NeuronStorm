@@ -1,3 +1,4 @@
+import {currentWalletForIdentity} from './current-wallet.mjs';
 import {isBlocked,ownBlock} from './contact-preferences.mjs';
 import { randomUUID } from 'node:crypto';
 import {QUESTION_LIFETIME} from './lifecycle.mjs';
@@ -76,6 +77,7 @@ export async function readThread(db,account,id,includeDeleted=false){
     const total=tips.get(payment.reply_id)||{units:0n,count:0};total.units+=BigInt(payment.units);total.count++;tips.set(payment.reply_id,total);
   }
   for(const reply of replies){reply.blockId=(await ownBlock(db,account.address.toLowerCase(),reply.walletAddress));reply.canBlock=reply.walletAddress!==account.address.toLowerCase();reply.savedVersion=(await db.prepare("SELECT version FROM saved_answers WHERE owner=$1 AND reply_id=$2").get(account.address.toLowerCase(),reply.id))?.version||null;const total=tips.get(reply.id)||{units:0n,count:0};reply.unread=reply.postedRevision>readRevision&&Boolean(reply.canVote);delete reply.postedRevision;reply.tipUnits=String(total.units);reply.tipTotal=formatBalance(String(total.units),18);reply.tipCount=total.count;}
+  for(const reply of replies)reply.walletAddress=await currentWalletForIdentity(db,reply.walletAddress);
   return {canSaveAnswers:q.author===account.address.toLowerCase(),contactBlocked:(await isBlocked(db,account.address.toLowerCase(),q.author)),canBlock:q.author!==account.address.toLowerCase(),blockId:(await ownBlock(db,account.address.toLowerCase(),q.author)),unread:readRevision===0&&q.author!==account.address.toLowerCase(),expiresAt:q.created_at+QUESTION_LIFETIME,canAccept:q.author===account.address.toLowerCase(),canReply:!(await isBlocked(db,account.address.toLowerCase(),q.author))&&!(await db.prepare("SELECT 1 FROM answer_slots WHERE question_id=$1 AND author=$2").get(id,account.address.toLowerCase())),id,body:q.body,author,deletedAt:q.deleted_at,categories:(await topics(db,id)),category:category.name,categoryKind:category.kind,createdAt:q.created_at,revision:q.revision,replies:replies.map(({walletAddress,...r})=>account.role==='admin'?{...r,walletAddress}:r),recipientCount:(await db.prepare("SELECT count(*) AS n FROM question_participants WHERE question_id=$1 AND is_recipient=1").get(id)).n};
 }
 export async function voteOnReply(db,account,id,replyId,input,now=Date.now()){

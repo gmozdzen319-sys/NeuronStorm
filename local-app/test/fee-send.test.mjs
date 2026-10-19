@@ -30,6 +30,7 @@ test('Quoted Send: genuine WebAuthn, PostgreSQL consumption, token amounts and a
  const registry=createFeeAssignments({...infra,generation:3,confirmed:true,factory:'0x0000000000000000000000000000000000000005',implementation:'0x0000000000000000000000000000000000000006',implementationTransaction:'0x'+'a'.repeat(64)});
  const legacy=await loadCloneWallet(app.db,account.id);
  const assigned=await registry.assign(app.db,account.id);
+ await app.db.prepare("INSERT INTO passkey_fee_approvals(account_id,quote,commitment,approved,expires_at,phase,receipt) VALUES($1,'{}','test',true,$2,'confirmed',$3)").run(account.id,Date.now()+60000,JSON.stringify({status:'0x1'}));
  const loadWallet=async(db,id)=>({...await registry.load(db,id),generation});
  const row=await loadWallet(app.db,account.id);
  await t.test('fee wallet persists independently without changing v2 or passkey',async()=>{

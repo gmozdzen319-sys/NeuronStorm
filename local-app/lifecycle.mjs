@@ -1,3 +1,4 @@
+import {currentWalletForIdentity} from './current-wallet.mjs';
 export const QUESTION_LIFETIME=7*24*60*60*1000;
 const fail=(status,message)=>Object.assign(new Error(message),{status});
 
@@ -46,5 +47,7 @@ export async function acceptedAnswers(db,params){
   const page=Number(params.get('page')||1);
   if(!Number.isSafeInteger(page)||page<1||page>100000)throw fail(400,'Invalid accepted answers page.');
   const total=(await db.prepare("SELECT count(*) AS n FROM accepted_answers").get()).n,pages=Math.max(1,Math.ceil(total/25)),current=Math.min(page,pages);
-  return {page:current,pages,total,answers:(await db.prepare("SELECT question_id AS \"questionId\",question_body AS question,answer_body AS answer,question_nickname AS \"askedBy\",answer_nickname AS \"answeredBy\",answer_author AS \"walletAddress\",upvotes,selection,closed_at AS \"closedAt\",(SELECT tx_hash FROM reward_receipts rr WHERE rr.question_id=accepted_answers.question_id) AS \"rewardTx\" FROM accepted_answers ORDER BY closed_at DESC,question_id LIMIT 25 OFFSET $1").all((current-1)*25))};
+  const result={page:current,pages,total,answers:(await db.prepare("SELECT question_id AS \"questionId\",question_body AS question,answer_body AS answer,question_nickname AS \"askedBy\",answer_nickname AS \"answeredBy\",COALESCE((SELECT recipient FROM reward_receipts rr WHERE rr.question_id=accepted_answers.question_id),answer_author) AS \"walletAddress\",upvotes,selection,closed_at AS \"closedAt\",(SELECT tx_hash FROM reward_receipts rr WHERE rr.question_id=accepted_answers.question_id) AS \"rewardTx\" FROM accepted_answers ORDER BY closed_at DESC,question_id LIMIT 25 OFFSET $1").all((current-1)*25))};
+  for(const answer of result.answers)if(!answer.rewardTx)answer.walletAddress=await currentWalletForIdentity(db,answer.walletAddress);
+  return result;
 }

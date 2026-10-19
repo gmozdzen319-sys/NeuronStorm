@@ -15,7 +15,8 @@ export function renderReputation(score){const host=document.querySelector('#prof
 export function renderRanking(result,host){
  host.replaceChildren();for(const row of result.rows){const card=el('article','','ranking-row'+(row.position<=3?' reputation-top':''));
  card.append(el('strong',`#${row.position} ${row.nickname}`),el('span',row.expertise||'General','reputation-expertise'),el('span',points(row.weeklyUnits)+' Weekly Score'),el('span',points(row.totalUnits)+' Reputation'));
- if(row.address)card.append(el('code',row.address,'address'));host.append(card);
+ const wallet=Object.hasOwn(row,'currentWalletAddress')?row.currentWalletAddress:row.address;
+ if(wallet)card.append(el('code',wallet,'address'));host.append(card);
  }if(!result.rows.length)host.append(el('p','No scored contributions in this round yet.','empty-state'));
 }
 export function roundOptions(picker,rounds,selected){picker.replaceChildren();for(const r of rounds)picker.append(new Option(new Date(r.start_time).toISOString().slice(0,10)+' · '+r.status,r.round_id));picker.value=String(selected);}

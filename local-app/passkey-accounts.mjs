@@ -84,6 +84,7 @@ export function createPasskeyAccounts(db,{config,legal,now=Date.now,onRegistered
           if(!verified.verified)throw Error();
           const info=verified.registrationInfo,c=info.credential;owner=randomUUID();credentialID=c.id;
           await db.prepare('INSERT INTO passkey_accounts VALUES($1,$2,$3,$4,$5,$6)').run(owner,challenge.user_handle,now(),challenge.legal_hash,config.rpID,config.origin);
+          await db.prepare('INSERT INTO passkey_current_wallet_accounts(account_id,created_at) VALUES($1,$2)').run(owner,now());
           await db.prepare('INSERT INTO passkey_credentials VALUES($1,$2,$3,$4,$5,$6,$7,$8,NULL)').run(c.id,owner,Buffer.from(c.publicKey).toString('base64url'),c.counter,'My passkey',info.credentialBackedUp,now(),now());
           await db.prepare('INSERT INTO passkey_wallets(account_id) VALUES($1)').run(owner);
           await assignCloneWallet(db,owner,now);
