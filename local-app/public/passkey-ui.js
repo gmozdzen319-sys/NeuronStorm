@@ -1,5 +1,8 @@
 const decode=value=>Uint8Array.from(atob(value.replace(/-/g,'+').replace(/_/g,'/')),c=>c.charCodeAt(0));
 const encode=value=>btoa(String.fromCharCode(...new Uint8Array(value))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+export function confirmationErrorText(submitted,error){
+  return submitted?'Checking transaction status… Do not send again.':error.name==='NotAllowedError'?'Confirmation cancelled or expired. No automatic retry will be sent.':error.message;
+}
 export function transferReviewText(review){
   const base=`Send ${review.amount} ${review.symbol||'QUAI'}\nFrom: ${review.wallet}\nTo: ${review.recipient}\n${review.network}`;
   if(review.totalFee===undefined)return `${base}\nMaximum network fee: ${review.maximumFee} QUAI · paid by ${review.feePaidBy}`;
@@ -124,10 +127,12 @@ export function createPasskeyUI({api,onExternal,onAccount}){
     }catch(error){if(revision===epoch)$('#pk-send-status').textContent=error.message;}finally{sending=false;if(revision===epoch)$('#pk-review-button').disabled=false;}
   });
   $('#pk-confirm').addEventListener('click',async()=>{if(!transfer||sending)return;const request=transfer,revision=epoch;transfer=null;sending=true;$('#pk-confirm').disabled=true;$('#pk-review-button').disabled=true;
+    let confirmationSubmitted=false;
     try{$('#pk-send-status').textContent='Awaiting confirmation on your device…';const response=await deviceResponse('login',request.options);if(revision!==epoch)return;
+      confirmationSubmitted=true;
       $('#pk-send-status').textContent='Submitting…';const result=await api('/api/passkey/wallet/send/confirm',{id:request.id,response});if(revision!==epoch)return;
-      $('#pk-send-status').textContent=result.status==='confirmed'?'Confirmed. Transaction: '+result.transactionHash:result.status==='failed'?'Failed. No automatic retry will be sent.':'Stopped or still being checked. Do not send again.';
-    }catch(error){if(revision===epoch){$('#pk-send-status').textContent=error.name==='NotAllowedError'?'Confirmation cancelled or expired. No automatic retry will be sent.':error.message;
+      $('#pk-send-status').textContent=result.status==='confirmed'?'Confirmed. Transaction: '+result.transactionHash:result.status==='failed'?'Failed. No automatic retry will be sent.':result.status==='submitting'?'Checking transaction status… Do not send again.':'Stopped. No automatic retry will be sent.';
+    }catch(error){if(revision===epoch){$('#pk-send-status').textContent=confirmationErrorText(confirmationSubmitted,error);
       // Read-only status lookup after an uncertain HTTP response; never repeat POST.
       try{const s=await api('/api/passkey/wallet/send/'+request.id);if(revision===epoch&&s.transactionHash)$('#pk-send-status').textContent=(s.status==='confirmed'?'Confirmed. ':'Check this transaction before sending again. ')+s.transactionHash;}catch{}
     }}finally{sending=false;if(revision===epoch)$('#pk-review-button').disabled=false;}

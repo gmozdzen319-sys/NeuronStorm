@@ -293,6 +293,8 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   const provisionApproved=()=>{
     if((!walletExecutor?.provisioner&&!autoActivation)||provisionWork)return;
     provisionWork=(async()=>{
+      // Read-only chain observations plus idempotent DB settlement; never resubmit.
+      if(feeWallet?.reconciler)await feeWallet.reconciler.poll();
       if(autoActivation){await autoActivation.runNext();return;}
       const next=await db.prepare("SELECT account_id FROM passkey_clone_approvals WHERE approved=TRUE AND phase='quoted' AND expires_at>$1 ORDER BY expires_at LIMIT 1").get(now());
       if(next)await walletExecutor.provisioner.execute(next.account_id);

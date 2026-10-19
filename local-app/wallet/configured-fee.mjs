@@ -9,6 +9,7 @@ import {createFeeExecutor} from './fee-executor.mjs';
 import {createFeeSendPreflight} from './fee-native-preflight.mjs';
 import {createNativeFeeQuote} from './fee-quote.mjs';
 import {createNetworkVerification} from './network-verification.mjs';
+import {createFeeReconciler} from './fee-settlement.mjs';
 
 export function scopedFeeLoader(registry,allowedAccountId){
  return async(database,accountId)=>{
@@ -24,7 +25,7 @@ export async function configuredFeeWallet(db,env=process.env){
  assert(env.NS_FEE_WALLET_MANIFEST,'Confirmed fee-wallet manifest required');
  const registry=createFeeAssignments(JSON.parse(await readFile(env.NS_FEE_WALLET_MANIFEST,'utf8')));
  const infrastructure=registry.infrastructure,chain=createWalletChain({infrastructure});chain.token=createFeeTokenReader(chain.rpc);
- let executor=null;
+ let executor=null,reconciler=null;
  if(env.NS_FEE_SEND_ENABLED==='true'){
   assert(env.NS_FEE_GRANT_ID&&env.NS_WALLET_RELAYER_KEY_FILE);
   const relayer=getAddress(env.NS_WALLET_RELAYER_ADDRESS),signer=new Wallet((await readFile(env.NS_WALLET_RELAYER_KEY_FILE,'utf8')).trim());
@@ -34,10 +35,12 @@ export async function configuredFeeWallet(db,env=process.env){
    const response=await fetch('https://rpc.quai.network/cyprus1',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'quai_sendRawTransaction',params:[raw]}),signal:AbortSignal.timeout(10000)});
    const data=await response.json();assert(response.ok&&data.jsonrpc==='2.0'&&data.id===1&&!data.error&&/^0x[0-9a-f]{64}$/i.test(data.result));return data.result;
   };
-  executor=createFeeExecutor(db,{chain,relayer,grantId:env.NS_FEE_GRANT_ID,signer,sendRaw,preflight:createFeeSendPreflight(verifier),estimateQuote:createNativeFeeQuote(verifier),verifyNetwork:createNetworkVerification(env)});
+  const verifyNetwork=createNetworkVerification(env);
+  reconciler=createFeeReconciler(db,{rpc:chain.rpc,relayer,infrastructure,loadWallet:registry.load,verifyNetwork});
+  executor=createFeeExecutor(db,{chain,relayer,grantId:env.NS_FEE_GRANT_ID,signer,sendRaw,preflight:createFeeSendPreflight(verifier),estimateQuote:createNativeFeeQuote(verifier),verifyNetwork,settle:reconciler.reconcile});
  }
  // Optional controlled rollout scope. It cannot be selected by request data.
  const loadWallet=scopedFeeLoader(registry,env.NS_FEE_ALLOWED_ACCOUNT_ID);
  const send=createFeeSend(db,{chain,executor,loadWallet});
- return {registry,chain,send};
+ return {registry,chain,send,reconciler};
 }

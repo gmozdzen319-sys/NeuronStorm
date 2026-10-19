@@ -90,6 +90,7 @@ export function createFeeSend(db,{loadWallet,chain,executor=null,now=Date.now}){
    sendStopped(error);
    await db.prepare("UPDATE passkey_native_operations SET phase='stopped' WHERE id=$1 AND phase IN ('verifying','authorized')").run(job.id);
    const current=await status(account,job.id);
+   if(current.status==='submitting')return current;
    if(current.status==='stopped'&&current.receipt?.broadcast===false)throw fail(409,'Transfer stopped before submission. No transaction was sent. Prepare a new transfer and confirm it with your passkey.');
    if(error.code==='FEE_REQUOTE_REQUIRED'&&(await status(account,job.id)).status==='stopped')throw fail(409,'The required network fee exceeds your approved quote. No transaction was sent. Review a new quote and approve it again with your passkey.');
    throw fail(409,'Transfer stopped. Check its status before creating another transfer. Nothing will be retried automatically.');

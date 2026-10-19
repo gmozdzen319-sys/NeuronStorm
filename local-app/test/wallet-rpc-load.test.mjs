@@ -4,14 +4,15 @@ import {createWalletRPC,factoryABI} from '../wallet/chain.mjs';
 import {factoryStorageContext} from '../wallet/factory-context.mjs';
 import {WALLET_INFRASTRUCTURE as infra} from '../wallet-infrastructure.mjs';
 const hash=n=>'0x'+BigInt(n).toString(16).padStart(64,'0');
-test('Only explicit getLogs overload gets at most three read attempts, retaining exact parameters',async()=>{
+test('Only explicit getLogs overload gets at most three read attempts, retaining exact parameters',async t=>{
+ t.mock.method(Date,'now',()=>1000000);
  const calls=[],delays=[],params=[{fromBlock:'0x1',toBlock:'0x2'}];
  const rpc=createWalletRPC(async(url,options)=>{
   const request=JSON.parse(options.body);calls.push(request);
   return {ok:true,status:200,text:async()=>JSON.stringify({jsonrpc:'2.0',id:request.id,...(calls.length<3?{error:{code:-32000,message:'too many concurrent log queries; retry later'}}:{result:[]})})};
  },undefined,{sleep:async ms=>delays.push(ms)});
  assert.deepEqual(await rpc('quai_getLogs',params),[]);assert.equal(calls.length,3);
- assert.deepEqual(delays,[2000,4000]);assert(calls.every(c=>JSON.stringify(c.params)===JSON.stringify(params)));
+ assert.deepEqual(delays,[5000,1000,10000,1000]);assert(calls.every(c=>JSON.stringify(c.params)===JSON.stringify(params)));
  await assert.rejects(rpc('quai_sendRawTransaction',['secret']),/Read-only/);assert.equal(calls.length,3);
 });
 for(const [method,message,total] of [['quai_getLogs','too many concurrent log queries; retry later',3],['quai_getLogs','noncanonical block',1],['quai_call','too many concurrent log queries; retry later',1]])test('RPC fails closed without unbounded retry: '+method+' '+message,async()=>{

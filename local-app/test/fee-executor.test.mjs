@@ -3,7 +3,11 @@ import {releaseUnbroadcastSend} from '../wallet/send-reservation.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,generateKeyPairSync} from 'node:crypto';
-import {Wallet,QuaiTransaction,Interface} from 'quais';
+import {Wallet,QuaiTransaction,Interface,keccak256} from 'quais';
+import {createFeeReconciler} from '../wallet/fee-settlement.mjs';
+import {feeWalletABI} from '../wallet/fee-plan.mjs';
+import {factoryABI} from '../wallet/chain.mjs';
+import {createAutoActivation} from '../wallet/auto-activation.mjs';
 import {isoCBOR} from '@simplewebauthn/server/helpers';
 import {createApp} from './database.mjs';
 import {assignCloneWallet,loadCloneWallet,WALLET_INFRASTRUCTURE as infra} from '../wallet-infrastructure.mjs';
@@ -21,7 +25,10 @@ async function fixture(t,{token=false}={}){
  await db.prepare('INSERT INTO passkey_accounts VALUES($1,$2,$3,NULL,$4,$5)').run(accountId,randomUUID(),now,infra.rpID,infra.origin);
  await db.prepare("INSERT INTO passkey_credentials VALUES($1,$2,$3,0,'Test',FALSE,$4,$4,NULL)").run(credentialId,accountId,cose,now);await assignCloneWallet(db,accountId);const row={...await loadCloneWallet(db,accountId),generation:3},relayer=await signer.getAddress();
  await db.prepare('INSERT INTO passkey_relayer_grants(id,relayer,budget_wei,expires_at,enabled) VALUES($1,$2,$3,$4,TRUE)').run(grantId,relayer,'300000000000000000000',now+600000);
+ row.plan.runtimeHash=keccak256('0x6000');
+ const infrastructure={factory:infra.factory,implementation:infra.implementation,factoryHash:keccak256('0x6000'),implementationHash:keccak256('0x6000')};
  const operation={chainId:9,wallet:row.plan.address,action:6,epoch:'0',walletNonce:'0',deadline:String(Math.floor(now/1000)+120),quote:{token:token?tokenAddress:ZERO_TOKEN,recipient,amount:token?'7000000':'7000000000000000',requestId:hash(123)}};
+ let proofFault=null,recipientConcurrent=false,missingReceipt=false,settlementUnavailable=false;
  const auth=[hash(1),hash(1),0,0,'0x'+'00'.repeat(37),'{}'];let signCalls=0,gas=400000n,sent=0,signed,gasPrice=30000000000000n,nonce=0n,alterACL=false,aclDrift=false,preflightFail=false,ambiguous=false,failedReceipt=false,changedData=false,reorg=false;
  const block=n=>({hash:hash(n),woHeader:{hash:hash(n),parentHash:hash(n-1),location:'0x0000',number:q(n),timestamp:q(Math.floor(now/1000))},header:{quaiStateSize:'0x1',gasLimit:'0x989680'}});
  const balance=10n**21n,walletBalance=100n*10n**18n;
@@ -30,19 +37,27 @@ async function fixture(t,{token=false}={}){
   if(method==='quai_gasPrice')return q(gasPrice);
   if(method==='quai_getTransactionCount')return q(sent?1:nonce);
   if(method==='quai_getCode')return '0x6000';if(method==='quai_getStorageAt')return hash(0);
-  if(method==='quai_getBalance'){const address=args[0].toLowerCase(),amount=sent&&!failedReceipt&&!token?BigInt(operation.quote.amount):0n,refund=sent&&!failedReceipt?BigInt(quotedFee(1,operation.quote.networkFee).totalFee):0n;return q(address===relayer.toLowerCase()?balance-(sent?gas*BigInt(signed.gasPrice):0n)+refund:address===row.address?walletBalance-amount-refund:amount);}
+  if(method==='quai_getBalance'){const address=args[0].toLowerCase(),amount=sent&&!failedReceipt&&!token?BigInt(operation.quote.amount):0n,refund=sent&&!failedReceipt?BigInt(quotedFee(1,operation.quote.networkFee).totalFee):0n;return q(address===relayer.toLowerCase()?balance-(sent?gas*BigInt(signed.gasPrice):0n)+refund:address===row.address?walletBalance-amount-refund:amount+(sent&&recipientConcurrent?900000n:0n));}
+  if(method==='quai_call'&&args[0].to.toLowerCase()===infra.factory.toLowerCase()){const p=factoryABI.parseTransaction({data:args[0].data});return factoryABI.encodeFunctionResult(p.name,[p.name==='implementation'?infra.implementation:p.name==='implementationCodeHash'?infrastructure.implementationHash:row.plan.address]);}
   if(method==='quai_call'&&token&&args[0].to.toLowerCase()===tokenAddress){const [owner]=tokenABI.decodeFunctionData('balanceOf',args[0].data),amount=sent&&!failedReceipt?BigInt(operation.quote.amount):0n;return tokenABI.encodeFunctionResult('balanceOf',[owner.toLowerCase()===row.address?1000000000n-amount:amount]);}
-  if(method==='quai_call'){const p=walletABI.parseTransaction({data:args[0].data});let out;switch(p.name){case 'nonce':out=[sent&&!failedReceipt?1:0];break;case 'epoch':out=[0];break;case 'keys':out=[row.plan.x,row.plan.y,true];break;case 'keyCount':case 'keySlotCount':out=[1];break;case 'verifyProbe':out=[true];break;default:throw Error(p.name);}return walletABI.encodeFunctionResult(p.name,out);}
+  if(method==='quai_call'){const p=walletABI.parseTransaction({data:args[0].data});let out;switch(p.name){case 'nonce':out=[sent&&proofFault==='walletNonce'?2:sent&&!failedReceipt?1:0];break;case 'epoch':out=[0];break;case 'keys':out=[row.plan.x,row.plan.y,true];break;case 'keyCount':case 'keySlotCount':out=[1];break;case 'verifyProbe':out=[true];break;default:throw Error(p.name);}return walletABI.encodeFunctionResult(p.name,out);}
   if(method==='quai_createAccessList')throw Error('Zero-price RPC simulation must not authorize fee Send');
-  if(method==='quai_getTransactionReceipt')return {transactionHash:signed.hash,blockHash:hash(16),blockNumber:'0x10',transactionIndex:'0x0',status:failedReceipt?'0x0':'0x1',gasUsed:q(gas),effectiveGasPrice:q(signed.gasPrice)};
-  if(method==='quai_getTransactionByHash')return {type:'0x0',chainId:'0x9',from:relayer,to:row.plan.address,nonce:'0x0',value:'0x0',gasPrice:q(signed.gasPrice),gas:q(signed.gasLimit),input:signed.data,accessList:signed.accessList};
+  if(method==='quai_getTransactionReceipt'){
+   if(missingReceipt)return null;
+   const oq=operation.quote,fields=[oq.requestId,oq.token,oq.recipient,oq.amount,relayer,oq.networkFee,quotedFee(1,oq.networkFee).serviceFee];
+   if(proofFault==='recipient')fields[2]=tokenAddress;if(proofFault==='amount')fields[3]='1';if(proofFault==='token')fields[1]=recipient;if(proofFault==='replay')fields[0]=hash(999);
+   const log={...feeWalletABI.encodeEventLog(feeWalletABI.getEvent('QuotedSend'),fields),address:proofFault==='emitter'?recipient:row.plan.address,transactionHash:signed.hash,blockHash:hash(16),blockNumber:'0x10',transactionIndex:'0x0',removed:false};
+   return {transactionHash:signed.hash,blockHash:hash(16),blockNumber:'0x10',transactionIndex:'0x0',from:relayer,to:row.plan.address,status:failedReceipt?'0x0':'0x1',gasUsed:q(gas),effectiveGasPrice:q(signed.gasPrice),logs:failedReceipt?[]:[log]};
+  }
+  if(method==='quai_getTransactionByHash')return {hash:signed.hash,blockHash:hash(16),blockNumber:'0x10',transactionIndex:'0x0',type:'0x0',chainId:'0x9',from:relayer,to:row.plan.address,nonce:proofFault==='nonce'?'0x1':'0x0',value:'0x0',gasPrice:q(signed.gasPrice),gas:q(signed.gasLimit),input:signed.data,accessList:signed.accessList};
   throw Error(method);
  };
  const chain={rpc,snapshot:async()=>({deployed:true,nonce:'0',epoch:'0',balanceWei:String(walletBalance),block:block(16)})};
- const executor=createFeeExecutor(db,{chain,relayer,grantId,estimateQuote:async()=>({gasLimit:'600000',estimatedGas:'450000'}),stabilize:async()=>({stable:true}),signer:{getAddress:()=>signer.getAddress(),signTransaction:async tx=>{signCalls++;if(changedData)tx.data+='00';return signer.signTransaction(tx);}},sendRaw:async raw=>{sent++;signed=QuaiTransaction.from(raw);if(ambiguous)throw Error('uncertain network');return signed.hash;},verifyNetwork:async()=>true,preflight:async(rpc,tx,row,block)=>{if(preflightFail)throw Error('native mismatch');const accessList=[{address:row.address,storageKeys:alterACL?[hash(9)]:[]}];if(aclDrift)alterACL=true;return {accessList,gasUsed:String(gas),accounts:await captureAccounts(rpc,[{address:row.address,storageKeys:[]}],block),block};}});
+ const reconciler=createFeeReconciler(db,{rpc,relayer,infrastructure,loadWallet:async()=>row,verifyNetwork:async()=>true});
+ const executor=createFeeExecutor(db,{chain,relayer,grantId,settle:async id=>{if(settlementUnavailable)throw Error('temporary post-receipt failure');return reconciler.reconcile(id);},estimateQuote:async()=>({gasLimit:'600000',estimatedGas:'450000'}),stabilize:async()=>({stable:true}),signer:{getAddress:()=>signer.getAddress(),signTransaction:async tx=>{signCalls++;if(changedData)tx.data+='00';return signer.signTransaction(tx);}},sendRaw:async raw=>{sent++;signed=QuaiTransaction.from(raw);if(ambiguous)throw Error('uncertain network');return signed.hash;},verifyNetwork:async()=>true,preflight:async(rpc,tx,row,block)=>{if(preflightFail)throw Error('native mismatch');const accessList=[{address:row.address,storageKeys:alterACL?[hash(9)]:[]}];if(aclDrift)alterACL=true;return {accessList,gasUsed:String(gas),accounts:await captureAccounts(rpc,[{address:row.address,storageKeys:[]}],block),block};}});
  const prepare=async()=>{const pricing=await executor.quote(row,operation);operation.quote={...operation.quote,relayer,networkFee:pricing.networkFee,gasPrice:pricing.gasPrice};operation.digest=feeDigest(operation);return executor.prepare(row,operation,null,pricing);};
  async function execute(prepared){await db.prepare("INSERT INTO passkey_native_operations(id,account_id,credential_id,phase,plan,assertion,created_at,expires_at) VALUES($1,$2,$3,'authorized',$4,$5,$6,$7)").run(id,accountId,credentialId,JSON.stringify(prepared),JSON.stringify(auth),now,now+120000);return executor.execute({id,accountId,row,prepared,auth});}
- return {db,executor,prepare,execute,id,grantId,get sent(){return sent;},get signCalls(){return signCalls;},set:(key,value)=>{if(key==='gas')gas=value;if(key==='price')gasPrice=value;if(key==='nonce')nonce=value;if(key==='acl')aclDrift=value;if(key==='preflight')preflightFail=value;if(key==='ambiguous')ambiguous=value;if(key==='failed')failedReceipt=value;if(key==='data')changedData=value;if(key==='reorg')reorg=value;},get signed(){return signed;}};
+ return {db,executor,reconciler,prepare,execute,id,grantId,get sent(){return sent;},get signCalls(){return signCalls;},set:(key,value)=>{if(key==='fault')proofFault=value;if(key==='concurrent')recipientConcurrent=value;if(key==='missing')missingReceipt=value;if(key==='settlement')settlementUnavailable=value;if(key==='gas')gas=value;if(key==='price')gasPrice=value;if(key==='nonce')nonce=value;if(key==='acl')aclDrift=value;if(key==='preflight')preflightFail=value;if(key==='ambiguous')ambiguous=value;if(key==='failed')failedReceipt=value;if(key==='data')changedData=value;if(key==='reorg')reorg=value;},get signed(){return signed;}};
 }
 test('Executor freezes fee, checks signed bytes and commits one confirmed transfer',async t=>{const f=await fixture(t),p=await f.prepare();f.set('price',999999999999999n);await f.execute(p);assert.equal(f.sent,1);assert.equal(String(f.signed.gasPrice),p.gasPrice);assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'confirmed');await assert.rejects(f.executor.execute({}));assert.equal(f.sent,1);});
 test('Fee executor rejects insufficient approved budget before signing',async t=>{const f=await fixture(t);await f.db.prepare('UPDATE passkey_relayer_grants SET budget_wei=1 WHERE id=$1').run(f.grantId);await assert.rejects(f.prepare());assert.equal(f.sent,0);});
@@ -114,4 +129,55 @@ for(const token of [false,true])test('Inclusion headroom policy preserves native
  const f=await fixture(t,{token}),p=await f.prepare();p.operation.deadline=String(Math.floor(Date.now()/1000)+70);p.operation.digest=feeDigest(p.operation);
  if(token){await assert.rejects(f.execute(p),/Token approval too close/);assert.equal(f.sent,0);assert.equal(f.signCalls,0);}
  else{await f.execute(p);assert.equal(f.sent,1);}
+});
+
+for(const token of [false,true])test('Transaction-scoped settlement tolerates unrelated recipient activity: '+token,async t=>{
+ const f=await fixture(t,{token}),p=await f.prepare();f.set('concurrent',true);await f.execute(p);
+ assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'confirmed');
+ assert.equal((await f.db.prepare('SELECT * FROM passkey_relayer_lanes').all()).length,0);
+});
+for(const fault of ['recipient','amount','token','replay','emitter','nonce','walletNonce'])test('Settlement rejects transaction evidence mismatch: '+fault,async t=>{
+ const f=await fixture(t),p=await f.prepare();f.set('fault',fault);await assert.rejects(f.execute(p));
+ assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'submitting');
+ assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei,p.maximumFeeWei);
+ assert.equal((await f.db.prepare('SELECT * FROM passkey_relayer_lanes').all()).length,1);
+});
+test('Post-receipt outage recovers once, including concurrent settlement and release',async t=>{
+ const f=await fixture(t),p=await f.prepare();f.set('settlement',true);await assert.rejects(f.execute(p));
+ const results=await Promise.all([f.reconciler.reconcile(f.id),f.reconciler.reconcile(f.id)]);
+ assert(results.every(r=>r.status==='confirmed'));assert(results.some(r=>r.alreadySettled));
+ assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei,String(400000n*BigInt(p.gasPrice)));
+ assert.equal((await f.db.prepare('SELECT * FROM passkey_relayer_lanes').all()).length,0);
+ assert(await f.executor.available());assert.equal(f.sent,1);assert.equal(f.signCalls,1);
+ assert.equal((await f.reconciler.reconcile(f.id)).alreadySettled,true);
+});
+test('Ambiguous network response later reconciles without another signature or broadcast',async t=>{
+ const f=await fixture(t),p=await f.prepare();f.set('ambiguous',true);await assert.rejects(f.execute(p));
+ f.set('missing',true);assert.equal((await f.reconciler.reconcile(f.id)).status,'submitting');
+ f.set('missing',false);assert.equal((await f.reconciler.reconcile(f.id)).status,'confirmed');assert.equal(f.sent,1);assert.equal(f.signCalls,1);
+});
+test('Reorg during reconciliation retains all resources',async t=>{
+ const f=await fixture(t),p=await f.prepare();f.set('settlement',true);await assert.rejects(f.execute(p));f.set('reorg',true);
+ assert.equal((await f.reconciler.reconcile(f.id)).status,'submitting');
+ assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei,p.maximumFeeWei);
+});
+test('Settlement cannot release a different operation lane',async t=>{
+ const f=await fixture(t),p=await f.prepare();f.set('settlement',true);await assert.rejects(f.execute(p));
+ await f.db.prepare('UPDATE passkey_relayer_lanes SET reference=$1').run(randomUUID());
+ await assert.rejects(f.reconciler.reconcile(f.id),/Lane ownership changed/);
+ assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei,p.maximumFeeWei);
+});
+test('Normal activation worker can select a queued account only after verified Send settlement',async t=>{
+ const f=await fixture(t),p=await f.prepare();f.set('settlement',true);await assert.rejects(f.execute(p));let selected=0;
+ const worker=createAutoActivation(f.db,{relayer:p.relayer,makeProvisioner:async()=>{selected++;throw Error('Test ends before any provisioning');}});
+ assert.equal(await worker.runNext(),null);assert.equal(selected,0);
+ await f.reconciler.reconcile(f.id);await worker.runNext();assert.equal(selected,1);assert.equal(f.sent,1);
+});
+test('Receipt reorg at final atomic gate cannot commit a settlement',async t=>{
+ const f=await fixture(t),p=await f.prepare();f.set('settlement',true);await assert.rejects(f.execute(p));
+ const transaction=f.db.transaction;f.db.transaction=async fn=>{f.set('reorg',true);return transaction(fn);};
+ await assert.rejects(f.reconciler.reconcile(f.id),/noncanonical snapshot/);
+ assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'submitting');
+ assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei,p.maximumFeeWei);
+ assert.equal((await f.db.prepare('SELECT * FROM passkey_relayer_lanes').all()).length,1);
 });

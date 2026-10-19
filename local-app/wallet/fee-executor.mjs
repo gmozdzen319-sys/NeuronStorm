@@ -3,7 +3,7 @@ import {sendStage,sendStopped} from './send-diagnostics.mjs';
 import assert from 'node:assert/strict';
 import {QuaiTransaction} from 'quais';
 import {walletABI} from './chain.mjs';
-import {feeDigest,quotedFee,ZERO_TOKEN,validateFeeExecution} from './fee-operation.mjs';
+import {feeDigest,ZERO_TOKEN,validateFeeExecution} from './fee-operation.mjs';
 import {feeWalletABI,feeAccessList as canonicalACL,boundFeeTransaction as bound,reserveFee} from './fee-plan.mjs';
 import {Interface} from 'quais';
 import {SAFETY_MARGIN,fingerprint} from './transaction-policy.mjs';
@@ -13,7 +13,7 @@ import {observeStability} from './stabilization.mjs';
 
 // All paid capabilities are injected server-side after a separate deployment
 // review. No default/test key, automatic retry, replacement or recovery sender.
-export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,preflight,verifyNetwork,estimateQuote,stabilize=observeStability,now=Date.now}){
+export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,preflight,verifyNetwork,estimateQuote,stabilize=observeStability,settle,now=Date.now}){
  const rpc=chain.rpc,lower=x=>x.toLowerCase();
  const call=async(row,name,args,tag)=>walletABI.decodeFunctionResult(name,await rpc('quai_call',[{to:row.plan.address,data:walletABI.encodeFunctionData(name,args)},tag]));
  async function grant(){const g=await db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1 AND enabled=TRUE AND expires_at>$2').get(grantId,now());assert(g&&lower(g.relayer)===lower(relayer),'No approved relayer budget');return g;}
@@ -78,6 +78,7 @@ export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,prefl
   return {operation:structuredClone(operation),gasPrice:pricing.gasPrice,gasLimit:pricing.gasLimit,relayer,relayerNonce:s.nonce,relayerBalance:s.balance,walletBalance:s.walletBalance,tokenBalance:tokenFunds,maximumFeeWei:pricing.maximumFeeWei};
  }
  async function execute({id,accountId,row,prepared,auth}){
+  assert(settle,'Verified settlement required before execution');
   sendStage('execute.availability');
   assert(await available());assert.equal(accountId,row.account_id);assert.equal(lower(prepared.relayer),lower(relayer));assert.equal(row.generation,3);const gasLimit=BigInt(prepared.gasLimit);assert(gasLimit>0n);
   sendStage('execute.state_and_operation');
@@ -86,7 +87,7 @@ export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,prefl
   sendStage('execute.reserve');
   const price=BigInt(prepared.gasPrice);assert.equal(String(await budget(price,s,gasLimit)),prepared.maximumFeeWei);
   sendStage('execute.recipient_and_token');
-  const recipient=op.quote.recipient,token=op.quote.token;const recipientBalance=BigInt(await rpc('quai_getBalance',[recipient,s.block.woHeader.number]));
+  const recipient=op.quote.recipient,token=op.quote.token;
   const tokenBefore=token===ZERO_TOKEN?null:{wallet:await tokenBalance(token,op.wallet,s.block.woHeader.number),recipient:await tokenBalance(token,recipient,s.block.woHeader.number)};
   if(tokenBefore)assert.equal(tokenBefore.wallet,prepared.tokenBalance);
   sendStage('execute.passkey_contract');
@@ -162,33 +163,9 @@ export function createFeeExecutor(db,{chain,relayer,grantId,signer,sendRaw,prefl
   sendStage('execute.broadcast');
   assert.equal(lower(await sendRaw(raw)),lower(signed.hash));
   sendStage('execute.receipt');
-  const confirmed=await waitCanonicalReceipt(rpc,signed.hash,{confirmations:3,timeoutMs:180000,pollMs:2000,maxPolls:90});const receipt=confirmed.receipt;
-  sendStage('execute.mined_transaction');
-  const mined=await rpc('quai_getTransactionByHash',[signed.hash]);assert(mined);
-  assert.deepEqual(bound({type:mined.type,chainId:mined.chainId,from:mined.from,to:mined.to,nonce:mined.nonce,value:mined.value,gasPrice:mined.gasPrice,gasLimit:mined.gas??mined.gasLimit,data:mined.input??mined.data,accessList:mined.accessList}),bound(tx));
-  assert.equal(BigInt(receipt.effectiveGasPrice??mined.gasPrice),price);assert(BigInt(receipt.gasUsed)<=gasLimit);
-  const success=BigInt(receipt.status)===1n;
-  // Nonce and wallet effects at the canonical receipt block, not at an unstable tip.
-  sendStage('execute.receipt_effects');
-  const tag=receipt.blockNumber;const receiptBlock=validateBlock(await rpc('quai_getBlockByNumber',[tag,false]));assert.equal(receiptBlock.hash,receipt.blockHash);
-  assert.equal(BigInt(await rpc('quai_getTransactionCount',[relayer,tag])),BigInt(tx.nonce)+1n);
-  assert.equal((await call(row,'nonce',[],tag))[0],BigInt(op.walletNonce)+(success?1n:0n));await assertCanonicalBlock(rpc,receiptBlock);
-  const fee=BigInt(receipt.gasUsed)*price;
-  const amount=success?BigInt(op.quote.amount):0n,refund=success?BigInt(quotedFee(1,op.quote.networkFee).totalFee):0n;
-  const nativeAmount=token===ZERO_TOKEN?amount:0n;
-  assert.equal(BigInt(await rpc('quai_getBalance',[row.plan.address,tag])),BigInt(s.walletBalance)-nativeAmount-refund,'Wallet balance effect mismatch');
-  assert.equal(BigInt(await rpc('quai_getBalance',[relayer,tag])),BigInt(s.balance)-fee+refund+(lower(recipient)===lower(relayer)?nativeAmount:0n),'Relayer balance effect mismatch');
-  if(lower(recipient)!==lower(relayer))assert.equal(BigInt(await rpc('quai_getBalance',[recipient,tag])),recipientBalance+nativeAmount,'Recipient balance effect mismatch');
-  if(tokenBefore){assert.equal(BigInt(await tokenBalance(token,op.wallet,tag)),BigInt(tokenBefore.wallet)-amount);assert.equal(BigInt(await tokenBalance(token,recipient,tag)),BigInt(tokenBefore.recipient)+amount);}
-  await assertCanonicalBlock(rpc,receiptBlock);
-  assert(await verifyNetwork({rpc,block:receiptBlock,relayer,wallet:row.plan.address}),'Receipt network verification failed');
-  sendStage('execute.journal');
-  await db.transaction(async()=>{
-   await db.prepare('UPDATE passkey_relayer_grants SET reserved_wei=reserved_wei-$1 WHERE id=$2').run(String(price*gasLimit-fee),grantId);
-   await db.prepare('UPDATE passkey_relayer_intents SET phase=$1 WHERE operation_id=$2').run(success?'confirmed':'failed',id);
-   await db.prepare('UPDATE passkey_native_operations SET phase=$1,receipt=$2 WHERE id=$3').run(success?'confirmed':'failed',JSON.stringify({transactionHash:signed.hash,blockHash:receipt.blockHash,blockNumber:receipt.blockNumber,status:receipt.status,gasUsed:String(BigInt(receipt.gasUsed)),gasPrice:String(price),feeWei:String(fee),confirmations:confirmed.confirmations,finalityProven:false}),id);
-   await db.prepare('DELETE FROM passkey_relayer_lanes WHERE relayer=$1 AND reference=$2').run(lower(relayer),id);
-  });
+  await waitCanonicalReceipt(rpc,signed.hash,{confirmations:3,timeoutMs:180000,pollMs:2000,maxPolls:90});
+  sendStage('execute.settlement');
+  await settle(id);
  }
  return {available,unavailableReason,quote,prepare,execute};
 }
