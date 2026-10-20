@@ -5,7 +5,7 @@ import {configuredExecutor} from './configured-executor.mjs';
 import {WALLET_INFRASTRUCTURE as infra,WALLET_GENERATION} from '../wallet-infrastructure.mjs';
 import {activationFailure} from './activation-failure.mjs';
 import {randomUUID} from 'node:crypto';
-import {claimQuoteRetry,deferQuote,provenHashMismatch} from './activation-retry.mjs';
+import {claimQuoteRetry,deferQuote,provenHashMismatch,hasUnsentActivationProof,safeQuoteRetry} from './activation-retry.mjs';
 
 export const AUTO_MAXIMUM=40000000000000000000n;
 const legacyInfrastructure=infra;
@@ -38,7 +38,7 @@ export function createAutoActivation(db,{relayer,makeProvisioner,prepareQuote=as
    ||await db.prepare("SELECT account_id FROM passkey_clone_approvals WHERE phase IN ('preparing','submitting') OR (phase='quoted' AND approved=TRUE) LIMIT 1").get();
  }
  async function runNext(){
-  // Claim before any quote/signing. Only explicit, bounded quote-only waits resume.
+  // Only explicit bounded waits resume; stopped/ambiguous accounts stay excluded.
   activationPreStage('CLAIM_TRANSACTION');
   const job=await db.transaction(async()=>{
    activationPreStage('CLAIM_LOCK');
@@ -126,10 +126,14 @@ export function createAutoActivation(db,{relayer,makeProvisioner,prepareQuote=as
    // No exception details: SDK errors can contain sensitive signing input.
    await db.transaction(async()=>{
    const saved=await db.prepare('SELECT phase,tx_hash FROM passkey_clone_approvals WHERE account_id=$1').get(job.account_id);
-   if(saved&&(saved.phase==='submitting'||saved.tx_hash)&&!(fee&&error?.activationLifecycle?.outcome==='NEVER_BROADCAST'))phase='ambiguous';
+   // A fresh quote can fail while the previous unsent hash remains as evidence.
+   // It is not evidence that THIS cycle broadcast; require the durable proof.
+   const priorUnsent=fee&&stage==='QUOTE'&&saved?.phase==='stopped'&&await safeQuoteRetry(db,job.account_id,job.grantId);
+   if(saved&&(saved.phase==='submitting'||saved.tx_hash)&&!priorUnsent&&!(fee&&error?.activationLifecycle?.outcome==='NEVER_BROADCAST'))phase='ambiguous';
    const failure=activationFailure(error,stage);
    if(stage==='QUOTE'&&failure.code==='CANONICALITY_MISMATCH')failure.details={...failure.details,lifecycle:{approvalExisted:!!saved,signingOccurred:false,sendRawEntered:false,outcome:'NEVER_BROADCAST'}};
-   if(fee&&stage==='QUOTE'&&failure.code==='CANONICALITY_MISMATCH'&&provenHashMismatch(error)){
+   if(fee&&(stage==='QUOTE'||stage==='EXECUTION'&&hasUnsentActivationProof(error))
+     &&failure.code==='CANONICALITY_MISMATCH'&&provenHashMismatch(error)){
     const decision=await deferQuote(db,job,now());
     if(decision){phase=decision.retry?'quote_retry_wait':'stopped';failure.details={...failure.details,retry:decision};}
    }

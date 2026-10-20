@@ -10,6 +10,7 @@ import {rpcTransaction} from './preflight.mjs';
 import {validateBlock,assertCanonicalBlock,assertCanonicalAdvance,assertContextCompatible,captureAccounts,accountEntries,assertSameAccounts} from './head-guard.mjs';
 import {waitCanonicalReceipt} from './receipt-confirmation.mjs';
 import {observeStability} from './stabilization.mjs';
+import {provenHashMismatch,attestUnsentActivation} from './activation-retry.mjs';
 const low=s=>s.toLowerCase();
 export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,preflight,verifyNetwork,stabilize=observeStability,now=Date.now,registry=null}){
  const infrastructure=registry?.infrastructure??infra;
@@ -110,6 +111,7 @@ export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,
    error.provisioningStage=stage;
    error.activationLifecycle={approvalExisted:true,signingOccurred,sendRawEntered,outcome:sendRawEntered?'UNKNOWN':'NEVER_BROADCAST'};
    if(fee&&!sendRawEntered){
+    let retryProof;
     try{await db.transaction(async()=>{
      const p=await db.prepare('SELECT * FROM passkey_clone_approvals WHERE account_id=$1 FOR UPDATE').get(accountId);
      assert(p&&!p.receipt);
@@ -125,11 +127,22 @@ export function createCloneProvisioner(db,{chain,relayer,grantId,signer,sendRaw,
      await db.prepare('UPDATE passkey_relayer_grants SET enabled=FALSE WHERE id=$1').run(grantId);
      await db.prepare("UPDATE passkey_clone_approvals SET phase='stopped',approved=FALSE,tx_hash=COALESCE(tx_hash,$2) WHERE account_id=$1").run(accountId,preparedHash);
      await db.prepare("UPDATE passkey_fee_auto_activations SET phase='stopped' WHERE account_id=$1 AND phase='running'").run(accountId);
-     await db.prepare('INSERT INTO passkey_fee_activation_events(account_id,stage,code,details,created_at) VALUES($1,$2,$3,$4,$5)').run(accountId,stage,'NEVER_BROADCAST',JSON.stringify(error.activationLifecycle),now());
+     if(provenHashMismatch(error)){
+      const q=JSON.parse(p.quote);
+      assert.equal(p.commitment,fingerprint({transaction:q.transaction,address:q.address,blockHash:q.blockHash}));
+      assert.equal(q.accountId,accountId);assert.equal(q.chainId,9);
+      assert.equal(low(q.transaction.from),low(relayer));
+      const history=await db.prepare('SELECT id FROM passkey_fee_approval_history WHERE account_id=$1 ORDER BY id DESC LIMIT 1').get(accountId);assert(history);
+      retryProof={version:1,accountId,grantId,relayer:low(relayer),address:low(q.address),
+       commitment:p.commitment,chainId:9,nonce:String(BigInt(q.transaction.nonce)),
+       txHash:preparedHash,stoppedHistoryId:String(history.id)};
+     }
+     await db.prepare('INSERT INTO passkey_fee_activation_events(account_id,stage,code,details,created_at) VALUES($1,$2,$3,$4,$5)').run(accountId,stage,'NEVER_BROADCAST',JSON.stringify({...error.activationLifecycle,...(retryProof?{retryProof}:{})}),now());
     });}catch(cleanupError){
      // Failed/uncertain cleanup retains the durable blockers. Never guess at release.
      cleanupError.provisioningStage=stage;cleanupError.activationLifecycle={approvalExisted:true,signingOccurred,sendRawEntered,outcome:'UNKNOWN'};throw cleanupError;
     }
+    if(retryProof)attestUnsentActivation(error,retryProof);
    }else await db.prepare("UPDATE passkey_clone_approvals SET phase='stopped' WHERE account_id=$1 AND phase='preparing'").run(accountId);
    throw error;
   }

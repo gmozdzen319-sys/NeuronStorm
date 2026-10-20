@@ -1,5 +1,11 @@
 import assert from 'node:assert/strict';
+import {fingerprint} from './transaction-policy.mjs';
 export const RETRY_WINDOW=600000,RETRY_DELAYS=[30000,120000],MAX_QUOTE_FAILURES=3;
+// Only the provisioner's successful atomic cleanup may attest this boundary.
+// RPC error fields alone cannot authorize a post-approval retry.
+const unsentProofs=new WeakMap();
+export function attestUnsentActivation(error,proof){unsentProofs.set(error,proof);}
+export function hasUnsentActivationProof(error){return unsentProofs.has(error);}
 export function provenHashMismatch(error){
  const e=error?.canonicalityEvidence,h=v=>typeof v==='string'&&/^0x[0-9a-f]{64}$/i.test(v);
  return error?.code==='ERR_ASSERTION'&&typeof e?.requestedHeight==='string'&&/^0x[0-9a-f]{1,64}$/i.test(e.requestedHeight)&&h(e.expected?.hash)&&h(e.observed?.hash)&&e.expected.hash!==e.observed.hash;
@@ -7,11 +13,32 @@ export function provenHashMismatch(error){
 
 // Called under the activation transaction/lock. No prior authorization may be recycled.
 export async function safeQuoteRetry(db,accountId,grantId){
- const approval=await db.prepare('SELECT account_id FROM passkey_fee_approvals WHERE account_id=$1').get(accountId);
- const history=await db.prepare('SELECT id FROM passkey_fee_approval_history WHERE account_id=$1 LIMIT 1').get(accountId);
+ const approval=await db.prepare('SELECT * FROM passkey_fee_approvals WHERE account_id=$1 FOR UPDATE').get(accountId);
+ const history=await db.prepare('SELECT * FROM passkey_fee_approval_history WHERE account_id=$1 ORDER BY id').all(accountId);
  const lane=await db.prepare('SELECT reference FROM passkey_relayer_lanes WHERE reference=$1').get(accountId);
  const grant=await db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1 FOR UPDATE').get(grantId);
- return !approval&&!history&&!lane&&grant&&!grant.enabled&&BigInt(grant.reserved_wei)===0n;
+ if(lane||!grant||grant.enabled||BigInt(grant.reserved_wei)!==0n)return false;
+ if(!approval)return history.length===0;
+ if(approval.phase!=='stopped'||approval.approved||approval.receipt)return false;
+ // Historical/legacy NEVER_BROADCAST labels without the new bound certificate
+ // are intentionally insufficient. No existing STOP is enrolled by this change.
+ const events=await db.prepare("SELECT details FROM passkey_fee_activation_events WHERE account_id=$1 AND code='NEVER_BROADCAST' ORDER BY id").all(accountId);
+ const proofs=events.map(e=>JSON.parse(e.details)).filter(e=>e.outcome==='NEVER_BROADCAST'&&e.sendRawEntered===false&&e.approvalExisted===true).map(e=>e.retryProof).filter(p=>p?.version===1&&p.accountId===accountId&&p.grantId===grantId&&p.relayer===grant.relayer);
+ function covered(h){
+  const a=JSON.parse(h.evidence),quote=JSON.parse(a.quote);
+  if(a.receipt||!['quoted','preparing','submitting','stopped'].includes(a.phase)||quote.accountId!==accountId)return false;
+  if(a.commitment!==fingerprint({transaction:quote.transaction,address:quote.address,blockHash:quote.blockHash}))return false;
+  return proofs.some(p=>p.commitment===a.commitment&&p.address===quote.address.toLowerCase()
+   &&p.nonce===String(BigInt(quote.transaction.nonce))&&p.chainId===9
+   &&quote.chainId===9&&quote.transaction.from.toLowerCase()===p.relayer
+   &&(!a.tx_hash||a.tx_hash===p.txHash)
+   &&BigInt(h.id)<=BigInt(p.stoppedHistoryId));
+ }
+ if(!history.length||!history.every(covered))return false;
+ const last=history.at(-1),saved=JSON.parse(last.evidence);
+ return saved.phase==='stopped'&&saved.approved===false&&saved.receipt===null
+  &&saved.commitment===approval.commitment&&saved.quote===approval.quote&&saved.tx_hash===approval.tx_hash
+  &&proofs.some(p=>String(p.stoppedHistoryId)===String(last.id)&&p.commitment===approval.commitment&&p.txHash===approval.tx_hash);
 }
 export async function deferQuote(db,job,now){
  if(!await safeQuoteRetry(db,job.account_id,job.grantId))return null;

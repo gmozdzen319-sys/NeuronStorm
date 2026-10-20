@@ -41,12 +41,14 @@ test('V3 expired retry window stops without another RPC/quote or signer',async t
 });
 test('V3 signed pre-broadcast mismatch atomically releases exactly its own resources, preserves evidence',async t=>{
  const f=await fixture(t,{fee:true});await enroll(f);f.set('claimed-canonical');
- const result=await createAutoActivation(f.db,f).runNext();assert.equal(result.status,'stopped');assert.equal(f.sends,0);
+ const result=await createAutoActivation(f.db,f).runNext();assert.equal(result.status,'quote_retry_wait');assert.equal(f.sends,0);
  const p=await f.db.prepare('SELECT * FROM passkey_fee_approvals WHERE account_id=$1').get(f.accountId);assert.equal(p.phase,'stopped');assert.equal(p.approved,false);assert.match(p.tx_hash,/^0x[0-9a-f]{64}$/);assert.equal(p.receipt,null);
  const g=await f.db.prepare('SELECT * FROM passkey_relayer_grants WHERE id=$1').get('auto-activation-v3:'+f.accountId);assert.equal(g.reserved_wei,'0');assert.equal(g.enabled,false);
  assert.equal(await f.db.prepare('SELECT * FROM passkey_relayer_lanes WHERE relayer=$1').get(f.relayer.toLowerCase()),undefined);
  const e=await f.db.prepare("SELECT details FROM passkey_fee_activation_events WHERE account_id=$1 AND code='NEVER_BROADCAST'").get(f.accountId);
- assert.deepEqual(JSON.parse(e.details),{approvalExisted:true,signingOccurred:true,sendRawEntered:false,outcome:'NEVER_BROADCAST'});
+ const {retryProof,...lifecycle}=JSON.parse(e.details);
+ assert.deepEqual(lifecycle,{approvalExisted:true,signingOccurred:true,sendRawEntered:false,outcome:'NEVER_BROADCAST'});
+ assert.equal(retryProof.version,1);assert.equal(retryProof.txHash,p.tx_hash);assert.equal(retryProof.commitment,p.commitment);assert.equal(retryProof.nonce,'0');
  assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,0);assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(g.id)).reserved_wei,'0');
  // Another enrolled account can be claimed without clearing any global guard.
  const id=randomUUID(),cred=randomUUID(),old=await f.db.prepare('SELECT * FROM passkey_accounts WHERE id=$1').get(f.accountId),c=await f.db.prepare('SELECT * FROM passkey_credentials WHERE account_id=$1').get(f.accountId);
@@ -66,6 +68,74 @@ test('V3 uncertain send preserves reservation, lane and ambiguous activation',as
  assert(await f.db.prepare('SELECT * FROM passkey_relayer_lanes WHERE reference=$1').get(f.accountId));assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,1);
 });
 let signer;for(let n=1;n<10000;n++){const s=new Wallet(hash(n));if(/^0x00[0-7]/i.test(s.address)){signer=s;break;}}assert(signer);
+for(const boundary of ['approval-canonical','signed-canonical','claimed-canonical']){
+ test('V3 fresh cycle recovers proven unsent '+boundary,async t=>{
+  const f=await fixture(t,{fee:true});await enroll(f);f.set(boundary);
+  assert.equal((await createAutoActivation(f.db,f).runNext()).status,'quote_retry_wait');
+  assert.equal(f.sends,0);const old=await f.db.prepare('SELECT * FROM passkey_fee_approvals WHERE account_id=$1').get(f.accountId);
+  assert.equal(old.phase,'stopped');assert.equal(old.approved,false);
+  f.set('clear-canonical');f.advance(29999);assert.equal(await createAutoActivation(f.db,f).runNext(),null);
+  f.advance(1);f.nextHead();assert.equal((await createAutoActivation(f.db,f).runNext()).status,'confirmed');
+  assert.equal(f.sends,1);
+  const current=await f.db.prepare('SELECT * FROM passkey_fee_approvals WHERE account_id=$1').get(f.accountId);
+  assert.notEqual(current.quote,old.quote); // Fresh quote time/deadline, never recycled authorization.
+  assert.notEqual(JSON.parse(current.quote).blockHash,JSON.parse(old.quote).blockHash);
+  assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,1);
+ });
+}
+for(const boundary of ['approval-canonical','claimed-canonical']){
+ test('V3 repeated '+boundary+' exhausts shared bounded policy',async t=>{
+  const f=await fixture(t,{fee:true});await enroll(f);f.set(boundary);
+  for(const [i,delay] of [0,30000,120000].entries()){
+   f.advance(delay);assert.equal((await createAutoActivation(f.db,f).runNext()).status,i===2?'stopped':'quote_retry_wait');
+   assert.equal(f.sends,0);assert.equal(await f.db.prepare('SELECT * FROM passkey_relayer_lanes WHERE reference=$1').get(f.accountId),undefined);
+  }
+  f.set('clear-canonical');f.advance(120000);assert.equal(await createAutoActivation(f.db,f).runNext(),null);
+  assert.equal((await f.db.prepare('SELECT failures FROM passkey_fee_quote_retries WHERE account_id=$1').get(f.accountId)).failures,3);
+ });
+}
+test('V3 forged lifecycle fields cannot authorize retry after approval',async t=>{
+ const f=await fixture(t,{fee:true});await enroll(f);
+ const result=await createAutoActivation(f.db,{...f,makeProvisioner:id=>{
+  const p=f.makeProvisioner(id);return {...p,execute:async()=>{throw Object.assign(mismatch(),{activationLifecycle:{outcome:'NEVER_BROADCAST',sendRawEntered:false}});}};
+ }}).runNext();
+ assert.equal(result.status,'stopped');assert.equal(f.sends,0);
+ assert.equal(await f.db.prepare('SELECT * FROM passkey_fee_quote_retries WHERE account_id=$1').get(f.accountId),undefined);
+});
+test('V3 missing durable unsent proof refuses scheduled retry',async t=>{
+ const f=await fixture(t,{fee:true});await enroll(f);f.set('claimed-canonical');
+ assert.equal((await createAutoActivation(f.db,f).runNext()).status,'quote_retry_wait');
+ await f.db.prepare("DELETE FROM passkey_fee_activation_events WHERE account_id=$1 AND code='NEVER_BROADCAST'").run(f.accountId);
+ f.set('clear-canonical');f.advance(30000);
+ assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,0);
+ assert.equal((await f.db.prepare('SELECT phase FROM passkey_fee_auto_activations WHERE account_id=$1').get(f.accountId)).phase,'stopped');
+});
+test('V3 retry reruns nonce guards before signing fresh bytes',async t=>{
+ const f=await fixture(t,{fee:true});await enroll(f);f.set('claimed-canonical');
+ assert.equal((await createAutoActivation(f.db,f).runNext()).status,'quote_retry_wait');const signs=f.signs;
+ f.set('clear-canonical');f.advance(30000);
+ const rpc=f.chain.rpc;f.chain.rpc=async(method,args)=>method==='quai_getTransactionCount'&&args[1]==='pending'?'0x1':rpc(method,args);
+ assert.equal((await createAutoActivation(f.db,f).runNext()).status,'stopped');
+ assert.equal(f.signs,signs);assert.equal(f.sends,0);
+});
+test('V3 mixed signed and quote mismatches share one retry budget without stale-hash ambiguity',async t=>{
+ const f=await fixture(t,{fee:true});await enroll(f);f.set('claimed-canonical');
+ assert.equal((await createAutoActivation(f.db,f).runNext()).status,'quote_retry_wait');
+ f.set('clear-canonical');f.advance(30000);f.nextHead();
+ assert.equal((await createAutoActivation(f.db,{...f,prepareQuote:async()=>{throw mismatch();}}).runNext()).status,'quote_retry_wait');
+ assert.equal(f.sends,0);f.advance(119999);assert.equal(await createAutoActivation(f.db,f).runNext(),null);
+ f.advance(1);f.nextHead();assert.equal((await createAutoActivation(f.db,f).runNext()).status,'confirmed');
+ assert.equal(f.sends,1);assert.equal(f.signs,2);
+ const r=await f.db.prepare('SELECT failures FROM passkey_fee_quote_retries WHERE account_id=$1').get(f.accountId);assert.equal(r.failures,2);
+});
+test('V3 retained reservation prevents reauthorization after restart',async t=>{
+ const f=await fixture(t,{fee:true});await enroll(f);f.set('claimed-canonical');
+ assert.equal((await createAutoActivation(f.db,f).runNext()).status,'quote_retry_wait');
+ await f.db.prepare('UPDATE passkey_relayer_grants SET reserved_wei=1 WHERE id=$1').run('auto-activation-v3:'+f.accountId);
+ f.set('clear-canonical');f.advance(30000);
+ assert.equal(await createAutoActivation(f.db,f).runNext(),null);assert.equal(f.sends,0);
+ assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get('auto-activation-v3:'+f.accountId)).reserved_wei,'1');
+});
 async function fixture(t,{fee=false}={}){
  const infrastructure=fee?{...infra,generation:3,confirmed:true,factory:'0x0000000000000000000000000000000000000005',factoryHash:keccak256('0x'),implementation:'0x0000000000000000000000000000000000000006',implementationTransaction:hash(99)}:infra;
  const registry=fee?createFeeAssignments(infrastructure):null;
@@ -73,22 +143,22 @@ async function fixture(t,{fee=false}={}){
  const {publicKey}=generateKeyPairSync('ec',{namedCurve:'prime256v1'}),jwk=publicKey.export({format:'jwk'}),cose=Buffer.from(isoCBOR.encode(new Map([[1,2],[3,-7],[-1,1],[-2,new Uint8Array(Buffer.from(jwk.x,'base64url'))],[-3,new Uint8Array(Buffer.from(jwk.y,'base64url'))]]))).toString('base64url');
  await db.prepare('INSERT INTO passkey_accounts VALUES($1,$2,$3,NULL,$4,$5)').run(accountId,randomUUID(),now,infrastructure.rpID,infrastructure.origin);await db.prepare("INSERT INTO passkey_credentials VALUES($1,$2,$3,0,'Test',FALSE,$4,$4,NULL)").run(credentialId,accountId,cose,now);await assignCloneWallet(db,accountId);const row=await loadCloneWallet(db,accountId),relayer=await signer.getAddress();
  await db.prepare('INSERT INTO passkey_relayer_grants(id,relayer,budget_wei,expires_at,enabled) VALUES($1,$2,$3,$4,TRUE)').run(grantId,relayer,'100000000000000000000',now+600000);
- let sends=0,signed,ambiguous=false,wrongReturn=false,wrongNonce=false,mutateInput=false,nonceAfterClaim=false,canonicalAfterClaim=false;
+ let head=16,sends=0,signs=0,clock=now,signed,ambiguous=false,wrongReturn=false,wrongNonce=false,mutateInput=false,nonceAfterClaim=false,canonicalAfterClaim=false,canonicalAfterApproval=false,canonicalAfterSign=false;
  const block=n=>({hash:hash(n),woHeader:{hash:hash(n),parentHash:hash(n-1),location:'0x0000',number:q(n),timestamp:q(Math.floor(now/1000))},header:{quaiStateSize:'0x1',gasLimit:'0x989680'}});
  const rpc=async(method,args=[])=>{
-  if(method==='quai_chainId')return '0x9';if(method==='quai_getBlockByNumber')return block(args[0]==='latest'?(sends?19:16):Number(BigInt(args[0])));
+  if(method==='quai_chainId')return '0x9';if(method==='quai_getBlockByNumber')return block(args[0]==='latest'?(sends?head+3:head):Number(BigInt(args[0])));
   if(method==='quai_getTransactionCount'){if(fee&&args[0].toLowerCase()===infrastructure.factory.toLowerCase())return '0x1';const claimed=nonceAfterClaim&&await db.prepare('SELECT * FROM passkey_relayer_lanes WHERE relayer=$1').get(relayer.toLowerCase());return q(sends||wrongNonce||claimed?1:0);}if(method==='quai_getBalance')return q(10n**21n);if(method==='quai_gasPrice')return q(30000000000000n);
   if(method==='quai_getCode')return '0x';if(method==='quai_getStorageAt')return hash(0);
-  if(method==='quai_getTransactionReceipt'){if(args[0]===infrastructure.factoryTransaction)return {status:'0x1',contractAddress:infrastructure.factory,blockNumber:'0x1',blockHash:hash(1)};return {status:'0x1',blockNumber:'0x10',blockHash:hash(16),transactionHash:signed.hash,transactionIndex:'0x0',gasUsed:q(240000),effectiveGasPrice:q(signed.gasPrice)};}
+  if(method==='quai_getTransactionReceipt'){if(args[0]===infrastructure.factoryTransaction)return {status:'0x1',contractAddress:infrastructure.factory,blockNumber:'0x1',blockHash:hash(1)};return {status:'0x1',blockNumber:q(head),blockHash:hash(head),transactionHash:signed.hash,transactionIndex:'0x0',gasUsed:q(240000),effectiveGasPrice:q(signed.gasPrice)};}
   if(method==='quai_getLogs')return [];if(method==='quai_createAccessList')return {gasUsed:q(240000),accessList:[{address:infrastructure.factory.toLowerCase(),storageKeys:[]}]};if(method==='quai_estimateGas')return q(320000);
   if(method==='quai_getTransactionByHash')return {type:'0x0',chainId:'0x9',from:relayer,to:infrastructure.factory,nonce:'0x0',value:'0x0',gasPrice:q(signed.gasPrice),gas:q(signed.gasLimit),input:signed.data,accessList:signed.accessList};
   throw Error(method);
  };
- const chain={rpc,snapshot:async()=>{if(canonicalAfterClaim&&await db.prepare('SELECT reference FROM passkey_relayer_lanes WHERE relayer=$1').get(relayer.toLowerCase()))throw mismatch();return {deployed:sends>0,nonce:'0',epoch:'0',block:block(16)};}};
+ const chain={rpc,snapshot:async()=>{if(canonicalAfterSign&&signs>0||canonicalAfterClaim&&await db.prepare('SELECT reference FROM passkey_relayer_lanes WHERE relayer=$1').get(relayer.toLowerCase()))throw mismatch();return {deployed:sends>0,nonce:'0',epoch:'0',block:block(head)};}};
  const preflight=async(rpc,tx,row,block)=>({block,accounts:[],gasUsed:'240000',returnValue:factoryABI.encodeFunctionResult('createWallet',[wrongReturn?infrastructure.implementation:row.plan.address])});
- const makeProvisioner=id=>createCloneProvisioner(db,{chain,relayer,grantId:id,registry,stabilize:async()=>({stable:true}),signer:{getAddress:()=>signer.getAddress(),signTransaction:tx=>{if(mutateInput)tx.data+='00';return signer.signTransaction(tx);}},sendRaw:async raw=>{sends++;signed=QuaiTransaction.from(raw);if(ambiguous)throw Error('uncertain network');return signed.hash;},preflight,verifyNetwork:async()=>true});
+ const makeProvisioner=id=>createCloneProvisioner(db,{chain,relayer,grantId:id,registry,now:()=>clock,stabilize:async()=>{if(canonicalAfterApproval)throw mismatch();return {stable:true};},signer:{getAddress:()=>signer.getAddress(),signTransaction:tx=>{signs++;if(mutateInput)tx.data+='00';return signer.signTransaction(tx);}},sendRaw:async raw=>{sends++;signed=QuaiTransaction.from(raw);if(ambiguous)throw Error('uncertain network');return signed.hash;},preflight,verifyNetwork:async()=>true});
  const provisioner=makeProvisioner(grantId);
- return {db,accountId,relayer,registry,chain,preflight,provisioner,makeProvisioner,get sends(){return sends;},set:k=>{if(k==='ambiguous')ambiguous=true;if(k==='address')wrongReturn=true;if(k==='nonce')wrongNonce=true;if(k==='input')mutateInput=true;if(k==='claimed-nonce')nonceAfterClaim=true;if(k==='claimed-canonical')canonicalAfterClaim=true;},approve:()=>db.prepare('UPDATE '+(fee?'passkey_fee_approvals':'passkey_clone_approvals')+' SET approved=TRUE WHERE account_id=$1').run(accountId)};
+ return {db,accountId,relayer,registry,chain,preflight,provisioner,makeProvisioner,get sends(){return sends;},get signs(){return signs;},now:()=>clock,advance:ms=>clock+=ms,nextHead:()=>head++,set:k=>{if(k==='clear-canonical')canonicalAfterClaim=canonicalAfterApproval=canonicalAfterSign=false;if(k==='approval-canonical')canonicalAfterApproval=true;if(k==='signed-canonical')canonicalAfterSign=true;if(k==='ambiguous')ambiguous=true;if(k==='address')wrongReturn=true;if(k==='nonce')wrongNonce=true;if(k==='input')mutateInput=true;if(k==='claimed-nonce')nonceAfterClaim=true;if(k==='claimed-canonical')canonicalAfterClaim=true;},approve:()=>db.prepare('UPDATE '+(fee?'passkey_fee_approvals':'passkey_clone_approvals')+' SET approved=TRUE WHERE account_id=$1').run(accountId)};
 }
 test('Read-only production rehearsal reaches signing boundary without writes or signing',async t=>{
  const f=await fixture(t),before=await f.db.prepare('SELECT * FROM passkey_relayer_grants ORDER BY id').all();
