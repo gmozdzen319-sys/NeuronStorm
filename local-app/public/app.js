@@ -124,7 +124,7 @@ function addTopic(kind) {
   selected[kind].push(canonical);input.value='';renderSelected(kind);profileNotice();input.focus();return true;
 }
 for(const kind of ['work','hobbies']) {
-  topicSuggestions[kind]=createTopicSuggestions($('#'+kind+'-input'),$('#'+kind+'-options'),()=>selected[kind].length>=4?[]:catalog[kind].filter(item=>!selected[kind].some(name=>key(name)===key(item.name))));
+  topicSuggestions[kind]=createTopicSuggestions($('#'+kind+'-input'),$('#'+kind+'-options'),()=>selected[kind].length>=4?[]:catalog[kind].filter(item=>!selected[kind].some(name=>key(name)===key(item.name))),()=>addTopic(kind));
   $('#'+kind+'-add').addEventListener('click',()=>addTopic(kind));
   $('#'+kind+'-input').addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();addTopic(kind);}});
 }

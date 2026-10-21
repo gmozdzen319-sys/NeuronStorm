@@ -4,9 +4,11 @@ export function suggestionPlacement(rect,viewport){
   const upward=below<132&&above>below,height=Math.min(220,upward?above:below);
   return {upward,left:Math.max(viewport.left+8,Math.min(rect.left,viewport.left+viewport.width-rect.width-8)),top:upward?rect.top-6-height:rect.bottom+6,width:Math.min(rect.width,viewport.width-16),height};
 }
-export function createTopicSuggestions(input,list,getNames){
+export function createTopicSuggestions(input,list,getNames,onSelect=()=>{}){
   let matches=[],active=-1;
-  document.body.append(list);
+  // Keep the popup inside its profile owner so the onboarding navigation guard
+  // permits option clicks while still blocking unrelated navigation.
+  (input.closest('#profile-area')||document.body).append(list);
   input.removeAttribute('list');input.setAttribute('role','combobox');input.setAttribute('aria-autocomplete','list');input.setAttribute('aria-controls',list.id);input.setAttribute('aria-expanded','false');
   function close(){list.hidden=true;input.setAttribute('aria-expanded','false');input.removeAttribute('aria-activedescendant');active=-1;}
   function position(){
@@ -17,7 +19,7 @@ export function createTopicSuggestions(input,list,getNames){
     Object.assign(list.style,{left:box.left+'px',top:box.top+'px',width:box.width+'px',maxHeight:box.height+'px'});
     if(box.upward)list.style.top=(rect.top-6-Math.min(box.height,list.scrollHeight+2))+'px';
   }
-  function choose(index){if(!matches[index])return;input.value=matches[index].name;close();input.focus({preventScroll:true});}
+  function choose(index){if(!matches[index]||list.hidden)return;input.value=matches[index].name;close();input.focus({preventScroll:true});onSelect();}
   function refresh(){
     if(document.activeElement!==input)return;
     const query=input.value.normalize('NFKC').trim().toLocaleLowerCase();
