@@ -1,3 +1,4 @@
+import {profileErrors} from './profile-validation.js';
 import {createPasskeyUI} from './passkey-ui.js';
 import {renderReputation} from './reputation-ui.js';
 import {createTopicSuggestions} from './topic-suggestions.js';
@@ -51,6 +52,9 @@ function renderSelected(kind) {
 const topicSuggestions={};
 function fillOptions(){for(const control of Object.values(topicSuggestions))control.refresh();}
 function showEditor() {
+  $('#profile-wallet-setup').hidden=!!profile||currentAccount?.method!=='passkey';
+  for(const name of ['nickname','topics']){$('#'+name+'-error').hidden=true;$('#'+name+'-error').textContent='';}
+  for(const kind of ['work','hobbies'])$('#'+kind+'-input').removeAttribute('aria-invalid');
   $('#profile-eyebrow').textContent=profile?'KEEP YOUR PROFILE UP TO DATE':'MAKE YOURSELF AT HOME';
   $('#profile-title').textContent=profile?'Edit your profile':'Create your profile';
   $('#profile-intro').textContent=!profile&&currentAccount?.method==='passkey'?'Complete your profile while we prepare your wallet in the background. You can join conversations after saving your profile.':'A little about you and the topics you care about.';
@@ -83,7 +87,7 @@ async function renderSession(account) {
   const identity=a=>a?.method==='passkey'?'passkey:'+a.id:a?.address?.toLowerCase();
   const changed=identity(currentAccount)!==identity(account);
   if(changed){conversations.clear();profileRevision++;loading=false;profile=null;}
-  currentAccount=account;conversations.setAccount(account);tokenUI.setAccount(account?.method==='passkey'?null:account);
+  currentAccount=account;if(account?.method!=='passkey')$('#profile-wallet-setup').hidden=true;conversations.setAccount(account);tokenUI.setAccount(account?.method==='passkey'?null:account);
   login.hidden=!!account;logout.hidden=!account;if(changed||!account)$('#landing').hidden=!!account;if(changed||!account)$('#profile-area').hidden=!account;
   $('#sign-in-method').textContent=account?.method==='passkey'?'Signed in with Passkey':'Signed in with '+walletName(selectedProvider||getWalletProvider());
   $('#address').textContent=account?.method==='passkey'?'':account?.address||'';$('#role').textContent=account?.role==='admin'?'Administrator':'';
@@ -116,10 +120,12 @@ form.addEventListener('submit',async event=>{
   event.preventDefault();if(saving)return;
   profileNotice();
   const nickname=$('#nickname').value.trim();
-  $('#nickname').setAttribute('aria-invalid',String(!nickname));
-  if(!nickname){profileNotice('Please enter a nickname.','error');$('#nickname').focus();return;}
   for(const kind of ['work','hobbies'])if($('#'+kind+'-input').value.trim()&&!addTopic(kind))return;
-  if(!selected.work.length&&!selected.hobbies.length){profileNotice('Choose at least one topic across Work & Education or Hobbies & Interests.','error');$('#work-input').focus();return;}
+  const errors=profileErrors({nickname,work:selected.work,hobbies:selected.hobbies});
+  for(const name of ['nickname','topics']){const target=$('#'+name+'-error');target.textContent=errors[name]||'';target.hidden=!errors[name];}
+  $('#nickname').setAttribute('aria-invalid',String(!!errors.nickname));
+  for(const kind of ['work','hobbies'])$('#'+kind+'-input').setAttribute('aria-invalid',String(!!errors.topics));
+  if(errors.nickname||errors.topics){$(errors.nickname?'#nickname':'#work-input').focus();return;}
   const data={nickname,firstName:$('#first-name').value,lastName:$('#last-name').value,work:[...selected.work],hobbies:[...selected.hobbies]};
   const revision=profileRevision;
   saving=true;form.querySelectorAll('input,button').forEach(el=>el.disabled=true);$('#save-profile').textContent='Saving…';

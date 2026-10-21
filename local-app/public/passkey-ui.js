@@ -35,10 +35,13 @@ export function createPasskeyUI({api,onExternal,onAccount}){
   const $=s=>document.querySelector(s),dialog=$('#auth-dialog');let busy=false,legal=null,epoch=0,account=null,transfer=null,receiveAddress=null,sending=false;
   let progressStop=null,sendProgressActive=false;
   function paintProgress(kind,percent,text){
-    const box=$('#pk-progress-'+kind);box.hidden=false;
-    const bar=$('#pk-progress-'+kind+'-bar');bar.value=percent;
-    $('#pk-progress-'+kind+'-percent').textContent=percent+'%';
-    $('#pk-progress-'+kind+'-message').textContent=text;
+    // Both setup displays observe the same result and existing polling lifecycle.
+    for(const prefix of kind==='setup'?['pk-progress-','profile-progress-']:['pk-progress-']){
+      const box=$('#'+prefix+kind);if(!box)continue;box.hidden=false;
+      $('#'+prefix+kind+'-bar').value=percent;
+      $('#'+prefix+kind+'-percent').textContent=percent+'%';
+      $('#'+prefix+kind+'-message').textContent=text;
+    }
   }
   function progressState(state){
     if(sendProgressActive||state==='awaiting_confirmation')return;
