@@ -1,5 +1,6 @@
 import {releaseReviewedSend} from '../wallet/release-reviewed-send.mjs';
 import {releaseUnbroadcastSend} from '../wallet/send-reservation.mjs';
+import {expireFeeSends} from '../wallet/send-expiry.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {randomUUID,generateKeyPairSync} from 'node:crypto';
@@ -155,6 +156,28 @@ test('Ambiguous network response later reconciles without another signature or b
  const f=await fixture(t),p=await f.prepare();f.set('ambiguous',true);await assert.rejects(f.execute(p));
  f.set('missing',true);assert.equal((await f.reconciler.reconcile(f.id)).status,'submitting');
  f.set('missing',false);assert.equal((await f.reconciler.reconcile(f.id)).status,'confirmed');assert.equal(f.sent,1);assert.equal(f.signCalls,1);
+});
+
+test('Expired broadcast-uncertain operation retains its lane and reserve',async t=>{
+ const f=await fixture(t),p=await f.prepare();f.set('ambiguous',true);await assert.rejects(f.execute(p));
+ await expireFeeSends(f.db,{now:Date.now()+600000});
+ assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'submitting');
+ assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei,p.maximumFeeWei);
+ assert.equal((await f.db.prepare('SELECT * FROM passkey_relayer_lanes').all()).length,1);assert.equal(f.sent,1);
+});
+
+test('Restart after durable journal but before broadcast expires and releases once',async t=>{
+ const f=await fixture(t),p=await f.prepare(),original=f.db.prepare;
+ // Simulate process death after intent creation: prevent the broadcast boundary.
+ f.db.prepare=sql=>{if(sql.startsWith('UPDATE passkey_relayer_intents SET broadcast_started=TRUE'))throw Error('simulated process death');return original(sql);};
+ await assert.rejects(f.execute(p),/simulated process death/);f.db.prepare=original;
+ assert.equal(f.sent,0);assert.equal(f.signCalls,1);
+ await expireFeeSends(f.db,{now:Date.now()+600000});await expireFeeSends(f.db,{now:Date.now()+600000});
+ assert.equal((await f.db.prepare('SELECT phase FROM passkey_native_operations WHERE id=$1').get(f.id)).phase,'stopped');
+ assert.equal((await f.db.prepare('SELECT reserved_wei FROM passkey_relayer_grants WHERE id=$1').get(f.grantId)).reserved_wei,'0');
+ assert.equal((await f.db.prepare('SELECT * FROM passkey_relayer_lanes').all()).length,0);
+ assert.equal((await f.db.prepare('SELECT broadcast_started FROM passkey_relayer_intents WHERE operation_id=$1').get(f.id)).broadcast_started,false);
+ assert.equal(f.sent,0);
 });
 test('Reorg during reconciliation retains all resources',async t=>{
  const f=await fixture(t),p=await f.prepare();f.set('settlement',true);await assert.rejects(f.execute(p));f.set('reorg',true);

@@ -1,4 +1,5 @@
 import {currentAccountWallet} from '../current-wallet.mjs';
+import {expireFeeSends} from './send-expiry.mjs';
 import {diagnoseSend,sendStage,sendStopped,sendExpired} from './send-diagnostics.mjs';
 import assert from 'node:assert/strict';
 import {randomBytes,randomUUID} from 'node:crypto';
@@ -99,7 +100,7 @@ export function createFeeSend(db,{loadWallet,chain,executor=null,now=Date.now}){
   }
  }
  async function status(account,id){
-  accountRequired(account);const row=await db.prepare('SELECT id,phase,tx_hash,receipt FROM passkey_native_operations WHERE id=$1 AND account_id=$2').get(id,account.id);
+  accountRequired(account);await expireFeeSends(db,{now:now(),accountId:account.id});const row=await db.prepare('SELECT id,phase,tx_hash,receipt FROM passkey_native_operations WHERE id=$1 AND account_id=$2').get(id,account.id);
   if(!row)throw fail(404,'Transfer not found.');
   return {id:row.id,status:row.phase,transactionHash:row.tx_hash,receipt:row.receipt?JSON.parse(row.receipt):null};
  }

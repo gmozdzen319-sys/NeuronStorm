@@ -293,12 +293,15 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       return json(error.status || 500, { error: error.status ? error.message : 'Server error. Please try again.' });
     }
   });
-  let expiryTimer,provisionTimer,provisionWork;
+  let expiryTimer,provisionTimer,provisionWork,sendTimer,sendWork;
+  const reconcileSends=()=>{
+    if(!feeWallet?.reconciler||sendWork)return;
+    sendWork=feeWallet.reconciler.poll().catch(()=>console.error('Send verification deferred; no transaction resubmitted.')).finally(()=>{sendWork=null;});
+  };
   const provisionApproved=()=>{
     if((!walletExecutor?.provisioner&&!autoActivation)||provisionWork)return;
     provisionWork=(async()=>{
       // Read-only chain observations plus idempotent DB settlement; never resubmit.
-      if(feeWallet?.reconciler)await feeWallet.reconciler.poll();
       if(autoActivation){await autoActivation.runNext();return;}
       const next=await db.prepare("SELECT account_id FROM passkey_clone_approvals WHERE approved=TRUE AND phase='quoted' AND expires_at>$1 ORDER BY expires_at LIMIT 1").get(now());
       if(next)await walletExecutor.provisioner.execute(next.account_id);
@@ -306,8 +309,9 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   };
   const runMaintenance=()=>maintain().catch(()=>console.error('Question maintenance failed.'));
   server.on('listening',()=>{runMaintenance();expiryTimer=setInterval(runMaintenance,10000);expiryTimer.unref();if(walletExecutor?.provisioner||autoActivation){provisionApproved();provisionTimer=setInterval(provisionApproved,10000);provisionTimer.unref();}});
-  server.on('close',()=>{clearInterval(expiryTimer);clearInterval(provisionTimer);});
-  return { server, db, async close(){clearInterval(expiryTimer);clearInterval(provisionTimer);if(server.listening)await new Promise(resolve=>server.close(resolve));if(maintenance)await maintenance.catch(()=>{});if(provisionWork)await provisionWork;await db.close();} };
+  server.on('listening',()=>{if(feeWallet?.reconciler){reconcileSends();sendTimer=setInterval(reconcileSends,10000);sendTimer.unref();}});
+  server.on('close',()=>{clearInterval(expiryTimer);clearInterval(provisionTimer);clearInterval(sendTimer);});
+  return { server, db, async close(){clearInterval(expiryTimer);clearInterval(provisionTimer);clearInterval(sendTimer);if(server.listening)await new Promise(resolve=>server.close(resolve));if(maintenance)await maintenance.catch(()=>{});if(provisionWork)await provisionWork;if(sendWork)await sendWork;await db.close();} };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

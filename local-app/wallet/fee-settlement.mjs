@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {expireFeeSends} from './send-expiry.mjs';
 import {getAddress,keccak256} from 'quais';
 import {feeWalletABI,boundFeeTransaction as bound} from './fee-plan.mjs';
 import {feeDigest,quotedFee} from './fee-operation.mjs';
@@ -101,6 +102,7 @@ export function createFeeReconciler(db,{rpc,loadWallet,infrastructure,verifyNetw
  let next=0;
  async function poll(){
   if(Date.now()<next)return;next=Date.now()+30000;
+  await expireFeeSends(db);
   const lane=await db.prepare("SELECT reference FROM passkey_relayer_lanes WHERE relayer=$1 AND purpose='send'").get(low(relayer));
   if(!lane)return;
   const job=await db.prepare('SELECT plan FROM passkey_native_operations WHERE id=$1').get(lane.reference);

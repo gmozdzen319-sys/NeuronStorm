@@ -3,6 +3,10 @@ const encode=value=>btoa(String.fromCharCode(...new Uint8Array(value))).replace(
 export function confirmationErrorText(submitted,error){
   return submitted?'Checking transaction status… Do not send again.':error.name==='NotAllowedError'?'Confirmation cancelled or expired. No automatic retry will be sent.':error.message;
 }
+export function sendStatusText(status,createdAt=Date.now(),time=Date.now()){
+ const old=time-Number(createdAt)>300000;
+ return ({awaiting_confirmation:'Awaiting your Passkey confirmation',verifying:old?'Confirmation needs review. Status checks continue; do not send again.':'Checking confirmation',authorized:old?'Submission needs review. Status checks continue; do not send again.':'Awaiting submission',submitting:old?'Transaction outcome is not yet verified. Background checks continue; do not send again.':'Submitted · awaiting verification',confirmed:'Confirmed',failed:'Failed · No automatic retry',stopped:'Stopped before submission · No transaction sent'})[status]||'Needs review · Do not send again';
+}
 export function transferReviewText(review){
   const base=`Send ${review.amount} ${review.symbol||'QUAI'}\nFrom: ${review.wallet}\nTo: ${review.recipient}\n${review.network}`;
   if(review.totalFee===undefined)return `${base}\nMaximum network fee: ${review.maximumFee} QUAI · paid by ${review.feePaidBy}`;
@@ -58,7 +62,43 @@ export function createPasskeyUI({api,onExternal,onAccount}){
   }
   $('#passkey-signin').addEventListener('click',()=>authenticate('login'));
   $('#passkey-signup').addEventListener('click',()=>authenticate('register'));
-  let activationTimer,tokenRevision=0,feeMode=false,baseAssets=[];
+  let activationTimer,sendTimer,sendWatch=0,tokenRevision=0,feeMode=false,baseAssets=[];
+  const terminal=s=>['confirmed','failed','stopped'].includes(s);
+  function watchTransfers(rows,revision,activeId=null){
+    clearTimeout(sendTimer);
+    const watch=++sendWatch,current=()=>revision===epoch&&watch===sendWatch;
+    const render=()=>{
+      if(!current())return;
+      $('#pk-transfers').replaceChildren();
+      for(const row of rows){const item=document.createElement('p');item.className='address';item.textContent=(row.statusUnavailable?'Status temporarily unavailable. Checks will continue; do not send again.':sendStatusText(row.phase,row.created_at))+(row.tx_hash?' · '+row.tx_hash:'');$('#pk-transfers').append(item);}
+    };
+    render();
+    async function poll(){
+      if(!current())return;
+      for(const row of rows.filter(r=>!terminal(r.phase))){
+        let timeout;
+        try{
+          const s=await Promise.race([api('/api/passkey/wallet/send/'+row.id),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Status unavailable')),15000);})]);
+          if(!current())return;
+          row.phase=s.status;row.tx_hash=s.transactionHash;row.statusUnavailable=false;
+          if(row.id===activeId){$('#pk-send-status').textContent=sendStatusText(s.status,row.created_at)+(s.transactionHash?' · '+s.transactionHash:'');if(terminal(s.status)){$('#pk-confirm').disabled=true;transfer=null;}}
+        }catch{if(current()){
+          if(row.id===activeId)$('#pk-send-status').textContent='Unable to verify status right now. Checks will continue. Do not send again.';
+          row.statusUnavailable=true;
+        }}
+        finally{clearTimeout(timeout);}
+      }
+      render();
+      if(current()&&rows.some(r=>!terminal(r.phase)))sendTimer=setTimeout(poll,rows.some(r=>Date.now()-Number(r.created_at)>300000)?60000:10000);
+      else if(current()){
+        // Refresh availability from the server; never infer permission to send
+        // from a terminal label or locally release a pending operation.
+        try{const state=await api('/api/passkey/wallet');if(current()){$('#pk-send').disabled=!state.sendAvailable;$('#pk-quai-balance').textContent=state.quaiBalance??'Not available';$('#pk-status').textContent=state.reason;}}
+        catch{if(current())$('#pk-status').textContent='Transfer status updated. Refresh Wallet to check your latest balance and sending availability.';}
+      }
+    }
+    if(rows.some(r=>!terminal(r.phase)))sendTimer=setTimeout(poll,10000);
+  }
   function renderSendAssets(tokens){
     if(!feeMode)return;const select=$('#pk-send-token'),chosen=select.value,assets=new Map();
     for(const token of [...baseAssets,...tokens])assets.set(token.contract.toLowerCase(),token);
@@ -88,6 +128,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
   async function setAccount(next,force=false){
     if(!force&&account?.id===next?.id&&account?.method===next?.method)return;
     clearTimeout(activationTimer);
+    clearTimeout(sendTimer);
     const revision=++epoch;account=next?.method==='passkey'?next:null;
     feeMode=false;baseAssets=[];$('#pk-send-token').replaceChildren();$('#pk-send-token-field').hidden=true;$('#pk-send-title').textContent='Send QUAI';$('#pk-amount-label').textContent='Amount in QUAI';$('#pk-legacy-wallets').replaceChildren();
     $('#pk-ns-balance').textContent=account?'Loading…':'Not available';
@@ -107,8 +148,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
       feeMode=state.quotedFees===true;baseAssets=state.sendTokens||[];$('#pk-send-token-field').hidden=!feeMode;
       if(feeMode){$('#pk-send-title').textContent='Send';$('#pk-amount-label').textContent='Amount';renderSendAssets(state.tokens||[]);}
       for(const old of state.legacyWallets||[]){const item=document.createElement('section');item.className='pk-summary';const title=document.createElement('h3'),address=document.createElement('p'),balance=document.createElement('p');title.textContent='Previous wallet';address.className='address';address.textContent=old.address;balance.textContent=(old.quaiBalance??'Balance unavailable')+(old.quaiBalance===null?'':' QUAI')+' · Funds have not been moved.';item.append(title,address,balance);$('#pk-legacy-wallets').append(item);}
-      const states={awaiting_confirmation:'Awaiting confirmation',verifying:'Checking confirmation',authorized:'Awaiting submission',submitting:'Submitted · awaiting verification',confirmed:'Confirmed',failed:'Failed',stopped:'Stopped before submission · No transaction sent'};
-      for(const transfer of state.transfers||[]){const item=document.createElement('p');item.className='address';item.textContent=(states[transfer.phase]||'Needs review')+(transfer.tx_hash?' · '+transfer.tx_hash:'');$('#pk-transfers').append(item);}
+      watchTransfers(state.transfers||[],revision);
     }catch(error){if(revision===epoch)$('#pk-status').textContent=error.message;}
   }
   let preview=null;
@@ -124,6 +164,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
     try{const r=await api('/api/passkey/wallet/send/prepare',{recipient:$('#pk-recipient').value.trim(),amount:$('#pk-amount').value.trim(),...(feeMode?{token:$('#pk-send-token').value}:{})});if(revision!==epoch)return;const reviewText=transferReviewText(r.review);transfer=r;
       $('#pk-review-text').textContent=reviewText;
       $('#pk-send-review').hidden=false;$('#pk-confirm').disabled=false;$('#pk-send-status').textContent='Awaiting confirmation. Review the recipient and amount carefully.';
+      watchTransfers([{id:r.id,phase:'awaiting_confirmation',created_at:Date.now()}],revision,r.id);
     }catch(error){if(revision===epoch)$('#pk-send-status').textContent=error.message;}finally{sending=false;if(revision===epoch)$('#pk-review-button').disabled=false;}
   });
   $('#pk-confirm').addEventListener('click',async()=>{if(!transfer||sending)return;const request=transfer,revision=epoch;transfer=null;sending=true;$('#pk-confirm').disabled=true;$('#pk-review-button').disabled=true;

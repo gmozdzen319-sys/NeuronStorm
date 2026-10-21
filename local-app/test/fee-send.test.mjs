@@ -10,6 +10,8 @@ import {createFeeSend} from '../wallet/fee-send.mjs';
 import {feeDigest,ZERO_TOKEN} from '../wallet/fee-operation.mjs';
 import {createFeeAssignments} from '../wallet/fee-assignment.mjs';
 import {verifyQuotedAssertion} from '../wallet/operation.mjs';
+import {expireFeeSends} from '../wallet/send-expiry.mjs';
+import {sendStatusText} from '../public/passkey-ui.js';
 const b64=x=>Buffer.from(x).toString('base64url'),sha=x=>createHash('sha256').update(x).digest();
 const recipient='0x0000000000000000000000000000000000000001';
 function device(){
@@ -73,5 +75,25 @@ test('Quoted Send: genuine WebAuthn, PostgreSQL consumption, token amounts and a
   assert.equal((await service.confirm(account,{id:next.id,response:d.assertion(next.options.challenge)})).status,'confirmed');assert.equal(executions,before+1);
  });
  await t.test('insufficient QUAI for fee, cross-account access, expiry and parallel prepare',async()=>{view.balanceWei='1';await assert.rejects(prepare());view.balanceWei='100000000000000000000';const p=await prepare();await assert.rejects(prepare());await assert.rejects(service.status({...account,id:'other'},p.id));time+=120001;await assert.rejects(service.confirm(account,{id:p.id,response:d.assertion(p.options.challenge)}));});
- await t.test('ambiguous send stays durable and cannot resubmit',async()=>{executor.execute=async({id})=>{executions++;await app.db.prepare("UPDATE passkey_native_operations SET phase='submitting' WHERE id=$1").run(id);throw Error('ambiguous');};const p=await prepare(),before=executions,response=d.assertion(p.options.challenge);assert.equal((await service.confirm(account,{id:p.id,response})).status,'submitting');assert.equal((await service.status(account,p.id)).status,'submitting');await assert.rejects(service.confirm(account,{id:p.id,response}));await assert.rejects(prepare());assert.equal(executions,before+1);});
+ await t.test('expired confirmation closes on status read after restart without signing or another prepare',async()=>{
+  const p=await prepare(),before=executions;time+=120001;
+  const restarted=createFeeSend(app.db,{loadWallet,chain,executor,now:()=>time});
+  const result=await restarted.status(account,p.id);assert.equal(result.status,'stopped');assert.equal(result.receipt.broadcast,false);assert.equal(result.receipt.code,'CONFIRMATION_EXPIRED');
+  assert.equal(executions,before);assert.equal((await restarted.status(account,p.id)).status,'stopped');
+  await assert.rejects(restarted.confirm(account,{id:p.id,response:d.assertion(p.options.challenge)}));
+ });
+ await t.test('expired verifying and authorized without an intent stop; unexpired operations stay untouched',async()=>{
+  for(const phase of ['verifying','authorized']){
+   const p=await prepare();await app.db.prepare('UPDATE passkey_native_operations SET phase=$1 WHERE id=$2').run(phase,p.id);
+   await expireFeeSends(app.db,{now:time});assert.equal((await service.status(account,p.id)).status,phase);
+   time+=120001;await Promise.all([expireFeeSends(app.db,{now:time}),expireFeeSends(app.db,{now:time})]);
+   assert.equal((await service.status(account,p.id)).status,'stopped');
+  }
+ });
+ await t.test('old uncertain state is explicitly recoverable, not an indefinite spinner or a claim of no broadcast',()=>{
+  assert.match(sendStatusText('submitting',0,300001),/Background checks continue; do not send again/);
+  assert.doesNotMatch(sendStatusText('submitting',0,300001),/No transaction sent/);
+  assert.match(sendStatusText('stopped'),/No transaction sent/);
+ });
+ await t.test('ambiguous send stays durable and cannot resubmit',async()=>{executor.execute=async({id})=>{executions++;await app.db.prepare("UPDATE passkey_native_operations SET phase='submitting' WHERE id=$1").run(id);throw Error('ambiguous');};const p=await prepare(),before=executions,response=d.assertion(p.options.challenge);assert.equal((await service.confirm(account,{id:p.id,response})).status,'submitting');time+=300001;await expireFeeSends(app.db,{now:time});assert.equal((await service.status(account,p.id)).status,'submitting');await assert.rejects(service.confirm(account,{id:p.id,response}));await assert.rejects(prepare());assert.equal(executions,before+1);});
 });

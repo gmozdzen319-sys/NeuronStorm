@@ -2,7 +2,7 @@ import test from 'node:test';import assert from 'node:assert/strict';import {wit
 const oldAddress='0x0000000000000000000000000000000000000001',newAddress='0x0000000000000000000000000000000000000002',account={method:'passkey',id:'a'};
 function fixture(){let deployed=true,unavailable=false,pending=false;const calls=[];const legacy={state:async()=>({status:'active',address:oldAddress,quaiBalance:'3.0',receiveAvailable:true,sendAvailable:false,tokens:[],transfers:[]}),receive:async()=>({address:oldAddress}),tokens:async()=>({tokens:[]}),tokenBalances:async()=>({nsBalance:'old'}),send:{prepare:async()=>{throw Error('Wrong sender');},confirm:async()=>({legacy:true}),status:async()=>({legacy:true})}};
  const fee={registry:{load:async(db,id)=>{assert.equal(id,'a');return {revoked_at:null,plan:{address:newAddress}};}},chain:{snapshot:async()=>{if(unavailable)throw Error('reorg');return {deployed,quaiBalance:'5.0'};}},send:{available:async()=>true,prepare:async(a,input)=>{calls.push(input);return input;},confirm:async()=>({fee:true}),status:async()=>({fee:true})}};
- const db={prepare:sql=>({get:async()=>sql.includes('SELECT plan')?{plan:JSON.stringify({operation:{action:6}})}:pending?{id:'pending'}:null})};
+ const db={prepare:sql=>({all:async()=>{assert.match(sql,/SELECT id FROM passkey_native_operations/);assert.match(sql,/expires_at<=/);return [];},get:async()=>sql.includes('SELECT plan')?{plan:JSON.stringify({operation:{action:6}})}:pending?{id:'pending'}:null})};
  return {legacy,calls,service:withFeeWallet(db,legacy,fee,{readBalance:async(token,address)=>{assert.equal(address,newAddress);return '7.0';}}),set:key=>{if(key==='undeployed')deployed=false;if(key==='unavailable')unavailable=true;if(key==='pending')pending=true;}};
 }
 test('Fee configuration is disabled by default and requires a confirmed manifest',async()=>{assert.equal(await configuredFeeWallet({},{}),null);await assert.rejects(configuredFeeWallet({},{NS_FEE_WALLET_ENABLED:'true'}));});
@@ -13,7 +13,7 @@ test('Fee routing supplies QUAI default but retains selected token',async()=>{co
 
 test('New v3 signup hides Receive until both receipt and runtime confirmation, then exposes all assets',async()=>{
  let deployed=false,confirmed=false,phase=null;let balanceReads=0;
- const db={prepare:sql=>({get:async()=>sql.includes('passkey_fee_signup_queue')?{account_id:'a'}:sql.includes('passkey_fee_auto_activations')?(phase?{phase}:null):sql.includes('passkey_fee_approvals')?(confirmed?{phase:'confirmed'}:null):null})};
+ const db={prepare:sql=>({all:async()=>{assert.match(sql,/SELECT id FROM passkey_native_operations/);assert.match(sql,/expires_at<=/);return [];},get:async()=>sql.includes('passkey_fee_signup_queue')?{account_id:'a'}:sql.includes('passkey_fee_auto_activations')?(phase?{phase}:null):sql.includes('passkey_fee_approvals')?(confirmed?{phase:'confirmed'}:null):null})};
  const token='0x0000000000000000000000000000000000000007';
  const legacy={state:async()=>({address:null,receiveAvailable:false,sendAvailable:false,tokens:[{contract:token,symbol:'NEW',decimals:18}]}),receive:async()=>{throw Error('Legacy Receive must not be used');}};
  const fee={registry:{load:async()=>({revoked_at:null,plan:{address:newAddress}})},chain:{snapshot:async()=>({deployed,quaiBalance:'0.0'})},send:{available:async()=>true}};

@@ -2,6 +2,7 @@ import {currentAccountWallet,usesCurrentWallet} from '../current-wallet.mjs';
 import QRCode from 'qrcode';
 import {NS_TOKEN} from '../neuron-token.mjs';
 import {ZERO_TOKEN} from './fee-operation.mjs';
+import {expireFeeSends} from './send-expiry.mjs';
 const fail=(status,message)=>Object.assign(new Error(message),{status});
 // Existing v2 state/history remains visible. Merely enabling configuration does
 // not assign a new address. Only an independently confirmed v3 becomes Receive.
@@ -17,7 +18,7 @@ export function withFeeWallet(db,legacy,fee,{readBalance,now=Date.now}){
  const owner=a=>{if(a?.method!=='passkey')throw fail(401,'Sign in with your passkey.');};
  const service={...legacy};
  service.state=async account=>{
-  owner(account);const previous=await legacy.state(account),row=await fee.registry.load(db,account.id);
+  owner(account);await expireFeeSends(db,{now:now(),accountId:account.id});const previous=await legacy.state(account),row=await fee.registry.load(db,account.id);
   if(!row){if(await usesCurrentWallet(db,account.id))return {...previous,generation:3,address:null,receiveAvailable:false,sendAvailable:false,status:'activating',reason:'Your wallet is being prepared.'};return previous;}
   const signup=await db.prepare('SELECT account_id FROM passkey_fee_signup_queue WHERE account_id=$1').get(account.id)||await usesCurrentWallet(db,account.id);
   const pendingSignup=async()=>{
