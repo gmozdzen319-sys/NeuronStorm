@@ -18,11 +18,13 @@ test('New v3 signup hides Receive until both receipt and runtime confirmation, t
  const legacy={state:async()=>({address:null,receiveAvailable:false,sendAvailable:false,tokens:[{contract:token,symbol:'NEW',decimals:18}]}),receive:async()=>{throw Error('Legacy Receive must not be used');}};
  const fee={registry:{load:async()=>({revoked_at:null,plan:{address:newAddress}})},chain:{snapshot:async()=>({deployed,quaiBalance:'0.0'})},send:{available:async()=>true}};
  const service=withFeeWallet(db,legacy,fee,{readBalance:async()=>{balanceReads++;return '0.0';}});
- let view=await service.state(account);assert.equal(view.status,'activating');assert.equal(view.address,null);await assert.rejects(service.receive(account));
+ let view=await service.state(account);assert.equal(view.status,'activating');assert.equal(view.setupProgress.percent,0);assert.equal(view.address,null);await assert.rejects(service.receive(account));
  await service.tokenBalances(account);assert.equal(balanceReads,0);
+ phase='running';assert.equal((await service.state(account)).setupProgress.percent,20);
+ phase='quote_retry_wait';assert.match((await service.state(account)).setupProgress.message,/fresh network/);
  deployed=true;assert.equal((await service.state(account)).receiveAvailable,false);
- phase='ambiguous';view=await service.state(account);assert.equal(view.status,'activation_waiting');assert.match(view.reason,/No automatic retry/);assert.equal(view.address,null);
- confirmed=true;view=await service.state(account);assert.equal(view.address,newAddress);assert(view.sendAvailable&&view.receiveAvailable);assert(view.sendTokens.some(t=>t.contract===token));
+ phase='ambiguous';view=await service.state(account);assert.equal(view.status,'activation_waiting');assert.equal(view.setupProgress.percent,75);assert.match(view.reason,/No automatic retry/);assert.equal(view.address,null);
+ confirmed=true;view=await service.state(account);assert.equal(view.setupProgress.percent,100);assert.equal(view.address,newAddress);assert(view.sendAvailable&&view.receiveAvailable);assert(view.sendTokens.some(t=>t.contract===token));
  assert.equal((await service.receive(account)).address,newAddress);await service.tokenBalances(account);assert.equal(balanceReads,2);
 });
 

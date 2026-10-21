@@ -162,6 +162,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
     clearTimeout(sendTimer);
     progressStop?.();$('#pk-progress-prepare').hidden=true;$('#pk-progress-send').hidden=true;
     const revision=++epoch;account=next?.method==='passkey'?next:null;
+    if(!force||!account)$('#pk-progress-setup').hidden=true;
     feeMode=false;baseAssets=[];$('#pk-send-token').replaceChildren();$('#pk-send-token-field').hidden=true;$('#pk-send-title').textContent='Send QUAI';$('#pk-amount-label').textContent='Amount in QUAI';$('#pk-legacy-wallets').replaceChildren();
     $('#pk-ns-balance').textContent=account?'Loading…':'Not available';
     transfer=null;receiveAddress=null;$('#pk-wallet-address').textContent='';$('#pk-quai-balance').textContent='Not available';$('#pk-receive').disabled=true;$('#pk-send').disabled=true;
@@ -172,8 +173,14 @@ export function createPasskeyUI({api,onExternal,onAccount}){
     if(!account)return;
     void loadTokens(revision);
     $('#pk-id').textContent=account.id;$('#pk-status').textContent='Loading your account…';
+    if($('#pk-progress-setup').hidden)paintProgress('setup',0,'Checking wallet setup status');
     try{const state=await api('/api/passkey/wallet');if(revision!==epoch)return;
       $('#pk-status').textContent=state.reason;
+      if(state.setupProgress){
+        const ready=state.status==='active'&&state.receiveAvailable&&state.address;
+        const percent=Math.max(0,Math.min(ready?100:90,Number(state.setupProgress.percent)||0));
+        paintProgress('setup',percent,state.setupProgress.message);
+      }else $('#pk-progress-setup').hidden=true;
       if(state.status==='activating')activationTimer=setTimeout(()=>{if(revision===epoch&&!sending)setAccount(account,true);},15000);
       $('#pk-wallet-title').textContent=state.status==='active'?'Your personal wallet':'Wallet setup';
       $('#pk-wallet-address').textContent=state.address||'';$('#pk-quai-balance').textContent=state.quaiBalance??'Not available';$('#pk-receive').disabled=!state.receiveAvailable;$('#pk-send').disabled=!state.sendAvailable;
@@ -182,7 +189,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
       for(const old of state.legacyWallets||[]){const item=document.createElement('section');item.className='pk-summary';const title=document.createElement('h3'),address=document.createElement('p'),balance=document.createElement('p');title.textContent='Previous wallet';address.className='address';address.textContent=old.address;balance.textContent=(old.quaiBalance??'Balance unavailable')+(old.quaiBalance===null?'':' QUAI')+' · Funds have not been moved.';item.append(title,address,balance);$('#pk-legacy-wallets').append(item);}
       watchTransfers(state.transfers||[],revision);
       const pending=(state.transfers||[]).find(t=>!terminal(t.phase));if(pending)progressState(pending.phase);
-    }catch(error){if(revision===epoch)$('#pk-status').textContent=error.message;}
+    }catch(error){if(revision===epoch){$('#pk-status').textContent=error.message;paintProgress('setup',0,'Wallet status is temporarily unavailable. Please refresh to check again.');}}
   }
   let preview=null;
   $('#pk-refresh').addEventListener('click',()=>{if(!sending)setAccount(account,true);});

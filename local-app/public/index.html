@@ -16,6 +16,12 @@
 <p id="pk-status" role="status" class="field-hint"></p><div id="pk-legacy-wallets"></div><div id="pk-devices"></div><div id="pk-tokens"></div>
 <div id="pk-transfers" aria-label="Recent transfers"></div>
 <form id="pk-token-form" hidden><label for="pk-token-address">Quai token contract address</label><input id="pk-token-address" autocomplete="off" required maxlength="42" placeholder="0x…"><p id="pk-token-preview" class="field-hint" role="status"></p><button class="primary" id="pk-token-submit">Review token</button></form>
+<section id="pk-progress-setup" class="pk-progress" hidden aria-label="Wallet setup progress">
+<div class="pk-progress-heading"><span>Wallet setup</span><strong id="pk-progress-setup-percent">0%</strong></div>
+<progress id="pk-progress-setup-bar" max="100" value="0" aria-label="Wallet setup progress"></progress>
+<p id="pk-progress-setup-message" role="status" aria-live="polite">Preparing wallet</p>
+<small>Progress follows verified setup stages, not elapsed time. Your Receive address becomes available when your wallet is ready.</small>
+</section>
 </section><p id="blip-info" class="privacy-note" hidden>Blip uses a separate app wallet for this website. Your profile and NS balance belong to that address, which may differ from your Pelagus account or Blip main vault. NS payments require NS and QUAI for network fees in this app wallet.</p>
 <div id="site-presence" class="site-presence" aria-label="Community activity"><span title="Active visitors in the last minute"><i class="online-dot"></i><span id="online-total">—</span> online</span><span title="Unique browsers visiting this week (UTC); approximate"><i class="visitors-dot"></i><span id="weekly-total">—</span> this week</span></div>
 <p id="status" role="status" aria-live="polite"></p><p id="wallet-install" hidden><a href="https://www.pelaguswallet.io/" target="_blank" rel="noopener noreferrer" class="login archive-download">Download Pelagus — official website ↗</a></p>
