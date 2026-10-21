@@ -179,3 +179,16 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 #auth-dialog .auth-method--blip small{color:#c7d1b9}
 @media(max-width:420px){#auth-dialog .auth-method{gap:10px;padding:13px 12px}#auth-dialog .auth-brand{width:48px;flex-basis:48px}#auth-dialog .auth-method-copy{font-size:13px}}
 @media(prefers-reduced-motion:reduce){#auth-dialog .auth-method{transition:none}}
+
+/* Send milestone progress: existing Wallet surfaces, borders and accents. */
+.pk-progress{margin-top:20px;padding:16px 18px;border:1px solid #255e81;border-radius:8px;background:#0a1421;box-shadow:0 0 22px #008cff1a;min-width:0}
+.pk-progress-heading{display:flex;align-items:center;justify-content:space-between;gap:16px;font-size:14px;color:#c4edff}
+.pk-progress-heading strong{font-size:20px;font-variant-numeric:tabular-nums;color:#47ceff}
+.pk-progress progress{appearance:none;display:block;width:100%;height:10px;margin:12px 0;border:0;border-radius:8px;overflow:hidden;background:#09121d;color:#47ceff}
+.pk-progress progress::-webkit-progress-bar{background:#09121d;border-radius:8px}
+.pk-progress progress::-webkit-progress-value{background:linear-gradient(90deg,#07658c,#47ceff);border-radius:8px;transition:width .35s ease}
+.pk-progress progress::-moz-progress-bar{background:linear-gradient(90deg,#07658c,#47ceff);border-radius:8px}
+.pk-progress p{margin:8px 0 2px;font-size:14px;line-height:1.5;color:#edf3ff;overflow-wrap:anywhere}
+.pk-progress small{display:block;font-size:12px;line-height:1.5;color:#9caec2}
+@media(max-width:540px){.pk-progress{padding:14px}.pk-progress-heading{gap:10px}.pk-progress-heading strong{font-size:18px}}
+@media(prefers-reduced-motion:reduce){.pk-progress progress::-webkit-progress-value{transition:none}}

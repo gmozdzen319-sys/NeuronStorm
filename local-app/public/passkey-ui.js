@@ -33,6 +33,36 @@ export async function deviceResponse(kind,options){
 
 export function createPasskeyUI({api,onExternal,onAccount}){
   const $=s=>document.querySelector(s),dialog=$('#auth-dialog');let busy=false,legal=null,epoch=0,account=null,transfer=null,receiveAddress=null,sending=false;
+  let progressStop=null,sendProgressActive=false;
+  function paintProgress(kind,percent,text){
+    const box=$('#pk-progress-'+kind);box.hidden=false;
+    const bar=$('#pk-progress-'+kind+'-bar');bar.value=percent;
+    $('#pk-progress-'+kind+'-percent').textContent=percent+'%';
+    $('#pk-progress-'+kind+'-message').textContent=text;
+  }
+  function progressState(state){
+    if(sendProgressActive||state==='awaiting_confirmation')return;
+    const stages={verifying:[10,'Verifying signature'],authorized:[20,'Preparing transaction'],submitting:[85,'Waiting for verified network confirmation'],confirmed:[100,'Confirmed']};
+    if(stages[state])paintProgress('send',...stages[state]);
+    else if(['failed','stopped'].includes(state)&&!$('#pk-progress-send').hidden)$('#pk-progress-send-message').textContent=sendStatusText(state);
+  }
+  function trackProgress(kind,revision){
+    progressStop?.();const id=crypto.randomUUID();let active=true,timer;
+    sendProgressActive=kind==='send';paintProgress(kind,0,kind==='prepare'?'Preparing your review':'Verifying signature');
+    $('#pk-progress-'+kind).scrollIntoView?.({block:'nearest',behavior:globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches?'auto':'smooth'});
+    const stop=()=>{active=false;clearTimeout(timer);if(progressStop===stop)sendProgressActive=false;};progressStop=stop;
+    async function poll(){
+      let timeout;
+      try{const result=await Promise.race([api('/api/passkey/wallet/send/progress/'+id),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Progress unavailable')),10000);})]);
+        if(!active||revision!==epoch)return;
+        if(result.progress?.kind===kind)paintProgress(kind,result.progress.percent,result.progress.message);
+        else $('#pk-progress-'+kind+'-message').textContent='Waiting for an update. The transfer status below remains authoritative.';
+      }catch{if(active&&revision===epoch)$('#pk-progress-'+kind+'-message').textContent='Progress updates are temporarily unavailable. Waiting for the transfer result.';}
+      finally{clearTimeout(timeout);}
+      if(active&&revision===epoch)timer=setTimeout(poll,2000);
+    }
+    timer=setTimeout(poll,500);return {id,stop};
+  }
   const message=text=>{$('#auth-status').textContent=text;};
   async function open(){
     $('#passkey-options').hidden=true;message('');dialog.showModal();
@@ -81,6 +111,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
           const s=await Promise.race([api('/api/passkey/wallet/send/'+row.id),new Promise((_,reject)=>{timeout=setTimeout(()=>reject(Error('Status unavailable')),15000);})]);
           if(!current())return;
           row.phase=s.status;row.tx_hash=s.transactionHash;row.statusUnavailable=false;
+          progressState(s.status);
           if(row.id===activeId){$('#pk-send-status').textContent=sendStatusText(s.status,row.created_at)+(s.transactionHash?' · '+s.transactionHash:'');if(terminal(s.status)){$('#pk-confirm').disabled=true;transfer=null;}}
         }catch{if(current()){
           if(row.id===activeId)$('#pk-send-status').textContent='Unable to verify status right now. Checks will continue. Do not send again.';
@@ -129,6 +160,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
     if(!force&&account?.id===next?.id&&account?.method===next?.method)return;
     clearTimeout(activationTimer);
     clearTimeout(sendTimer);
+    progressStop?.();$('#pk-progress-prepare').hidden=true;$('#pk-progress-send').hidden=true;
     const revision=++epoch;account=next?.method==='passkey'?next:null;
     feeMode=false;baseAssets=[];$('#pk-send-token').replaceChildren();$('#pk-send-token-field').hidden=true;$('#pk-send-title').textContent='Send QUAI';$('#pk-amount-label').textContent='Amount in QUAI';$('#pk-legacy-wallets').replaceChildren();
     $('#pk-ns-balance').textContent=account?'Loading…':'Not available';
@@ -149,6 +181,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
       if(feeMode){$('#pk-send-title').textContent='Send';$('#pk-amount-label').textContent='Amount';renderSendAssets(state.tokens||[]);}
       for(const old of state.legacyWallets||[]){const item=document.createElement('section');item.className='pk-summary';const title=document.createElement('h3'),address=document.createElement('p'),balance=document.createElement('p');title.textContent='Previous wallet';address.className='address';address.textContent=old.address;balance.textContent=(old.quaiBalance??'Balance unavailable')+(old.quaiBalance===null?'':' QUAI')+' · Funds have not been moved.';item.append(title,address,balance);$('#pk-legacy-wallets').append(item);}
       watchTransfers(state.transfers||[],revision);
+      const pending=(state.transfers||[]).find(t=>!terminal(t.phase));if(pending)progressState(pending.phase);
     }catch(error){if(revision===epoch)$('#pk-status').textContent=error.message;}
   }
   let preview=null;
@@ -161,22 +194,26 @@ export function createPasskeyUI({api,onExternal,onAccount}){
   $('#pk-send').addEventListener('click',()=>{$('#pk-send-form').hidden=false;$('#pk-recipient').focus();});
   for(const id of ['#pk-recipient','#pk-amount','#pk-send-token'])$(id).addEventListener('input',()=>{transfer=null;$('#pk-send-review').hidden=true;});
   $('#pk-send-form').addEventListener('submit',async event=>{event.preventDefault();if(sending)return;const revision=epoch;transfer=null;$('#pk-send-review').hidden=true;sending=true;$('#pk-review-button').disabled=true;$('#pk-send-status').textContent='Preparing…';
-    try{const r=await api('/api/passkey/wallet/send/prepare',{recipient:$('#pk-recipient').value.trim(),amount:$('#pk-amount').value.trim(),...(feeMode?{token:$('#pk-send-token').value}:{})});if(revision!==epoch)return;const reviewText=transferReviewText(r.review);transfer=r;
+    $('#pk-progress-send').hidden=true;const progress=trackProgress('prepare',revision);
+    try{const r=await api('/api/passkey/wallet/send/prepare',{progressId:progress.id,recipient:$('#pk-recipient').value.trim(),amount:$('#pk-amount').value.trim(),...(feeMode?{token:$('#pk-send-token').value}:{})});if(revision!==epoch)return;const reviewText=transferReviewText(r.review);transfer=r;
+      progress.stop();paintProgress('prepare',100,'Ready · Confirm with your Passkey');
       $('#pk-review-text').textContent=reviewText;
       $('#pk-send-review').hidden=false;$('#pk-confirm').disabled=false;$('#pk-send-status').textContent='Awaiting confirmation. Review the recipient and amount carefully.';
       watchTransfers([{id:r.id,phase:'awaiting_confirmation',created_at:Date.now()}],revision,r.id);
-    }catch(error){if(revision===epoch)$('#pk-send-status').textContent=error.message;}finally{sending=false;if(revision===epoch)$('#pk-review-button').disabled=false;}
+    }catch(error){if(revision===epoch){$('#pk-send-status').textContent=error.message;$('#pk-progress-prepare-message').textContent='Preparation could not complete. See the message below.';}}finally{progress.stop();sending=false;if(revision===epoch)$('#pk-review-button').disabled=false;}
   });
   $('#pk-confirm').addEventListener('click',async()=>{if(!transfer||sending)return;const request=transfer,revision=epoch;transfer=null;sending=true;$('#pk-confirm').disabled=true;$('#pk-review-button').disabled=true;
-    let confirmationSubmitted=false;
+    let confirmationSubmitted=false,progress;
     try{$('#pk-send-status').textContent='Awaiting confirmation on your device…';const response=await deviceResponse('login',request.options);if(revision!==epoch)return;
       confirmationSubmitted=true;
-      $('#pk-send-status').textContent='Submitting…';const result=await api('/api/passkey/wallet/send/confirm',{id:request.id,response});if(revision!==epoch)return;
+      progress=trackProgress('send',revision);
+      $('#pk-send-status').textContent='Submitting…';const result=await api('/api/passkey/wallet/send/confirm',{id:request.id,response,progressId:progress.id});if(revision!==epoch)return;
+      progress.stop();progressState(result.status);
       $('#pk-send-status').textContent=result.status==='confirmed'?'Confirmed. Transaction: '+result.transactionHash:result.status==='failed'?'Failed. No automatic retry will be sent.':result.status==='submitting'?'Checking transaction status… Do not send again.':'Stopped. No automatic retry will be sent.';
     }catch(error){if(revision===epoch){$('#pk-send-status').textContent=confirmationErrorText(confirmationSubmitted,error);
       // Read-only status lookup after an uncertain HTTP response; never repeat POST.
       try{const s=await api('/api/passkey/wallet/send/'+request.id);if(revision===epoch&&s.transactionHash)$('#pk-send-status').textContent=(s.status==='confirmed'?'Confirmed. ':'Check this transaction before sending again. ')+s.transactionHash;}catch{}
-    }}finally{sending=false;if(revision===epoch)$('#pk-review-button').disabled=false;}
+    }}finally{progress?.stop();sending=false;if(revision===epoch)$('#pk-review-button').disabled=false;}
   });
   $('#pk-add-token').addEventListener('click',()=>{$('#pk-token-form').hidden=false;$('#pk-token-address').focus();});
   $('#pk-token-address').addEventListener('input',()=>{preview=null;$('#pk-token-submit').textContent='Review token';$('#pk-token-preview').textContent='';});

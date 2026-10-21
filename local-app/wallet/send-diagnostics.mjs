@@ -25,7 +25,8 @@ const reasons=new Map([
  ['An earlier transfer is still being checked. Do not send it again.','PENDING_TRANSFER'],
 ]);
 // Only constant stage labels supplied by server code. Never pass user input.
-export function sendStage(stage){const c=context.getStore();if(c)c.stage=stage;}
+export function sendStage(stage){const c=context.getStore();if(c){c.stage=stage;try{c.onStage?.(stage);}catch{/* Presentation cannot affect Send. */}}}
+export function observeSendStages(onStage,fn){return context.run({onStage},fn);}
 export function sendStopped(error){
  try{
   const c=context.getStore();if(!c||c.logged)return;c.logged=true;
@@ -37,7 +38,7 @@ export function sendStopped(error){
  }catch{/* Diagnostics must never change transaction or error handling. */}
 }
 export function diagnoseSend(stage,fn){
- return function(...args){return context.run({stage,logged:false},async()=>{
+ return function(...args){return context.run({stage,logged:false,onStage:context.getStore()?.onStage},async()=>{
   try{return await fn.apply(this,args);}catch(error){sendStopped(error);throw error;}
  });};
 }

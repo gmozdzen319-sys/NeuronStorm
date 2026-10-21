@@ -1,4 +1,5 @@
 import {currentWalletForIdentity} from './current-wallet.mjs';
+import {createSendProgress} from './wallet/send-progress.mjs';
 import {loadLegal,initLegal,legalPage} from './legal.mjs';
 import {createPasskeyAccounts,passkeyConfiguration} from './passkey-accounts.mjs';
 import {createPasskeyWallet,createTokenBalanceReader} from './passkey-wallet.mjs';
@@ -45,6 +46,7 @@ const failure = (status, message) => Object.assign(new Error(message), { status 
 
 export async function createApp({ database = process.env.DATABASE_URL, databasePoolSize=5, origin = 'http://localhost:3000', now = Date.now, tokenFetch = fetch, marketFetch = fetch, paymentFetch = fetch, geoLookup=lookupCountry, trustProxy=process.env.RENDER==='true', legal=loadLegal() } = {}) {
   const runningVersion=JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version;
+  const sendProgress=createSendProgress();
   const db = await openDatabase(database,{max:databasePoolSize,walletGeneration:WALLET_GENERATION});
   try{await initLegal(db,legal);}catch(error){await db.close();throw error;}
   let passkeyConfig;
@@ -132,8 +134,19 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         if(path==='/api/passkey/wallet/token-balances'&&req.method==='GET')return json(200,await passkeyWallet.tokenBalances(current));
         if(path==='/api/passkey/wallet/tokens'&&req.method==='POST')return json(200,await passkeyWallet.add(current,await body(req)));
         if(path==='/api/passkey/wallet/receive'&&req.method==='GET')return json(200,await passkeyWallet.receive(current));
-        if(path==='/api/passkey/wallet/send/prepare'&&req.method==='POST')return json(200,await passkeyWallet.send.prepare(current,await body(req)));
-        if(path==='/api/passkey/wallet/send/confirm'&&req.method==='POST')return json(200,await passkeyWallet.send.confirm(current,await body(req)));
+        const progressPath=path.match(/^\/api\/passkey\/wallet\/send\/progress\/([a-f0-9-]{36})$/i);
+        if(progressPath&&req.method==='GET'){
+          if(!current?.id)throw failure(401,'Sign in with your passkey.');
+          return json(200,{progress:sendProgress.read(current,progressPath[1])});
+        }
+        if(path==='/api/passkey/wallet/send/prepare'&&req.method==='POST'){
+          const {progressId,...input}=await body(req);
+          return json(200,await sendProgress.run(current,progressId,'prepare',()=>passkeyWallet.send.prepare(current,input)));
+        }
+        if(path==='/api/passkey/wallet/send/confirm'&&req.method==='POST'){
+          const {progressId,...input}=await body(req);
+          return json(200,await sendProgress.run(current,progressId,'send',()=>passkeyWallet.send.confirm(current,input)));
+        }
         const transferStatus=path.match(/^\/api\/passkey\/wallet\/send\/([a-f0-9-]{36})$/);
         if(transferStatus&&req.method==='GET')return json(200,await passkeyWallet.send.status(current,transferStatus[1]));
         // No client argument, session or configuration flag can activate these operations.
