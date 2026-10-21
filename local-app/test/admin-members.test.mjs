@@ -19,4 +19,14 @@ test('Admin directory sorts by registration, shows real v3 assignment and never 
  assert.equal(r.members[1].address,wallet);assert.equal(r.members[1].method,'passkey');assert.equal(r.members[1].walletStatus,'reserved');assert.equal(r.members[1].accountId,'pk');assert(!JSON.stringify(r.members[1]).includes(social));
  r=await adminMembers(db,owner,new URLSearchParams({search:wallet}));assert.equal(r.total,1);assert.equal(r.members[0].address,wallet);
  await assert.rejects(adminMembers(db,owner,new URLSearchParams({page:'0'})),e=>e.status===400);
+ r=await adminMembers(db,owner,new URLSearchParams({order:'newest'}));assert.deepEqual(r.members.map(x=>x.createdAt),[2,1]);
+ r=await adminMembers(db,owner,new URLSearchParams({method:'passkey'}));assert.equal(r.total,1);assert.equal(r.members[0].address,wallet);
+ r=await adminMembers(db,owner,new URLSearchParams({method:'external_unknown'}));assert.equal(r.total,1);assert.equal(r.members[0].address,admin);
+ for(const [method,address,at] of [['pelagus','0x0000000000000000000000000000000000000044',3],['blippay','0x0000000000000000000000000000000000000055',4]]){
+  await db.prepare('INSERT INTO accounts VALUES($1,$2)').run(address,at);
+  await db.prepare('INSERT INTO account_registration_methods VALUES($1,$2,$3)').run(address,method,at);
+  r=await adminMembers(db,owner,new URLSearchParams({method,order:'newest',search:address,page:'999'}));assert.equal(r.total,1);assert.equal(r.page,1);assert.equal(r.members[0].address,address);
+ }
+ r=await adminMembers(db,owner,new URLSearchParams({method:'passkey',search:'no-match'}));assert.equal(r.total,0);assert.deepEqual(r.members,[]);
+ for(const params of [{method:'invalid'},{order:'DESC; DROP TABLE accounts'}])await assert.rejects(adminMembers(db,owner,new URLSearchParams(params)),e=>e.status===400);
 });

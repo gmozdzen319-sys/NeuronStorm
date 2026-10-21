@@ -50,6 +50,8 @@ export async function moderateThread(db,account,id,action,input,now){
 export async function adminMembers(db,account,params){
  await requireAdmin(db,account);
  const requested=Number(params.get('page')||1),search=(params.get('search')||'').trim().toLowerCase();
+ const order=params.get('order')||'oldest',method=params.get('method')||'all';
+ if(!['oldest','newest'].includes(order)||!['all','passkey','pelagus','blippay','external_unknown'].includes(method))throw fail(400,'Invalid member filter.');
  if(!Number.isSafeInteger(requested)||requested<1||requested>100000||search.length>100)throw fail(400,'Invalid member search.');
  const source=`SELECT a.address AS identity,COALESCE(p.nickname,'Profile incomplete') AS nickname,
  a.created_at AS "createdAt",c.account_id AS "accountId",
@@ -64,8 +66,10 @@ export async function adminMembers(db,account,params){
  LEFT JOIN passkey_fee_approvals ap ON ap.account_id=c.account_id
  LEFT JOIN passkey_clone_wallets_v2 v ON v.account_id=c.account_id`;
  const filter="($1='' OR strpos(lower(nickname),$1)>0 OR strpos(COALESCE(address,''),$1)>0 OR strpos(COALESCE(\"accountId\",identity),$1)>0)";
- const total=(await db.prepare(`SELECT count(*) AS n FROM (${source}) members WHERE ${filter}`).get(search)).n;
+ const match=filter+" AND ($2='all' OR method=$2)";
+ const total=(await db.prepare(`SELECT count(*) AS n FROM (${source}) members WHERE ${match}`).get(search,method)).n;
  const pages=Math.max(1,Math.ceil(total/50)),page=Math.min(requested,pages);
- const members=await db.prepare(`SELECT * FROM (${source}) members WHERE ${filter} ORDER BY "createdAt" ASC,identity ASC LIMIT 50 OFFSET $2`).all(search,(page-1)*50);
+ const direction=order==='newest'?'DESC':'ASC';
+ const members=await db.prepare(`SELECT * FROM (${source}) members WHERE ${match} ORDER BY "createdAt" ${direction},identity ${direction} LIMIT 50 OFFSET $3`).all(search,method,(page-1)*50);
  return {page,pages,total,members:members.map(({identity,...row})=>row)};
 }
