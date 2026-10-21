@@ -44,3 +44,28 @@ export async function moderateThread(db,account,id,action,input,now){
 
  });
 }
+
+// Admin-only directory. Addresses are immutable assignments, never social-ID
+// fallbacks for Passkey accounts; activation status comes from the saved journal.
+export async function adminMembers(db,account,params){
+ await requireAdmin(db,account);
+ const requested=Number(params.get('page')||1),search=(params.get('search')||'').trim().toLowerCase();
+ if(!Number.isSafeInteger(requested)||requested<1||requested>100000||search.length>100)throw fail(400,'Invalid member search.');
+ const source=`SELECT a.address AS identity,COALESCE(p.nickname,'Profile incomplete') AS nickname,
+ a.created_at AS "createdAt",c.account_id AS "accountId",
+ CASE WHEN c.account_id IS NOT NULL THEN 'passkey' ELSE COALESCE(m.method,'external_unknown') END AS method,
+ CASE WHEN c.account_id IS NULL THEN a.address ELSE COALESCE(w.address,v.address) END AS address,
+ CASE WHEN w.address IS NOT NULL THEN 'v3' WHEN v.address IS NOT NULL THEN 'v2' ELSE NULL END AS version,
+ CASE WHEN c.account_id IS NULL THEN 'External wallet' WHEN w.address IS NOT NULL THEN COALESCE(ap.phase,'reserved') ELSE 'Legacy assignment' END AS "walletStatus"
+ FROM accounts a LEFT JOIN profiles p ON p.address=a.address
+ LEFT JOIN passkey_community_accounts c ON c.address=a.address
+ LEFT JOIN account_registration_methods m ON m.address=a.address
+ LEFT JOIN passkey_fee_wallets w ON w.account_id=c.account_id
+ LEFT JOIN passkey_fee_approvals ap ON ap.account_id=c.account_id
+ LEFT JOIN passkey_clone_wallets_v2 v ON v.account_id=c.account_id`;
+ const filter="($1='' OR strpos(lower(nickname),$1)>0 OR strpos(COALESCE(address,''),$1)>0 OR strpos(COALESCE(\"accountId\",identity),$1)>0)";
+ const total=(await db.prepare(`SELECT count(*) AS n FROM (${source}) members WHERE ${filter}`).get(search)).n;
+ const pages=Math.max(1,Math.ceil(total/50)),page=Math.min(requested,pages);
+ const members=await db.prepare(`SELECT * FROM (${source}) members WHERE ${filter} ORDER BY "createdAt" ASC,identity ASC LIMIT 50 OFFSET $2`).all(search,(page-1)*50);
+ return {page,pages,total,members:members.map(({identity,...row})=>row)};
+}

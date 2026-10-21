@@ -73,7 +73,7 @@ export async function signIn(provider, address, api, progress = () => {}, accept
   const current = await atStage('account', () => provider.request({ method: 'quai_accounts', params: [] }));
   if (current?.[0]?.toLowerCase() !== address.toLowerCase()) throw new Error('The account has changed. Please start signing in again.');
   progress('Verifying your signature…');
-  return atStage('verify', () => api('/api/verify', { id: challenge.id, signature }));
+  return atStage('verify', () => api('/api/verify', { id: challenge.id, signature, registrationMethod:isBlip(provider)?'blippay':'pelagus' }));
 }
 export async function authenticate(provider, api, progress = () => {}) {
   return signIn(provider, await connectWallet(provider), api, progress);

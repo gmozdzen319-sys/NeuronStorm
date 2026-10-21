@@ -676,3 +676,15 @@ test('HTTP request catches overdue questions after downtime before showing or ch
   assert.equal((await f.request('/api/questions/'+id,undefined,ah)).status,404);
   assert.equal((await f.db.prepare("SELECT selection FROM accepted_answers WHERE question_id=$1").get(id)).selection,'automatic');
 });
+
+test('Registration provider metadata is stored only after verified first registration and never rewritten on login',async t=>{
+ const f=await fixture(t);
+ for(const method of ['pelagus','blippay']){
+  const signer=newWallet(),address=signer.address.toLowerCase();let c=await f.challenge(signer.address);
+  const bad=await f.request('/api/verify',{id:c.id,signature:await other.signMessage(c.message),registrationMethod:method});assert.equal(bad.status,401);assert.equal(await f.db.prepare('SELECT * FROM account_registration_methods WHERE address=$1').get(address),undefined);
+  c=await f.challenge(signer.address);assert.equal((await f.request('/api/verify',{id:c.id,signature:await signer.signMessage(c.message),registrationMethod:method})).status,200);
+  assert.equal((await f.db.prepare('SELECT method FROM account_registration_methods WHERE address=$1').get(address)).method,method);
+  c=await f.challenge(signer.address);await f.request('/api/verify',{id:c.id,signature:await signer.signMessage(c.message),registrationMethod:method==='pelagus'?'blippay':'pelagus'});
+  assert.equal((await f.db.prepare('SELECT method FROM account_registration_methods WHERE address=$1').get(address)).method,method);
+ }
+});

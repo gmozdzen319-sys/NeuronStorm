@@ -27,7 +27,7 @@ import {reputationRanking,reputationAdmin,reputation,rounds} from './reputation.
 import {createMarketReader} from './token-market.mjs';
 import {NS_TOKEN,createNeuronReader} from './neuron-token.mjs';
 import {listNotifications,readNotifications} from './notifications.mjs';
-import {requireAdmin,adminList,adminThread,moderateThread} from './admin.mjs';
+import {requireAdmin,adminList,adminThread,moderateThread,adminMembers} from './admin.mjs';
 import http from 'node:http';
 import {openDatabase} from './db/database.mjs';
 import {WALLET_GENERATION} from './wallet-infrastructure.mjs';
@@ -201,15 +201,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         if(path==='/api/admin/reports'&&['GET','POST'].includes(req.method))return json(200,(await adminReports(db,current,req.method==='POST'?await body(req):null,new URL(req.url,origin).searchParams,now())));
         if(path==='/api/admin/rewards/confirm'&&req.method==='POST')return json(200,await confirmReward(current,await body(req),now()));
         if(path==='/api/admin/accepted'&&req.method==='GET')return json(200,(await acceptedAnswers(db,new URL(req.url,origin).searchParams)));
-        if(path==='/api/admin/members'&&req.method==='GET'){
-          const params=new URL(req.url,origin).searchParams,page=Number(params.get('page')||1),search=(params.get('search')||'').trim();
-          if(!Number.isSafeInteger(page)||page<1||page>100000||search.length>100)throw failure(400,'Invalid member search.');
-          const filter="($1='' OR strpos(lower(COALESCE(p.nickname,'')),lower($2))>0 OR strpos(a.address,lower($3))>0)";
-          const args=[search,search,search],total=(await db.prepare(`SELECT count(*) AS n FROM accounts a LEFT JOIN profiles p ON p.address=a.address WHERE ${filter}`).get(...args)).n;
-          const members=await db.prepare(`SELECT a.address,COALESCE(p.nickname,'Profile incomplete') AS nickname FROM accounts a LEFT JOIN profiles p ON p.address=a.address WHERE ${filter} ORDER BY a.created_at,a.address LIMIT 50 OFFSET $4`).all(...args,(page-1)*50);
-          for(const member of members)member.address=await currentWalletForIdentity(db,member.address);
-          return json(200,{page,pages:Math.max(1,Math.ceil(total/50)),members});
-        }
+        if(path==='/api/admin/members'&&req.method==='GET')return json(200,await adminMembers(db,current,new URL(req.url,origin).searchParams));
         if(path==='/api/admin/conversations'&&req.method==='GET')return json(200,(await adminList(db,current,new URL(req.url,origin).searchParams)));
         const route=path.match(/^\/api\/admin\/conversations\/([a-f0-9-]{36})(?:\/(delete|restore))?$/);
         if(route){if(!route[2]&&req.method==='GET')return json(200,{...(await adminThread(db,current,route[1])),serverTime:now()});if(route[2]&&req.method==='POST')return json(200,(await moderateThread(db,current,route[1],route[2],await body(req),now())));}
@@ -263,7 +255,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       }
       if (path === '/api/verify' && req.method === 'POST') {
         if(await passkeys.session(cookies(req).ns_passkey_session))throw failure(409,'Sign out before choosing a different account.');
-        const { id, signature } = await body(req);
+        const { id, signature, registrationMethod } = await body(req);
         if (typeof id !== 'string' || typeof signature !== 'string' || signature.length > 300) throw failure(400, 'Invalid signature.');
         const browser = cookies(req).ns_challenge || '';
         // DELETE RETURNING atomically consumes the challenge, including failed signature attempts.
@@ -276,7 +268,8 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         const session = token();
 
         await db.transaction(async () => {
-          (await db.prepare("INSERT INTO accounts VALUES($1,$2) ON CONFLICT DO NOTHING").run(recovered, now()));
+          const created=await db.prepare("INSERT INTO accounts VALUES($1,$2) ON CONFLICT DO NOTHING").run(recovered, now());
+          if(created.changes===1&&['pelagus','blippay'].includes(registrationMethod))await db.prepare('INSERT INTO account_registration_methods(address,method,recorded_at) VALUES($1,$2,$3)').run(recovered,registrationMethod,now());
           if(challenge.legal_hash)(await db.prepare("INSERT INTO legal_acceptances VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING").run(recovered,challenge.legal_hash,now(),challenge.message,signature));
           const old = cookies(req).ns_session;
           if (old) (await db.prepare("DELETE FROM sessions WHERE token_hash=$1").run(hash(old)));
