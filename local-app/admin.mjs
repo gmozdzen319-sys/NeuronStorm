@@ -37,6 +37,7 @@ export async function moderateThread(db,account,id,action,input,now){
     await db.query("SELECT set_config('neuron.event_time',$1,true)",[String(now)]);
     (await db.prepare("UPDATE questions SET deleted_at=$1 WHERE id=$2").run(action==="delete"?now:null,id));
     if(action==="delete")(await db.prepare("UPDATE notifications SET read_at=COALESCE(read_at,$1) WHERE question_id=$2").run(now,id));
+    if(action==="delete")await db.prepare("UPDATE account_activity SET read_at=COALESCE(read_at,$1) WHERE question_id=$2").run(now,id);
     (await db.prepare("INSERT INTO admin_audit(question_id,actor,action,created_at) VALUES($1,$2,$3,$4)").run(id,account.address.toLowerCase(),action,now));
     return {ok:true};
   }catch(error){throw error;}

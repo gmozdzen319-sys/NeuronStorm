@@ -1,7 +1,7 @@
 import {points,renderRanking,roundOptions} from './reputation-ui.js';
 import {getWalletProvider,isBlip,walletName,blipLink} from './wallet-provider.js';
 const TREASURY='0x001d5bE0940145De0c2c1D851b99f33968DED764';
-export function createRewardsUI(api,getAccount,onChanged){
+export function createRewardsUI(api,getAccount,onChanged,{getProvider=getWalletProvider,onPasskeyPayment}={}){
   const $=s=>document.querySelector(s),dialog=$('#payment-dialog');let selection=null,pending=null,owner=null,busy=false,memberPage=1,memberPages=1;
   const el=(tag,text)=>{const n=document.createElement(tag);n.textContent=text;return n;};
   const message=text=>$('#payment-status').textContent=text;
@@ -10,13 +10,17 @@ export function createRewardsUI(api,getAccount,onChanged){
   function showPayment(){document.activeElement?.blur();if(!dialog.open)dialog.showModal();$('#payment-title').focus({preventScroll:true});dialog.scrollTop=0;}
   function restore(){if(!pending)return;$('#payment-discard').hidden=false;selection=null;$('#payment-title').textContent='Pending NS payment';$('#payment-explanation').textContent='Check your existing transaction. Do not pay again. If your wallet did not return a hash, copy it from the wallet activity.';$('#payment-recipient').textContent=pending.recipient||'';for(const id of ['#tip-amount','#tip-amount-label','#edit-answer','#edit-answer-label'])$(id).hidden=true;$('#payment-send').hidden=true;$('#payment-check').hidden=false;$('#payment-hash-label').hidden=false;$('#payment-hash').hidden=false;$('#payment-hash').value=pending.txHash||'';message('');showPayment();}
   function open(action,reply){
+    $('#payment-send').textContent=getAccount()?.method==='passkey'?'Continue with Passkey':'Continue with '+(isBlip(getProvider())?'BlipPay':'Pelagus');
+    $('#payment-wallet-note').textContent=getAccount()?.method==='passkey'?'Review the NS transfer in your Wallet. A new Passkey confirmation is required; the usual quoted fee applies.':'Your signed-in wallet will ask you to approve the NS transfer. Network fees are additional.';
     if(pending){restore();return;}$('#payment-discard').hidden=true;selection={action,reply};$('#payment-title').textContent=action==='tip'?'Tip '+reply.author:action==='edit'?'Edit answer · 1 NS':'Delete answer · 1 NS';
     $('#payment-explanation').textContent=action==='tip'?'Send NS directly to this answer’s author.':action==='edit'?'Send 1 NS to the reward pool to update this answer. All existing ratings on this answer will be cleared.':'Send 1 NS to the reward pool to delete this answer. Its stars will no longer count. You will not be able to post another answer to this question.';
     $('#tip-amount').value='1';$('#edit-answer').value=reply.body;for(const id of ['#tip-amount','#tip-amount-label'])$(id).hidden=action!=='tip';for(const id of ['#edit-answer','#edit-answer-label'])$(id).hidden=action!=='edit';
     $('#payment-recipient').textContent=action==='tip'?'Recipient: '+reply.author:'Reward pool: '+TREASURY;$('#payment-send').hidden=false;$('#payment-check').hidden=true;$('#payment-hash').hidden=true;$('#payment-hash-label').hidden=true;message('');showPayment();
   }
   async function check(){
-    if(!pending||busy)return;const address=owner,record={...pending,txHash:$('#payment-hash').value.trim()||pending.txHash};if(!/^0x[0-9a-f]{64}$/i.test(record.txHash||'')){message('Copy the transaction hash from your wallet to check this payment.');return;}
+    if(!pending||busy)return;
+    if(pending.passkey&&!pending.txHash){busy=true;try{const ownerAtRead=owner,s=await api('/api/payments/'+pending.id);if(owner!==ownerAtRead)return;if(s.txHash){store({...pending,txHash:s.txHash});$('#payment-hash').value=s.txHash;}else{message(s.status==='stopped'||s.status==='failed'?'Transfer stopped. Check Wallet before preparing another payment.':'Waiting for your Wallet transfer. Do not send another payment.');return;}}catch(error){message(error.message);return;}finally{busy=false;}}
+    const address=owner,record={...pending,txHash:$('#payment-hash').value.trim()||pending.txHash};if(!/^0x[0-9a-f]{64}$/i.test(record.txHash||'')){message('Copy the transaction hash from your wallet to check this payment.');return;}
     store(record);busy=true;$('#payment-check').disabled=true;message('Checking Quai Network…');
     try{await api('/api/payments/confirm',{id:record.id,txHash:record.txHash});store(null,address);if(owner===address){message('Payment confirmed.');dialog.close();await onChanged();}}
     catch(error){if(owner===address)message(error.message);}finally{busy=false;$('#payment-check').disabled=false;}
@@ -24,7 +28,13 @@ export function createRewardsUI(api,getAccount,onChanged){
   $('#payment-form').addEventListener('submit',async event=>{
     event.preventDefault();if(busy||pending||!selection)return;busy=true;$('#payment-send').disabled=true;const address=owner;
     try{
-      const provider=getWalletProvider();if(!provider?.request)throw Error('Open this page with your wallet installed.');
+      if(getAccount()?.method==='passkey'){
+        if(!onPasskeyPayment)throw Error('Passkey payments are unavailable.');
+        const intent=await api('/api/payments/prepare',{replyId:selection.reply.id,action:selection.action,amount:$('#tip-amount').value.trim(),body:$('#edit-answer').value});
+        if(owner!==address)throw Error('Your session changed.');
+        store({id:intent.id,recipient:intent.recipient,txHash:null,passkey:true},address);dialog.close();await onPasskeyPayment(intent);return;
+      }
+      const provider=getProvider();if(!provider?.request)throw Error('Open this page with your wallet installed.');
       const accounts=await provider.request({method:'quai_accounts',params:[]});if(accounts?.[0]?.toLowerCase()!==address)throw Error('Select your signed-in account in your wallet.');
       if(BigInt(await provider.request({method:'quai_chainId',params:[]}))!==9n)throw Error('Select Quai Mainnet in your wallet.');
       const intent=await api('/api/payments/prepare',{replyId:selection.reply.id,action:selection.action,amount:$('#tip-amount').value.trim(),body:$('#edit-answer').value});
@@ -34,10 +44,10 @@ export function createRewardsUI(api,getAccount,onChanged){
       const txHash=await provider.request({method:'quai_sendTransaction',params:[intent.transaction]});
       if(typeof txHash!=='string'||!/^0x[0-9a-f]{64}$/i.test(txHash))throw Error('Check your wallet activity and enter the transaction hash. Do not pay again.');
       store({...record,txHash},address);if(owner===address){$('#payment-hash').value=txHash;message('Transfer submitted. Check payment after 3 network confirmations.');}
-    }catch(error){if(owner===address)message(error.message||'The wallet request did not complete. Check your wallet activity.');}
+    }catch(error){if(owner===address){if(pending&&!dialog.open)restore();message(error.message||'The wallet request did not complete. Check your wallet activity.');}}
     finally{busy=false;$('#payment-send').disabled=false;}
   });
-  setInterval(()=>{if(pending?.txHash&&!document.hidden)check();},8000);
+  setInterval(()=>{if((pending?.txHash||pending?.passkey)&&!document.hidden)check();},8000);
   $('#payment-check').addEventListener('click',check);$('#payment-close').addEventListener('click',()=>{if(!busy)dialog.close();});dialog.addEventListener('cancel',event=>{if(busy)event.preventDefault();});$('#pending-payment').addEventListener('click',restore);
   $('#payment-discard').addEventListener('click',()=>{if(busy)return;if(confirm('Only discard if no transaction was sent. Keep any transaction hash before continuing.')){store(null);dialog.close();}});
   function decorate(article,reply){if(article.querySelector('.answer-actions')){updateTips(article,reply);return;}const bar=el('div','');bar.className='answer-actions';if(reply.canVote){const tip=el('button','Tip NS');tip.className='login';tip.type='button';tip.addEventListener('click',()=>open('tip',reply));bar.append(tip);}else for(const [action,label] of [['edit','Edit · 1 NS'],['delete','Delete · 1 NS']]){const button=el('button',label);button.className='text-button';button.type='button';button.addEventListener('click',()=>open(action,reply));bar.append(button);}if(reply.walletAddress){const wallet=el('code',reply.walletAddress);wallet.className='address admin-answer-wallet';bar.append(wallet);}article.append(bar);updateTips(article,reply);}

@@ -1,3 +1,5 @@
+import {createTokenNotices} from './token-notices.mjs';
+import {createWalletRPC as notificationRPC} from './wallet/chain.mjs';
 import {currentWalletForIdentity} from './current-wallet.mjs';
 import {createSendProgress} from './wallet/send-progress.mjs';
 import {loadLegal,initLegal,legalPage} from './legal.mjs';
@@ -61,6 +63,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   const maintain=()=>maintenance??=(async()=>{await expireQuestions(db,now());await remindDeadlines(db,now());})().finally(()=>{maintenance=null;});
   const confirmReward=createRewardConfirmation(db,paymentFetch);
   const payments=createPayments(db,paymentFetch,now);
+  const tokenNotices=process.env.RENDER==='true'?createTokenNotices(db,notificationRPC(),now):null;
   const readMarket=createMarketReader(marketFetch);
   const readNeuron=createNeuronReader(tokenFetch);
   const limits = new Map();
@@ -141,7 +144,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         }
         if(path==='/api/passkey/wallet/send/prepare'&&req.method==='POST'){
           const {progressId,...input}=await body(req);
-          return json(200,await sendProgress.run(current,progressId,'prepare',()=>passkeyWallet.send.prepare(current,input)));
+          return json(200,await sendProgress.run(current,progressId,'prepare',async()=>{const parameters=input.paymentIntent?await payments.passkeyInput(current,input.paymentIntent):input;const result=await passkeyWallet.send.prepare(current,parameters);if(input.paymentIntent)await payments.bindPasskey(current,input.paymentIntent,result.id);return result;}));
         }
         if(path==='/api/passkey/wallet/send/confirm'&&req.method==='POST'){
           const {progressId,...input}=await body(req);
@@ -172,6 +175,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       const debateVote=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/debate\/(\d+)\/vote$/);
       if(debateVote&&req.method==='POST')return json(200,await voteOnDebate(db,await account(req),debateVote[1],Number(debateVote[2]),await body(req),now()));
       if(path==='/api/rewards'&&req.method==='GET'){const balance=await readNeuron(REWARD_ADDRESS);return json(200,{address:REWARD_ADDRESS,balance:balance.balance,updatedAt:balance.updatedAt,...(await rewardGrowth(db,balance.balance,now()))});}
+      const paymentStatus=path.match(/^\/api\/payments\/([a-f0-9-]{36})$/i);if(paymentStatus&&req.method==='GET')return json(200,await payments.status(await account(req),paymentStatus[1]));
       if(path==='/api/payments/prepare'&&req.method==='POST')return json(200,await payments.prepare((await account(req)),await body(req),now()));
       if(path==='/api/payments/confirm'&&req.method==='POST')return json(200,await payments.confirm((await account(req)),await body(req),now()));
       if(path==='/api/version'&&req.method==='GET')return json(200,{version:runningVersion});
@@ -188,7 +192,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       const debateRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/debate$/);
       if(debateRoute&&['GET','POST'].includes(req.method))return json(200,(await debate(db,(await account(req)),debateRoute[1],await actionSession(req),new URL(req.url,origin).searchParams,req.method==='POST'?await body(req):null,now())));
       if (path === '/api/session' && req.method === 'GET') return json(200, { account: (await account(req)) || await passkeys.session(cookies(req).ns_passkey_session) });
-      if(path==='/api/notifications'&&req.method==='GET')return json(200,(await listNotifications(db,(await account(req)),new URL(req.url,origin).searchParams)));
+      if(path==='/api/notifications'&&req.method==='GET'){const owner=await account(req);const result=await listNotifications(db,owner,new URL(req.url,origin).searchParams);tokenNotices?.schedule(owner);return json(200,result);}
       if(['/api/notifications/read','/api/notifications/read-all'].includes(path)&&req.method==='POST')return json(200,(await readNotifications(db,(await account(req)),await body(req),path.endsWith('read-all'),now())));
       if(path.startsWith('/api/admin/')){
         const current=(await account(req));(await requireAdmin(db,current));

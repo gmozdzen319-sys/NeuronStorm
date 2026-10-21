@@ -11,6 +11,8 @@ import { createConversations } from './conversations.js';
 const $ = selector => document.querySelector(selector);
 const login = $('#login'), logout = $('#logout'), status = $('#status'), form = $('#profile-form');
 let legalInfo=null, selectedProvider=null;
+try{if(sessionStorage.getItem('ns-login-provider')==='pelagus')selectedProvider=window.pelagus;else if(sessionStorage.getItem('ns-login-provider')==='blip')selectedProvider=getWalletProvider();}catch{}
+const paymentProvider=()=>selectedProvider||getWalletProvider();
 let busy = false, generation = 0, connectedAddress = null;
 let currentAccount = null, profile = null, catalog = { work: [], hobbies: [] }, selected = { work: [], hobbies: [] };
 let profileRevision = 0, saving = false, loading = false;
@@ -170,6 +172,7 @@ async function externalLogin(){
     if(legalInfo?.published&&!$('#accept-terms').checked){notice('Read and accept the Terms of Use before signing.',true);$('#accept-terms').focus();return;}
     const result=await signIn((selectedProvider||getWalletProvider()),connectedAddress,api,notice,{accepted:$('#accept-terms').checked,hash:legalInfo?.hash});
     if(attempt!==generation){await api('/api/logout',{});return;}
+    try{sessionStorage.setItem('ns-login-provider',isBlip(paymentProvider())?'blip':'pelagus');}catch{}
     resetConnection();notice();await renderSession(result.account);
   }catch(error){resetConnection();notice(walletError(error),true);}
   finally{busy=false;login.disabled=false;}
@@ -201,7 +204,7 @@ if(isBlip(getWalletProvider())){
   const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let node;
   while(node=walker.nextNode())if(node.parentElement.tagName!=='SCRIPT'&&!node.parentElement.closest('#blip-info, #auth-dialog'))node.textContent=node.textContent.replaceAll('Pelagus','Blip').replaceAll('PELAGUS','BLIP');
 }
-const conversations=createConversations({api,onProfile:async()=>{if(!profile){conversations.openProfile();showEditor();return;}if(profile){profileNotice();showProfile();await refreshPoints();}},onExpired:async()=>{await renderSession(null);notice('Your session has expired. Please sign in again.',true);}});
+const conversations=createConversations({api,getPaymentProvider:paymentProvider,onPasskeyPayment:intent=>passkeyUI.openPayment(intent),onProfile:async()=>{if(!profile){conversations.openProfile();showEditor();return;}if(profile){profileNotice();showProfile();await refreshPoints();}},onExpired:async()=>{await renderSession(null);notice('Your session has expired. Please sign in again.',true);}});
 const tokenUI=createTokenUI({api,onExpired:()=>renderSession(null)});
 const passkeyUI=createPasskeyUI({api,onSetupReady:ready=>{setupReady=ready;updateOnboarding();},onAccount:renderSession,onExternal:async method=>{
   selectedProvider=method==='pelagus'?window.pelagus:getWalletProvider();

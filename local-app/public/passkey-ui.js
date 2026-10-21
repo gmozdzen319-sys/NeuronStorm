@@ -33,7 +33,7 @@ export async function deviceResponse(kind,options){
 
 export function createPasskeyUI({api,onExternal,onAccount,onSetupReady=()=>{}}){
   const $=s=>document.querySelector(s),dialog=$('#auth-dialog');let busy=false,legal=null,epoch=0,account=null,transfer=null,receiveAddress=null,sending=false;
-  let progressStop=null,sendProgressActive=false;
+  let progressStop=null,sendProgressActive=false,paymentIntent=null;
   function paintProgress(kind,percent,text){
     // Both setup displays observe the same result and existing polling lifecycle.
     for(const prefix of kind==='setup'?['pk-progress-','profile-progress-']:['pk-progress-']){
@@ -166,6 +166,7 @@ export function createPasskeyUI({api,onExternal,onAccount,onSetupReady=()=>{}}){
     progressStop?.();$('#pk-progress-prepare').hidden=true;$('#pk-progress-send').hidden=true;
     const revision=++epoch;account=next?.method==='passkey'?next:null;onSetupReady(false);
     if(!force||!account)$('#pk-progress-setup').hidden=true;
+    paymentIntent=null;$('#pk-recipient').readOnly=false;$('#pk-amount').readOnly=false;$('#pk-send-token').disabled=false;
     feeMode=false;baseAssets=[];$('#pk-send-token').replaceChildren();$('#pk-send-token-field').hidden=true;$('#pk-send-title').textContent='Send QUAI';$('#pk-amount-label').textContent='Amount in QUAI';$('#pk-legacy-wallets').replaceChildren();
     $('#pk-ns-balance').textContent=account?'Loading…':'Not available';
     transfer=null;receiveAddress=null;$('#pk-wallet-address').textContent='';$('#pk-quai-balance').textContent='Not available';$('#pk-receive').disabled=true;$('#pk-send').disabled=true;
@@ -202,11 +203,14 @@ export function createPasskeyUI({api,onExternal,onAccount,onSetupReady=()=>{}}){
     catch(error){if(revision===epoch)$('#pk-status').textContent=error.message;}finally{if(revision===epoch)$('#pk-receive').disabled=false;}
   });
   $('#pk-copy').addEventListener('click',async()=>{if(!receiveAddress)return;try{await navigator.clipboard.writeText(receiveAddress);$('#pk-status').textContent='Address copied.';}catch{$('#pk-status').textContent='Select and copy the address above.';}});
-  $('#pk-send').addEventListener('click',()=>{$('#pk-send-form').hidden=false;$('#pk-recipient').focus();});
+  $('#pk-send').addEventListener('click',()=>{
+    if(paymentIntent&&!sending){paymentIntent=null;transfer=null;$('#pk-send-review').hidden=true;$('#pk-recipient').readOnly=false;$('#pk-amount').readOnly=false;$('#pk-send-token').disabled=false;$('#pk-recipient').value='';$('#pk-amount').value='';}
+    $('#pk-send-form').hidden=false;$('#pk-recipient').focus();
+  });
   for(const id of ['#pk-recipient','#pk-amount','#pk-send-token'])$(id).addEventListener('input',()=>{transfer=null;$('#pk-send-review').hidden=true;});
   $('#pk-send-form').addEventListener('submit',async event=>{event.preventDefault();if(sending)return;const revision=epoch;transfer=null;$('#pk-send-review').hidden=true;sending=true;$('#pk-review-button').disabled=true;$('#pk-send-status').textContent='Preparing…';
     $('#pk-progress-send').hidden=true;const progress=trackProgress('prepare',revision);
-    try{const r=await api('/api/passkey/wallet/send/prepare',{progressId:progress.id,recipient:$('#pk-recipient').value.trim(),amount:$('#pk-amount').value.trim(),...(feeMode?{token:$('#pk-send-token').value}:{})});if(revision!==epoch)return;const reviewText=transferReviewText(r.review);transfer=r;
+    try{const r=await api('/api/passkey/wallet/send/prepare',{progressId:progress.id,...(paymentIntent?{paymentIntent:paymentIntent.id}:{}),recipient:$('#pk-recipient').value.trim(),amount:$('#pk-amount').value.trim(),...(feeMode?{token:$('#pk-send-token').value}:{})});if(revision!==epoch)return;const reviewText=transferReviewText(r.review);transfer=r;
       progress.stop();paintProgress('prepare',100,'Ready · Confirm with your Passkey');
       $('#pk-review-text').textContent=reviewText;
       $('#pk-send-review').hidden=false;$('#pk-confirm').disabled=false;$('#pk-send-status').textContent='Awaiting confirmation. Review the recipient and amount carefully.';
@@ -244,5 +248,17 @@ export function createPasskeyUI({api,onExternal,onAccount,onSetupReady=()=>{}}){
     }catch(error){if(revision===epoch)$('#pk-devices').textContent=error.message;}
   });
   $('#wallet-button').addEventListener('click',event=>{if(account){event.stopImmediatePropagation();$('#landing').hidden=true;$('#profile-area').hidden=true;$('#conversations').hidden=true;$('#passkey-home').hidden=false;$('#pk-title').focus();}},true);
-  return {open,setAccount};
+  async function openPayment(intent){
+    if(!account)throw Error('Sign in with your passkey.');
+    const owner=account.id;await setAccount(account,true);if(account?.id!==owner)throw Error('Your session changed.');
+    if($('#pk-send').disabled)throw Error('Sending is currently unavailable. Check Wallet before continuing.');
+    paymentIntent=intent;$('#landing').hidden=true;$('#profile-area').hidden=true;$('#conversations').hidden=true;$('#passkey-home').hidden=false;
+    $('#pk-send-form').hidden=false;$('#pk-recipient').value=intent.recipient;$('#pk-recipient').readOnly=true;
+    const units=BigInt(intent.units);$('#pk-amount').value=(units/10n**18n).toString()+'.'+(units%10n**18n).toString().padStart(18,'0');$('#pk-amount').readOnly=true;
+    const tokenOption=[...$('#pk-send-token').options].find(o=>o.value.toLowerCase()===intent.transaction.to.toLowerCase());
+    if(!tokenOption)throw Error('NS transfers are currently unavailable. Check Wallet before continuing.');
+    $('#pk-send-token').value=tokenOption.value;$('#pk-send-token').disabled=true;
+    $('#pk-send-form').requestSubmit();
+  }
+  return {open,setAccount,openPayment};
 }

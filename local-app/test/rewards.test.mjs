@@ -8,6 +8,45 @@ import {createQuestion,replyToThread,readThread,voteOnReply} from '../threads.mj
 import {createPayments,REWARD_ADDRESS,transferData,nsUnits} from '../payments.mjs';
 import {NS_TOKEN} from '../neuron-token.mjs';
 import {presence,ranking,weekStart,rewardGrowth} from '../community.mjs';
+import {listNotifications,readNotifications} from '../notifications.mjs';
+
+test('Likes and confirmed tips create distinct idempotent owner notifications',async t=>{
+ const {db,reply,question,now}=await fixture(t),net=network(),payments=createPayments(db,net.fetch);
+ await voteOnReply(db,a,question,reply,{value:1},now);await voteOnReply(db,a,question,reply,{value:1},now);
+ const intent=await payments.prepare(a,{replyId:reply,action:'tip',amount:'1'},now);net.paid(intent);
+ await payments.confirm(a,{id:intent.id,txHash:net.hash},now);await payments.confirm(a,{id:intent.id,txHash:net.hash},now);
+ const result=await listNotifications(db,b,new URLSearchParams());
+ assert.equal(result.notifications.filter(n=>n.kind==='like').length,1);assert.equal(result.notifications.filter(n=>n.kind==='tip').length,1);
+ await readNotifications(db,b,{throughId:result.throughId,throughActivityId:result.throughActivityId},true,now+1);
+ assert.equal((await db.prepare('SELECT count(*) AS n FROM account_activity WHERE read_at IS NULL').get()).n,0);
+});
+
+test('Passkey tip binds the signed-in smart wallet, exact Send and verified receipt',async t=>{
+ const {db,reply,now}=await fixture(t),net=network(),payments=createPayments(db,net.fetch),account={...a,method:'passkey',id:'pk-tip'};
+ const wallet='0x0044444444444444444444444444444444444444';
+ await db.prepare('INSERT INTO passkey_accounts VALUES($1,$2,$3,NULL,$4,$5)').run(account.id,'handle',now,'example.com','https://example.com');
+ await db.prepare('INSERT INTO passkey_credentials(id,account_id,public_key,counter,label,backed_up,created_at) VALUES($1,$2,$3,0,$4,false,$5)').run('credential',account.id,'key','Device',now);
+ await db.prepare('INSERT INTO passkey_clone_wallets VALUES($1,$2,$3,$4,$5,$6)').run(account.id,'credential',wallet,'key-id','{}',now);
+ db.verifyCurrentWallet=async()=>({row:{account_id:account.id,generation:3,revoked_at:null,plan:{address:wallet}},view:{deployed:true}});
+ const intent=await payments.prepare(account,{replyId:reply,action:'tip',amount:'1'},now);
+ assert.equal(intent.transaction.from,wallet);assert.notEqual(intent.transaction.from,account.address);
+ assert.equal((await payments.passkeyInput(account,intent.id)).amount,'1.0');
+ const plan={operation:{action:6,chainId:9,wallet,digest:'unique-digest',quote:{token:NS_TOKEN.address,recipient:intent.recipient,amount:intent.units}}};
+ await db.prepare('INSERT INTO passkey_native_operations(id,account_id,credential_id,phase,plan,created_at,expires_at) VALUES($1,$2,$3,$4,$5,$6,$7)').run('send-tip',account.id,'credential','awaiting_confirmation',JSON.stringify(plan),now,now+100000);
+ await payments.bindPasskey(account,intent.id,'send-tip');await assert.rejects(payments.passkeyInput(account,intent.id),e=>e.status===409);
+ const {tx}=net.paid(intent);tx.from=c.address;tx.to=wallet;tx.input='0xwallet-call';
+ await assert.rejects(payments.confirm(account,{id:intent.id,txHash:net.hash},now),e=>e.status===409);
+ await db.prepare("UPDATE passkey_native_operations SET phase='confirmed',tx_hash=$1 WHERE id=$2").run(net.hash,'send-tip');
+ for(const field of ['recipient','amount','token']){
+  const bad=structuredClone(plan);bad.operation.quote[field]=field==='amount'?'2':c.address;
+  await db.prepare('UPDATE passkey_native_operations SET plan=$1 WHERE id=$2').run(JSON.stringify(bad),'send-tip');
+  await assert.rejects(payments.confirm(account,{id:intent.id,txHash:net.hash},now),e=>e.status===400);
+ }
+ await db.prepare('UPDATE passkey_native_operations SET plan=$1 WHERE id=$2').run(JSON.stringify(plan),'send-tip');
+ await payments.confirm(account,{id:intent.id,txHash:net.hash},now);
+ assert.equal((await payments.status(account,intent.id)).completed,true);
+ await assert.rejects(payments.status(b,intent.id),e=>e.status===404);
+});
 const a={address:'0x0011111111111111111111111111111111111111',role:'member'},b={address:'0x0022222222222222222222222222222222222222',role:'member'},c={address:'0x0033333333333333333333333333333333333333',role:'member'};
 async function fixture(t){const {db}=(await createApp({database:':memory:'}));t.after(async ()=>(await db.close()));const now=Date.UTC(2026,9,1,12);for(const [account,nickname] of [[a,'Writer'],[b,'Driver'],[c,'Traveller']]){(await db.prepare("INSERT INTO accounts VALUES($1,$2)").run(account.address,now));(await saveProfile(db,account.address,{nickname,work:['Driving'],hobbies:['Travel']},now));}const category=(await db.prepare("SELECT id FROM categories WHERE kind=$1").get('work')).id;const question=(await createQuestion(db,a,{categoryIds:[category],body:'Question'},now)).id;(await replyToThread(db,b,question,{body:'First answer'},now));const reply=(await readThread(db,a,question)).replies[0].id;return {db,now,question,reply,category};}
 function network(){let height=100n,receipt=null,tx=null,canonical='0x'+'bb'.repeat(32),chain='0x9';const hash='0x'+'aa'.repeat(32);return {hash,setChain:value=>chain=value,fetch:async(url,options)=>{const {method}=JSON.parse(options.body);const result=method==='quai_chainId'?chain:method==='quai_blockNumber'?'0x'+height.toString(16):method==='quai_getTransactionReceipt'?receipt:method==='quai_getTransactionByHash'?tx:method==='quai_getBlockByNumber'?{hash:canonical}:null;return {ok:true,json:async()=>({result})};},paid(intent,overrides={}){height=104n;receipt={transactionHash:hash,status:'0x1',blockNumber:'0x66',blockHash:canonical,logs:[{address:NS_TOKEN.address,topics:[id('Transfer(address,address,uint256)'), '0x'+intent.transaction.from.slice(2).padStart(64,'0'),'0x'+intent.recipient.slice(2).toLowerCase().padStart(64,'0')],data:'0x'+BigInt(intent.units).toString(16).padStart(64,'0')}]};tx={hash,from:intent.transaction.from,to:NS_TOKEN.address,input:intent.transaction.data,value:'0x0',blockHash:canonical};Object.assign(receipt,overrides);return {receipt,tx};},height:value=>height=value,canonical:value=>canonical=value};}
