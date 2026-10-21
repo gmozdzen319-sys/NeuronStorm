@@ -1,7 +1,17 @@
+import http from 'node:http';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {profileErrors} from '../public/profile-validation.js';
 import {saveProfile} from '../profiles.mjs';
+import {createApp} from './database.mjs';
+
+test('Profile validation module is served publicly for the registration form',async t=>{
+ const app=await createApp({database:':memory:'});t.after(()=>app.close());
+ await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));
+ const response=await new Promise((resolve,reject)=>{const req=http.get({hostname:'127.0.0.1',port:app.server.address().port,path:'/profile-validation.js',headers:{Host:'localhost:3000'}},res=>{let body='';res.on('data',x=>body+=x);res.on('end',()=>resolve({status:res.statusCode,type:res.headers['content-type'],body}));});req.on('error',reject);});
+ assert.equal(response.status,200);assert.match(response.type,/javascript/);
+ assert.match(response.body,/export function profileErrors/);
+});
 
 test('All registration methods require nickname and at least one selected or entered topic',()=>{
  for(const method of ['passkey','pelagus','blippay']){
@@ -19,3 +29,4 @@ test('Direct profile writes cannot bypass requirements, before any database muta
   await assert.rejects(saveProfile(db,'account',input,1),error=>error.status===400);
  }
 });
+
