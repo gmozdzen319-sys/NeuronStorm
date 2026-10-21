@@ -31,7 +31,7 @@ export async function deviceResponse(kind,options){
   return {id:credential.id,rawId:encode(credential.rawId),type:credential.type,response,clientExtensionResults:credential.getClientExtensionResults()};
 }
 
-export function createPasskeyUI({api,onExternal,onAccount}){
+export function createPasskeyUI({api,onExternal,onAccount,onSetupReady=()=>{}}){
   const $=s=>document.querySelector(s),dialog=$('#auth-dialog');let busy=false,legal=null,epoch=0,account=null,transfer=null,receiveAddress=null,sending=false;
   let progressStop=null,sendProgressActive=false;
   function paintProgress(kind,percent,text){
@@ -164,7 +164,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
     clearTimeout(activationTimer);
     clearTimeout(sendTimer);
     progressStop?.();$('#pk-progress-prepare').hidden=true;$('#pk-progress-send').hidden=true;
-    const revision=++epoch;account=next?.method==='passkey'?next:null;
+    const revision=++epoch;account=next?.method==='passkey'?next:null;onSetupReady(false);
     if(!force||!account)$('#pk-progress-setup').hidden=true;
     feeMode=false;baseAssets=[];$('#pk-send-token').replaceChildren();$('#pk-send-token-field').hidden=true;$('#pk-send-title').textContent='Send QUAI';$('#pk-amount-label').textContent='Amount in QUAI';$('#pk-legacy-wallets').replaceChildren();
     $('#pk-ns-balance').textContent=account?'Loading…':'Not available';
@@ -179,6 +179,7 @@ export function createPasskeyUI({api,onExternal,onAccount}){
     if($('#pk-progress-setup').hidden)paintProgress('setup',0,'Checking wallet setup status');
     try{const state=await api('/api/passkey/wallet');if(revision!==epoch)return;
       $('#pk-status').textContent=state.reason;
+      onSetupReady(state.status==='active'&&state.receiveAvailable===true&&!!state.address&&state.setupProgress?.percent===100);
       if(state.setupProgress){
         const ready=state.status==='active'&&state.receiveAvailable&&state.address;
         const percent=Math.max(0,Math.min(ready?100:90,Number(state.setupProgress.percent)||0));

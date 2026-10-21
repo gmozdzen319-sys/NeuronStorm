@@ -6,3 +6,8 @@ export function profileErrors({nickname,work=[],hobbies=[]}){
   topics:![...work,...hobbies].some(name=>typeof name==='string'&&name.trim())?'Please select or enter at least one topic.':null
  };
 }
+
+export function onboardingState(account,profile,walletReady){
+ const locked=!!account&&!profile;
+ return {locked,waitingForWallet:locked&&account.method==='passkey'&&!walletReady};
+}

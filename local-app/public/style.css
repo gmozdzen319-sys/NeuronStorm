@@ -194,3 +194,5 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 @media(prefers-reduced-motion:reduce){.pk-progress progress::-webkit-progress-value{transition:none}}
 
 .profile-required{color:#ff5265;margin-left:3px;font-weight:700}.profile-field-error{color:#ffb4bc;background:#220c14;border-left:3px solid #ff5265;padding:10px 14px;font-size:14px;line-height:1.5}
+
+.profile-onboarding .brand{cursor:default;opacity:.65}.profile-onboarding #wallet-button{opacity:.45;cursor:not-allowed}

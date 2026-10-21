@@ -1,4 +1,4 @@
-import {profileErrors} from './profile-validation.js';
+import {profileErrors,onboardingState} from './profile-validation.js';
 import {createPasskeyUI} from './passkey-ui.js';
 import {renderReputation} from './reputation-ui.js';
 import {createTopicSuggestions} from './topic-suggestions.js';
@@ -14,6 +14,23 @@ let legalInfo=null, selectedProvider=null;
 let busy = false, generation = 0, connectedAddress = null;
 let currentAccount = null, profile = null, catalog = { work: [], hobbies: [] }, selected = { work: [], hobbies: [] };
 let profileRevision = 0, saving = false, loading = false;
+let setupReady=false;
+function updateOnboarding(){
+ const {locked,waitingForWallet}=onboardingState(currentAccount,profile,setupReady);
+ document.body.classList.toggle('profile-onboarding',locked);
+ $('#wallet-button').disabled=locked;
+ $('#member-nav').inert=locked;
+ $('.brand').setAttribute('aria-disabled',String(locked));
+ $('#save-profile').disabled=saving||loading||waitingForWallet;
+ $('#profile-wallet-wait').hidden=!waitingForWallet;
+}
+// Keep registration on the existing profile screen, including keyboard/link navigation.
+document.addEventListener('click',event=>{
+ if(!onboardingState(currentAccount,profile,setupReady).locked)return;
+ const target=event.target;
+ if(target.closest('#profile-area')||target.closest('#logout')||target.closest('footer a'))return;
+ event.preventDefault();event.stopImmediatePropagation();
+},true);
 const key = name => name.normalize('NFKC').replace(/\s/gu, '').toLowerCase();
 function resetConnection() { connectedAddress = null;legalInfo=null;$('#terms-acceptance').hidden=true;$('#accept-terms').checked=false; login.textContent = 'Log in / Sign up'; }
 async function api(path, data) {
@@ -64,7 +81,7 @@ function showEditor() {
   $('#nickname').value=profile?.nickname||'';$('#first-name').value=profile?.firstName||'';$('#last-name').value=profile?.lastName||'';
   $('#nickname').removeAttribute('aria-invalid');
   for(const kind of ['work','hobbies']) {selected[kind]=(profile?.[kind]||[]).map(item=>item.name);$('#'+kind+'-input').value='';renderSelected(kind);}
-  fillOptions();
+  fillOptions();updateOnboarding();
 }
 async function loadProfile() {
   if (!currentAccount || loading) return;
@@ -74,20 +91,20 @@ async function loadProfile() {
   try {
     const [saved,topics]=await Promise.all([api('/api/profile'),api('/api/categories')]);
     if(revision!==profileRevision)return;
-    profile=saved.profile;catalog=topics.categories;profileNotice();
+    profile=saved.profile;catalog=topics.categories;profileNotice();updateOnboarding();
     if(profile)conversations.setIdentity(currentAccount,profile,true);else showEditor();
   } catch(error) {
     if(revision!==profileRevision)return;
     if(error.httpStatus===401){await renderSession(null);notice('Your session has expired. Please sign in again.',true);}
     else {profileNotice('Unable to load your profile. Please try again.','error');$('#retry-profile').hidden=false;}
-  } finally {if(revision===profileRevision)loading=false;}
+  } finally {if(revision===profileRevision){loading=false;updateOnboarding();}}
 }
 async function renderSession(account) {
   passkeyUI.setAccount(account);
   const identity=a=>a?.method==='passkey'?'passkey:'+a.id:a?.address?.toLowerCase();
   const changed=identity(currentAccount)!==identity(account);
   if(changed){conversations.clear();profileRevision++;loading=false;profile=null;}
-  currentAccount=account;if(account?.method!=='passkey')$('#profile-wallet-setup').hidden=true;conversations.setAccount(account);tokenUI.setAccount(account?.method==='passkey'?null:account);
+  currentAccount=account;updateOnboarding();if(account?.method!=='passkey')$('#profile-wallet-setup').hidden=true;conversations.setAccount(account);tokenUI.setAccount(account?.method==='passkey'?null:account);
   login.hidden=!!account;logout.hidden=!account;if(changed||!account)$('#landing').hidden=!!account;if(changed||!account)$('#profile-area').hidden=!account;
   $('#sign-in-method').textContent=account?.method==='passkey'?'Signed in with Passkey':'Signed in with '+walletName(selectedProvider||getWalletProvider());
   $('#address').textContent=account?.method==='passkey'?'':account?.address||'';$('#role').textContent=account?.role==='admin'?'Administrator':'';
@@ -119,6 +136,7 @@ $('#retry-profile').addEventListener('click',loadProfile);
 form.addEventListener('submit',async event=>{
   event.preventDefault();if(saving)return;
   profileNotice();
+  if(onboardingState(currentAccount,profile,setupReady).waitingForWallet){profileNotice('Please wait until your wallet is ready before saving your profile.','error');return;}
   const nickname=$('#nickname').value.trim();
   for(const kind of ['work','hobbies'])if($('#'+kind+'-input').value.trim()&&!addTopic(kind))return;
   const errors=profileErrors({nickname,work:selected.work,hobbies:selected.hobbies});
@@ -132,12 +150,12 @@ form.addEventListener('submit',async event=>{
   try {
     const result=await api('/api/profile',data);
     if(revision!==profileRevision)return;
-    profile=result.profile;conversations.setIdentity(currentAccount,profile);showProfile();profileNotice('Your profile has been saved.','success');$('#profile-title').focus();
+    profile=result.profile;updateOnboarding();conversations.setIdentity(currentAccount,profile);showProfile();profileNotice('Your profile has been saved.','success');$('#profile-title').focus();
   } catch(error) {
     if(revision!==profileRevision)return;
     profileNotice(error.message||'Unable to save your profile. Your changes are still in the form.','error');
   } finally {
-    saving=false;form.querySelectorAll('input,button').forEach(el=>el.disabled=false);$('#save-profile').textContent=profile?'Save changes':'Save profile';
+    saving=false;form.querySelectorAll('input,button').forEach(el=>el.disabled=false);$('#save-profile').textContent=profile?'Save changes':'Save profile';updateOnboarding();
   }
 });
 $('#terms-continue').addEventListener('click',()=>login.click());
@@ -185,7 +203,7 @@ if(isBlip(getWalletProvider())){
 }
 const conversations=createConversations({api,onProfile:async()=>{if(!profile){conversations.openProfile();showEditor();return;}if(profile){profileNotice();showProfile();await refreshPoints();}},onExpired:async()=>{await renderSession(null);notice('Your session has expired. Please sign in again.',true);}});
 const tokenUI=createTokenUI({api,onExpired:()=>renderSession(null)});
-const passkeyUI=createPasskeyUI({api,onAccount:renderSession,onExternal:async method=>{
+const passkeyUI=createPasskeyUI({api,onSetupReady:ready=>{setupReady=ready;updateOnboarding();},onAccount:renderSession,onExternal:async method=>{
   selectedProvider=method==='pelagus'?window.pelagus:getWalletProvider();
   if(method==='billpay'&&!isBlip(selectedProvider)){window.location.assign(blipOpen.href);return;}
   if(method==='pelagus'&&(!selectedProvider?.request||isBlip(selectedProvider))){window.location.assign('https://www.pelaguswallet.io/');return;}

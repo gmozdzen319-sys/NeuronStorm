@@ -1,7 +1,7 @@
 import http from 'node:http';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {profileErrors} from '../public/profile-validation.js';
+import {profileErrors,onboardingState} from '../public/profile-validation.js';
 import {saveProfile} from '../profiles.mjs';
 import {createApp} from './database.mjs';
 
@@ -30,3 +30,12 @@ test('Direct profile writes cannot bypass requirements, before any database muta
  }
 });
 
+
+test('Onboarding locks navigation until saved; only Passkey waits for verified wallet readiness',()=>{
+ for(const method of ['passkey','pelagus','blippay']){
+ assert.deepEqual(onboardingState({method},null,false),{locked:true,waitingForWallet:method==='passkey'});
+ assert.deepEqual(onboardingState({method},null,true),{locked:true,waitingForWallet:false});
+ assert.deepEqual(onboardingState({method},{nickname:'User'},false),{locked:false,waitingForWallet:false});
+ }
+ assert.deepEqual(onboardingState(null,null,false),{locked:false,waitingForWallet:false});
+});
