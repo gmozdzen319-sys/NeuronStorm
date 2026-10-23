@@ -1,4 +1,5 @@
 import {selectedFile,appendAttachments,appendAvatar} from './file-ui.js';
+import {renderVerification} from './verification-ui.js';
 import {loadReputationAdmin,clearReputationAdmin} from './reputation-ui.js';
 import {createQuestionTools} from './question-tools.js';
 import {createMemberTools} from './member-tools.js';
@@ -80,6 +81,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
     const article=node('article',undefined,question?'':'reply');
     article.append(node('span',question?'Question':'Answer','message-kind'));if(message.unread){article.classList.add('unread-pulse');article.append(node('span','New','message-new'));pulseObserver.observe(article);}
     const meta=node('div',undefined,'message-meta');meta.append(node('strong',message.author),node('time',date(message.createdAt)));appendAvatar(meta,message.avatar);meta.lastChild.dateTime=new Date(message.createdAt).toISOString();
+    const verification=node('div',undefined,'verification-fields message-verification');renderVerification(verification,message.verification);meta.append(verification);
     if(message.editedAt)meta.append(node('span','Edited '+date(message.editedAt)));article.append(meta,node('p',message.body,'message-body'));appendAttachments(article,message.attachments);return article;
   }
   function renderVotes(article,reply){
@@ -112,6 +114,8 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
         revision=thread.revision;
       }
       for(const [replyIndex,reply] of thread.replies.entries()){const article=$('#thread-replies').querySelector(`[data-reply-id="${reply.id}"]`);if(article){article.querySelector('.message-body').textContent=reply.body;renderVotes(article,reply);rewards.decorate(article,reply);memberTools.decorate(article,reply,thread);const oldBlock=article.querySelector('.block-member');if(!oldBlock||oldBlock.dataset.blockId!==(reply.blockId||'')){oldBlock?.remove();const b=questionTools.blockButton(thread.id,reply.id,reply);if(b){b.dataset.blockId=reply.blockId||'';article.append(b);}}lifecycle.decorate(article,reply,thread);const replyList=$('#thread-replies');if(replyList.children[replyIndex]!==article)replyList.insertBefore(article,replyList.children[replyIndex]||null);if(thread.deletedAt!==null)article.querySelectorAll('button').forEach(b=>b.disabled=true);}}
+      const questionVerification=$('#original-question .message-verification');if(questionVerification)renderVerification(questionVerification,thread.verification);
+      for(const reply of thread.replies){const host=$('#thread-replies').querySelector(`[data-reply-id="${reply.id}"] .message-verification`);if(host)renderVerification(host,reply.verification);}
       if(!document.hidden&&thread.deletedAt===null){await api('/api/questions/'+id+'/read',{revision:thread.revision});await loadNotifications();}
     }catch(error){if(current===epoch){await failure(error,'#thread-status');if(error.httpStatus===404){lifecycle.clock($('#thread-clock'),null);$('#one-answer-note').hidden=true;status('#thread-status','This conversation has closed or is no longer available.');debate.stop();revision=0;$('#replies-title').textContent='Replies';$('#thread-category').textContent='';$('#admin-thread-actions').hidden=true;moderated=null;$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();$('#reply-form').hidden=true;}}}
   }

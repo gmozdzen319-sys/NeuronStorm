@@ -1,4 +1,5 @@
 import {linkAttachment,fileMetadata} from './content-files.mjs';
+import {debateFields,verificationForAccounts} from './verification.mjs';
 import {currentWalletForIdentity} from './current-wallet.mjs';
 import {isBlocked,ownBlock} from './contact-preferences.mjs';
 import { randomUUID } from 'node:crypto';
@@ -75,12 +76,16 @@ export async function readThread(db,account,id,includeDeleted=false){
     (r.author<>$2)::int AS "canVote"
     FROM replies r JOIN profiles p ON p.address=r.author WHERE r.question_id=$3 AND r.deleted_at IS NULL ORDER BY upvotes DESC,r.id`).all(account.address.toLowerCase(),account.address.toLowerCase(),id));
   const tips=new Map();
+  const topicFields=new Set((await debateFields(db,id)).map(f=>f.id));
+  const verification=await verificationForAccounts(db,[...new Set([q.author,...replies.map(r=>r.walletAddress)])],Date.now());
+  const relevant=address=>(verification.get(address)||[]).filter(f=>topicFields.has(f.id));
+  for(const reply of replies)reply.verification=relevant(reply.walletAddress);
   for(const payment of (await db.prepare("SELECT p.reply_id,p.units FROM payment_intents p JOIN replies r ON r.id=p.reply_id WHERE r.question_id=$1 AND p.action='tip' AND p.completed_at IS NOT NULL").all(id))){
     const total=tips.get(payment.reply_id)||{units:0n,count:0};total.units+=BigInt(payment.units);total.count++;tips.set(payment.reply_id,total);
   }
   for(const reply of replies){reply.avatar=(await fileMetadata(db,'avatar',reply.walletAddress))[0]||null;reply.attachments=await fileMetadata(db,'reply',reply.id);reply.blockId=(await ownBlock(db,account.address.toLowerCase(),reply.walletAddress));reply.canBlock=reply.walletAddress!==account.address.toLowerCase();reply.savedVersion=(await db.prepare("SELECT version FROM saved_answers WHERE owner=$1 AND reply_id=$2").get(account.address.toLowerCase(),reply.id))?.version||null;const total=tips.get(reply.id)||{units:0n,count:0};reply.unread=reply.postedRevision>readRevision&&Boolean(reply.canVote);delete reply.postedRevision;reply.tipUnits=String(total.units);reply.tipTotal=formatBalance(String(total.units),18);reply.tipCount=total.count;}
   for(const reply of replies)reply.walletAddress=await currentWalletForIdentity(db,reply.walletAddress);
-  return {avatar:(await fileMetadata(db,'avatar',q.author))[0]||null,attachments:await fileMetadata(db,'question',q.id),canSaveAnswers:q.author===account.address.toLowerCase(),contactBlocked:(await isBlocked(db,account.address.toLowerCase(),q.author)),canBlock:q.author!==account.address.toLowerCase(),blockId:(await ownBlock(db,account.address.toLowerCase(),q.author)),unread:readRevision===0&&q.author!==account.address.toLowerCase(),expiresAt:q.created_at+QUESTION_LIFETIME,canAccept:q.author===account.address.toLowerCase(),canReply:!(await isBlocked(db,account.address.toLowerCase(),q.author))&&!(await db.prepare("SELECT 1 FROM answer_slots WHERE question_id=$1 AND author=$2").get(id,account.address.toLowerCase())),id,body:q.body,author,deletedAt:q.deleted_at,categories:(await topics(db,id)),category:category.name,categoryKind:category.kind,createdAt:q.created_at,revision:q.revision,replies:replies.map(({walletAddress,...r})=>account.role==='admin'?{...r,walletAddress}:r),recipientCount:(await db.prepare("SELECT count(*) AS n FROM question_participants WHERE question_id=$1 AND is_recipient=1").get(id)).n};
+  return {verification:relevant(q.author),avatar:(await fileMetadata(db,'avatar',q.author))[0]||null,attachments:await fileMetadata(db,'question',q.id),canSaveAnswers:q.author===account.address.toLowerCase(),contactBlocked:(await isBlocked(db,account.address.toLowerCase(),q.author)),canBlock:q.author!==account.address.toLowerCase(),blockId:(await ownBlock(db,account.address.toLowerCase(),q.author)),unread:readRevision===0&&q.author!==account.address.toLowerCase(),expiresAt:q.created_at+QUESTION_LIFETIME,canAccept:q.author===account.address.toLowerCase(),canReply:!(await isBlocked(db,account.address.toLowerCase(),q.author))&&!(await db.prepare("SELECT 1 FROM answer_slots WHERE question_id=$1 AND author=$2").get(id,account.address.toLowerCase())),id,body:q.body,author,deletedAt:q.deleted_at,categories:(await topics(db,id)),category:category.name,categoryKind:category.kind,createdAt:q.created_at,revision:q.revision,replies:replies.map(({walletAddress,...r})=>account.role==='admin'?{...r,walletAddress}:r),recipientCount:(await db.prepare("SELECT count(*) AS n FROM question_participants WHERE question_id=$1 AND is_recipient=1").get(id)).n};
 }
 export async function voteOnReply(db,account,id,replyId,input,now=Date.now()){
  return db.transaction(async () => {

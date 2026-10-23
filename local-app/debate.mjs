@@ -79,7 +79,10 @@ export async function debate(db,account,id,session,params,input,now){
   for(const r of ratings){
    const contribution=contributionById.get(r.id);
    r.canVote=!r.mine&&(!contribution.field_id||ownFields.has(contribution.field_id));
-   r.verification=(scores.get(contribution.author)||[]).find(f=>f.id===contribution.field_id)||null;
+   // Old single-topic messages can display the known context without assigning
+   // a verification contribution or retroactively awarding any points.
+   const displayField=contribution.field_id??(!contribution.kind&&fields.length===1?fields[0].id:null);
+   r.verification=(scores.get(contribution.author)||[]).find(f=>f.id===displayField)||null;
    r.followUp=contribution.kind==='follow_up';
    const message=messages.find(m=>m.id===r.id);if(message)Object.assign(message,{canVote:r.canVote,verification:r.verification,followUp:r.followUp});
   }

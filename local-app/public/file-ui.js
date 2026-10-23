@@ -11,5 +11,5 @@ export function appendAttachments(host,files){
  for(const file of files){const link=document.createElement('a');link.className='content-attachment';link.href='/api/files/'+encodeURIComponent(file.id);link.download=file.name;link.textContent='Download '+file.name.split('.').at(-1).toUpperCase()+' attachment · '+Math.max(1,Math.ceil(file.size/1024))+' KB';host.append(link);}
 }
 export function appendAvatar(host,file,large=false){
- if(!file)return;const image=document.createElement('img');image.src='/api/files/'+encodeURIComponent(file.id);image.alt='';image.className='profile-avatar'+(large?' profile-avatar--large':'');image.width=image.height=large?96:32;image.loading='lazy';host.prepend(image);
+ if(!file){const placeholder=document.createElement('span');placeholder.className='profile-avatar avatar-placeholder'+(large?' profile-avatar--large':'');placeholder.setAttribute('aria-hidden','true');host.prepend(placeholder);return;}const image=document.createElement('img');image.src='/api/files/'+encodeURIComponent(file.id);image.alt='';image.className='profile-avatar'+(large?' profile-avatar--large':'');image.width=image.height=large?96:32;image.loading='lazy';host.prepend(image);
 }

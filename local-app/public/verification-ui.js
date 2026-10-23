@@ -2,7 +2,7 @@ export function verificationIndicator(field){
  const box=document.createElement('span');box.className='verification-indicator'+(field.verified?' is-verified':'');
  const label=document.createElement('span');label.textContent=field.name+' — '+field.percent+'%'+(field.verified?' VERIFIED':'');box.append(label);
  if(field.verified){const badge=document.createElement('span');badge.className='verification-badge';badge.textContent='✓';badge.setAttribute('aria-label','Community verified');box.append(badge);}
- else{const bar=document.createElement('progress');bar.max=100;bar.value=field.percent;bar.setAttribute('aria-label',field.name+' community verification');box.append(bar);}
+ const bar=document.createElement('progress');bar.max=100;bar.value=field.percent;bar.setAttribute('aria-label',field.name+' community verification');box.append(bar);
  return box;
 }
 export function renderVerification(host,fields){host.replaceChildren();for(const field of fields||[])host.append(verificationIndicator(field));}
