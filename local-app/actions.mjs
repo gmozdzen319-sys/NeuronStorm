@@ -1,3 +1,4 @@
+import {validateUpload,storeFile} from './content-files.mjs';
 import {acceptanceCandidate,acceptAnswer,QUESTION_LIFETIME} from './lifecycle.mjs';
 import {randomBytes} from 'node:crypto';
 import {verifyMessage} from 'quais';
@@ -5,6 +6,7 @@ import {requireProfile,allowed,createQuestion,replyToThread} from './threads.mjs
 const fail=(status,message)=>Object.assign(new Error(message),{status});
 
 export async function prepareAction(db,account,session,path,input,origin,now){
+  return db.transaction(async()=>{
   (await requireProfile(db,account));
   if(typeof path!=='string')throw fail(400,'Choose a question or reply to sign.');
   const reply=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/replies$/);
@@ -24,10 +26,14 @@ export async function prepareAction(db,account,session,path,input,origin,now){
     context='Topics: '+topics.map((topic,i)=>`${topic.name} (${topic.kind}, #${payload.categoryIds[i]})`).join(', ');
   }
   const id=randomBytes(32).toString('hex'),expires=now+300000;
+  const attachment=!accepting&&input.attachment?await validateUpload(input.attachment):null;
+  if(attachment){payload.attachmentId=attachment.id;payload.attachmentDigest=attachment.digest;context+='\nAttachment: '+attachment.name+'\nSHA-256: '+attachment.digest;}
   const message=`Neuron Storm — ${accepting?'accept best answer':reply?'post reply':'send question'}\n\nWebsite: ${origin}\nWallet: ${account.address}\n${context}\n\nMessage:\n${accepting?'Accept and close the conversation.':payload.body}\n\nThis signature authorizes only this message. No transaction or transfer of funds.\nOne-time code: ${id}\nExpires at: ${new Date(expires).toISOString()}`;
   (await db.prepare("DELETE FROM signed_actions WHERE expires<$1 AND (completed IS NULL OR completed<$2)").run(now,now-86400000));
   (await db.prepare("INSERT INTO signed_actions(id,address,session_hash,path,payload,message,expires) VALUES($1,$2,$3,$4,$5,$6,$7)").run(id,account.address.toLowerCase(),session,path,JSON.stringify(payload),message,expires));
+  if(attachment){await storeFile(db,account.address,attachment,now);await db.prepare('INSERT INTO content_file_links(file_id,action_id) VALUES($1,$2)').run(attachment.id,id);}
   return {id,message};
+  });
 }
 export async function submitAction(db,account,session,path,input,now,verifyPasskey){
  return db.transaction(async () => {
@@ -58,7 +64,7 @@ export async function submitAction(db,account,session,path,input,now,verifyPassk
 
   try{
     // Also cover accidental repeat submissions from a second tab/new challenge.
-    const previous=(await db.prepare("SELECT result FROM signed_actions WHERE address=$1 AND path=$2 AND payload=$3 AND completed>$4 AND result IS NOT NULL ORDER BY completed DESC LIMIT 1").get(row.address,path,row.payload,now-120000));
+    const previous=(await db.prepare("SELECT result FROM signed_actions WHERE address=$1 AND path=$2 AND "+(payload.attachmentId?"(payload::jsonb - 'attachmentId')=($3::jsonb - 'attachmentId')":"payload=$3")+" AND completed>$4 AND result IS NOT NULL ORDER BY completed DESC LIMIT 1").get(row.address,path,row.payload,now-120000));
     const result=previous?JSON.parse(previous.result):accepting?(await acceptAnswer(db,account,accepting[1],payload,now)):reply?(await replyToThread(db,account,reply[1],payload,now)):(await createQuestion(db,account,payload,now));
     (await db.prepare("UPDATE signed_actions SET result=$1,completed=$2 WHERE id=$3").run(JSON.stringify(result),now,row.id));
     return result;

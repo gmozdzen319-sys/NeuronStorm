@@ -1,3 +1,4 @@
+import {fileMetadata} from './content-files.mjs';
 // Persistent append-only snapshots share the application database and transactions.
 
 export async function* archiveText(db){
@@ -7,7 +8,7 @@ export async function* archiveText(db){
  while(last<cutoff){
   const rows=(await db.prepare("SELECT * FROM conversation_archive WHERE id>$1 AND id<=$2 ORDER BY id LIMIT 200").all(last,cutoff));if(!rows.length)break;
   for(const row of rows){const p=JSON.parse(row.payload),line=v=>String(v??'').replace(/[\r\n\t]/g,' ');
-   yield '\n'+'='.repeat(72)+'\nEntry '+row.id+' · '+row.event+' · '+new Date(row.event_at).toISOString()+'\nQuestion: '+row.question_id+(row.reply_id!==null?' · Answer: '+row.reply_id:'')+'\nAuthor: '+line(p.nickname)+'\nWallet: '+line(p.author)+'\nVersion: '+p.version+' · Created: '+new Date(p.createdAt).toISOString()+'\nStatus: '+(p.deletedAt?"deleted":p.closedAt?'closed':'active at this entry')+'\nContent:\n'+p.body.split(/\r?\n/).map(l=>'    '+l).join('\n')+'\n';last=row.id;
+   yield '\n'+'='.repeat(72)+'\nEntry '+row.id+' · '+row.event+' · '+new Date(row.event_at).toISOString()+'\nQuestion: '+row.question_id+(row.reply_id!==null?' · Answer: '+row.reply_id:'')+'\nAuthor: '+line(p.nickname)+'\nWallet: '+line(p.author)+'\nVersion: '+p.version+' · Created: '+new Date(p.createdAt).toISOString()+'\nStatus: '+(p.deletedAt?"deleted":p.closedAt?'closed':'active at this entry')+'\nContent:\n'+p.body.split(/\r?\n/).map(l=>'    '+l).join('\n')+'\n';for(const file of await fileMetadata(db,'archive',row.id))yield '\nAttachment (sign in as administrator): /api/files/'+file.id+' · '+file.name+'\n';last=row.id;
   }
  }
 }

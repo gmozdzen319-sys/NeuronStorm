@@ -1,3 +1,4 @@
+import {readFileForAccount} from './content-files.mjs';
 import {createTokenNotices} from './token-notices.mjs';
 import {createWalletRPC as notificationRPC} from './wallet/chain.mjs';
 import {currentWalletForIdentity} from './current-wallet.mjs';
@@ -60,7 +61,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   const passkeys=createPasskeyAccounts(db,{config:passkeyConfig,legal,now,onRegistered:feeAutoActivation?feeSignupEnrollment(feeWallet.registry,now):null});
   const passkeyWallet=withFeeWallet(db,createPasskeyWallet(db,{chain:walletChain,executor:walletExecutor,autoActivation:!!autoActivation&&!feeAutoActivation,now}),feeWallet,{readBalance:createTokenBalanceReader(),now});
   let maintenance;
-  const maintain=()=>maintenance??=(async()=>{await expireQuestions(db,now());await remindDeadlines(db,now());})().finally(()=>{maintenance=null;});
+  const maintain=()=>maintenance??=(async()=>{await expireQuestions(db,now());await remindDeadlines(db,now());await db.prepare('DELETE FROM content_file_links WHERE action_id IN (SELECT id FROM signed_actions WHERE expires<$1 AND (completed IS NULL OR completed<$2))').run(now(),now()-86400000);})().finally(()=>{maintenance=null;});
   const confirmReward=createRewardConfirmation(db,paymentFetch);
   const payments=createPayments(db,paymentFetch,now);
   const tokenNotices=process.env.RENDER==='true'?createTokenNotices(db,notificationRPC(),now):null;
@@ -76,12 +77,12 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   }
   async function account(req){const current=await externalAccount(req)||await passkeys.session(cookies(req).ns_passkey_session);return current?.address?current:null;}
   async function actionSession(req){return hash((await account(req))?.method==='passkey'?cookies(req).ns_passkey_session:cookies(req).ns_session||'');}
-  async function body(req) {
+  async function body(req,maxBytes=32768) {
     if (req.headers['content-type'] !== 'application/json') throw failure(415, 'JSON format is required.');
     let data = '';
     for await (const chunk of req) {
       data += chunk;
-      if (Buffer.byteLength(data) > 32768) throw failure(413, 'The request is too large.');
+      if (Buffer.byteLength(data) > maxBytes) throw failure(413, 'The request is too large.');
     }
     try {
       const value = JSON.parse(data);
@@ -109,6 +110,12 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         if (++counter.count > (isDebate?120:60)) throw failure(429, 'Too many attempts. Please try again in a minute.');
         (await db.prepare("DELETE FROM challenges WHERE expires<=$1").run(now()));
         (await db.prepare("DELETE FROM sessions WHERE expires<=$1").run(now()));
+      }
+      const fileRoute=path.match(/^\/api\/files\/([a-f0-9-]{36})$/);
+      if(fileRoute&&req.method==='GET'){
+        const file=await readFileForAccount(db,await account(req),fileRoute[1]);
+        res.setHeader('Content-Security-Policy',"default-src 'none'; sandbox; frame-ancestors 'none'");
+        res.writeHead(200,{'Content-Type':file.avatar?file.mime:'application/octet-stream','Content-Disposition':(file.avatar?'inline':'attachment')+'; filename="'+file.name+'"','Content-Length':file.bytes.length});res.end(file.bytes);return;
       }
       if(req.method==='GET'&&path==='/api/legal')return json(200,{published:legal.published,version:legal.version,hash:legal.hash});
       if(req.method==='GET'&&path==='/api/passkey/config')return json(200,{enabled:passkeyConfig.enabled,walletEnabled:true});
@@ -185,7 +192,9 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if(path==='/api/token/confirm'&&req.method==='POST'){const current=(await account(req));if(!current)throw failure(401,'Please sign in first.');const input=await body(req);if(input.contract!==NS_TOKEN.address||input.confirmed!==true)throw failure(400,'Confirm that Neuron Storm is visible in Pelagus.');(await db.prepare("INSERT INTO token_confirmations VALUES($1,$2,$3) ON CONFLICT(address) DO UPDATE SET contract=excluded.contract,confirmed_at=excluded.confirmed_at").run(current.address.toLowerCase(),NS_TOKEN.address,now()));return json(200,{confirmed:true});}
       if(path==='/api/wallet' && req.method==='GET'){const current=(await account(req));if(!current)throw failure(401,'Please sign in to view your wallet.');const address=await currentWalletForIdentity(db,current.address,{required:true});const neuron=await readNeuron(address);return json(200,{address,network:'Quai Mainnet',assets:[{name:NS_TOKEN.name,symbol:NS_TOKEN.symbol,type:'ERC-20',contract:NS_TOKEN.address,balance:neuron.balance}],updatedAt:neuron.updatedAt||new Date(now()).toISOString()});}
       if(path==='/api/actions/challenge'&&req.method==='POST'){
-        const input=await body(req),current=await account(req);
+        const current=await account(req);
+        if(!current)throw failure(401,'Please sign in first.');
+        const input=await body(req,7100000);
         const challenge=await prepareAction(db,current,await actionSession(req),input.path,input.payload,origin,now());
         return json(200,{...challenge,...(current.method==='passkey'?{method:'passkey',options:await passkeys.actionOptions(current,challenge.message)}:{})});
       }
@@ -233,7 +242,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         if (path === '/api/categories' && req.method === 'GET') return json(200, { categories: (await readCategories(db,new URL(req.url,origin).searchParams.get('available')==='1')) });
         if (path === '/api/profile' && req.method === 'GET') return json(200, { profile: (await readProfile(db, address)), tokenSetupRequired: false, token:NS_TOKEN });
         if (path === '/api/profile' && req.method === 'POST') {
-          const input = await body(req);
+          const input = await body(req,1450000);
           return json(200, { profile: (await saveProfile(db, address, input, now())) });
         }
         throw failure(405, 'This method is not supported.');
@@ -288,7 +297,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0),cookie('ns_passkey_session','',0),cookie('ns_passkey_challenge','',0)]);
         return json(200, { ok: true });
       }
-      const files = { '/profile-validation.js':['public/profile-validation.js','text/javascript'], '/pelagus-mark.png':['public/brands/pelagus-mark.png','image/png'], '/blip-mark.svg':['public/brands/blip-mark.svg','image/svg+xml'], '/passkey-ui.js':['public/passkey-ui.js','text/javascript'], '/fonts/audiowide/Audiowide-Regular.ttf':['public/fonts/audiowide/Audiowide-Regular.ttf','font/ttf'], '/reputation-ui.js':['public/reputation-ui.js','text/javascript'], '/question-tools.js':['public/question-tools.js','text/javascript'], '/member-tools.js':['public/member-tools.js','text/javascript'], '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
+      const files = { '/file-ui.js':['public/file-ui.js','text/javascript'], '/profile-validation.js':['public/profile-validation.js','text/javascript'], '/pelagus-mark.png':['public/brands/pelagus-mark.png','image/png'], '/blip-mark.svg':['public/brands/blip-mark.svg','image/svg+xml'], '/passkey-ui.js':['public/passkey-ui.js','text/javascript'], '/fonts/audiowide/Audiowide-Regular.ttf':['public/fonts/audiowide/Audiowide-Regular.ttf','font/ttf'], '/reputation-ui.js':['public/reputation-ui.js','text/javascript'], '/question-tools.js':['public/question-tools.js','text/javascript'], '/member-tools.js':['public/member-tools.js','text/javascript'], '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });

@@ -1,3 +1,4 @@
+import {selectedFile,appendAvatar} from './file-ui.js';
 import {profileErrors,onboardingState} from './profile-validation.js';
 import {createPasskeyUI} from './passkey-ui.js';
 import {renderReputation} from './reputation-ui.js';
@@ -46,6 +47,7 @@ function profileNotice(message = '', type = '') { const target=$('#profile-statu
 function showProfile() {
   for(const control of Object.values(topicSuggestions))control.close();
   conversations.openProfile();
+  $('#saved-avatar').replaceChildren();appendAvatar($('#saved-avatar'),profile.avatar,true);
   $('#profile-eyebrow').textContent='YOUR CORNER OF NEURON STORM';
   $('#profile-title').textContent='My Profile';
   $('#profile-intro').textContent='Your experience, your interests, your next conversation.';
@@ -71,6 +73,7 @@ function renderSelected(kind) {
 const topicSuggestions={};
 function fillOptions(){for(const control of Object.values(topicSuggestions))control.refresh();}
 function showEditor() {
+  $('#profile-picture').value='';
   if(profile)sectionHistory.record({view:'profile-edit'});
   $('#profile-wallet-setup').hidden=!!profile||currentAccount?.method!=='passkey';
   for(const name of ['nickname','topics']){$('#'+name+'-error').hidden=true;$('#'+name+'-error').textContent='';}
@@ -151,6 +154,7 @@ form.addEventListener('submit',async event=>{
   const revision=profileRevision;
   saving=true;form.querySelectorAll('input,button').forEach(el=>el.disabled=true);$('#save-profile').textContent='Saving…';
   try {
+    const avatar=await selectedFile($('#profile-picture'),true);if(avatar)data.avatar=avatar;
     const result=await api('/api/profile',data);
     if(revision!==profileRevision)return;
     profile=result.profile;updateOnboarding();conversations.setIdentity(currentAccount,profile);showProfile();profileNotice('Your profile has been saved.','success');$('#profile-title').focus();

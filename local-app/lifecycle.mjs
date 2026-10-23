@@ -1,3 +1,4 @@
+import {fileMetadata} from './content-files.mjs';
 import {currentWalletForIdentity} from './current-wallet.mjs';
 export const QUESTION_LIFETIME=7*24*60*60*1000;
 const fail=(status,message)=>Object.assign(new Error(message),{status});
@@ -49,5 +50,6 @@ export async function acceptedAnswers(db,params){
   const total=(await db.prepare("SELECT count(*) AS n FROM accepted_answers").get()).n,pages=Math.max(1,Math.ceil(total/25)),current=Math.min(page,pages);
   const result={page:current,pages,total,answers:(await db.prepare("SELECT question_id AS \"questionId\",question_body AS question,answer_body AS answer,question_nickname AS \"askedBy\",answer_nickname AS \"answeredBy\",COALESCE((SELECT recipient FROM reward_receipts rr WHERE rr.question_id=accepted_answers.question_id),answer_author) AS \"walletAddress\",upvotes,selection,closed_at AS \"closedAt\",(SELECT tx_hash FROM reward_receipts rr WHERE rr.question_id=accepted_answers.question_id) AS \"rewardTx\" FROM accepted_answers ORDER BY closed_at DESC,question_id LIMIT 25 OFFSET $1").all((current-1)*25))};
   for(const answer of result.answers)if(!answer.rewardTx)answer.walletAddress=await currentWalletForIdentity(db,answer.walletAddress);
+  for(const answer of result.answers)answer.attachments=await fileMetadata(db,'accepted',answer.questionId);
   return result;
 }

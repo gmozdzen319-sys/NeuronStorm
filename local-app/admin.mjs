@@ -54,7 +54,7 @@ export async function adminMembers(db,account,params){
  if(!['oldest','newest'].includes(order)||!['all','passkey','pelagus','blippay','external_unknown'].includes(method))throw fail(400,'Invalid member filter.');
  if(!Number.isSafeInteger(requested)||requested<1||requested>100000||search.length>100)throw fail(400,'Invalid member search.');
  const source=`SELECT a.address AS identity,COALESCE(p.nickname,'Profile incomplete') AS nickname,
- a.created_at AS "createdAt",c.account_id AS "accountId",
+ a.created_at AS "createdAt",c.account_id AS "accountId",(SELECT json_build_object('id',l.file_id) FROM content_file_links l WHERE l.avatar_owner=p.address) AS avatar,
  CASE WHEN c.account_id IS NOT NULL THEN 'passkey' ELSE COALESCE(m.method,'external_unknown') END AS method,
  CASE WHEN c.account_id IS NULL THEN a.address ELSE COALESCE(w.address,v.address) END AS address,
  CASE WHEN w.address IS NOT NULL THEN 'v3' WHEN v.address IS NOT NULL THEN 'v2' ELSE NULL END AS version,

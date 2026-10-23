@@ -1,8 +1,9 @@
+import {appendAttachments} from './file-ui.js';
 export function createMemberTools({api,getAccount}){
  const $=s=>document.querySelector(s),el=(tag,text)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;return n;};
  let page=1,pages=1,reportPage=1,reportPages=1,epoch=0,selection=null,busy=false,reportSignature='';
  async function loadLibrary(){const current=epoch,owner=getAccount()?.address;try{const data=await api('/api/library?page='+page);if(epoch!==current||owner!==getAccount()?.address)return;page=data.page;pages=data.pages;$('#library-status').textContent='';$('#library-list').replaceChildren();
-  for(const row of data.items){const card=el('article');card.className='saved-answer';card.append(el('h2',row.question),el('small',row.author+' · Saved version '+row.version),el('p',row.answer));const remove=el('button','Remove from saved');remove.className='login';remove.type='button';remove.onclick=async()=>{remove.disabled=true;try{await api('/api/library',{action:'remove',replyId:row.replyId});await loadLibrary();}catch(e){$('#library-status').textContent=e.message;remove.disabled=false;}};card.append(remove);$('#library-list').append(card);}
+  for(const row of data.items){const card=el('article');card.className='saved-answer';card.append(el('h2',row.question),el('small',row.author+' · Saved version '+row.version),el('p',row.answer));appendAttachments(card,row.attachments);const remove=el('button','Remove from saved');remove.className='login';remove.type='button';remove.onclick=async()=>{remove.disabled=true;try{await api('/api/library',{action:'remove',replyId:row.replyId});await loadLibrary();}catch(e){$('#library-status').textContent=e.message;remove.disabled=false;}};card.append(remove);$('#library-list').append(card);}
   if(!data.items.length)$('#library-list').append(el('p','No saved answers yet. Use Save answer on an answer to your own question.'));
   $('#library-page').textContent=page+' / '+pages;$('#library-prev').disabled=page<=1;$('#library-next').disabled=page>=pages;
  }catch(e){if(current===epoch)$('#library-status').textContent=e.message;}}

@@ -42,7 +42,7 @@ export async function reputationRanking(db,params,now,includeAddresses=false,add
  FROM reputation_events e LEFT JOIN reputation_event_categories ec ON ec.event_id=e.id AND ec.category_id=$2
  WHERE e.round_id=$1 AND ($2=0 OR ec.event_id IS NOT NULL) GROUP BY e.recipient),
  ranked AS(SELECT *,rank() OVER(ORDER BY "weeklyUnits" DESC) AS position FROM scores)
- SELECT s.*,p.nickname,COALESCE((SELECT sum(units)::bigint FROM reputation_events WHERE recipient=s.recipient),0) AS "totalUnits",
+ SELECT s.*,p.nickname,(SELECT json_build_object('id',l.file_id) FROM content_file_links l WHERE l.avatar_owner=p.address) AS avatar,COALESCE((SELECT sum(units)::bigint FROM reputation_events WHERE recipient=s.recipient),0) AS "totalUnits",
  (SELECT c.name FROM reputation_events e JOIN reputation_event_categories ec ON ec.event_id=e.id JOIN categories c ON c.id=ec.category_id WHERE e.recipient=s.recipient GROUP BY c.id ORDER BY sum(ec.units) DESC,c.id LIMIT 1) AS expertise
  FROM ranked s JOIN profiles p ON p.address=s.recipient ORDER BY s.position,p.nickname,s.recipient LIMIT $3`).all(round,category,limit);
  const result=rows.map(({recipient,...r})=>({...r,...(includeAddresses?{address:recipient}:{}),stars:r.weeklyUnits/100}));

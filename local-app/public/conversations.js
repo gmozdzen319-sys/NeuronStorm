@@ -1,3 +1,4 @@
+import {selectedFile,appendAttachments,appendAvatar} from './file-ui.js';
 import {loadReputationAdmin,clearReputationAdmin} from './reputation-ui.js';
 import {createQuestionTools} from './question-tools.js';
 import {createMemberTools} from './member-tools.js';
@@ -44,7 +45,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
   async function failure(error,target){if(error.httpStatus===401){clear();await onExpired();return;}status(target,error.message||'Unable to load this conversation. Please try again.',true);}
   function questionRow(item){
     const button=node('button',undefined,'question-row'+(item.unread?' unread-pulse':''));button.type='button';
-    const top=node('div',undefined,'question-meta');top.append(node('span',(item.categories||[{name:item.category}]).map(t=>t.name).join(' · ')),node('span',date(item.updatedAt)));
+    const top=node('div',undefined,'question-meta');appendAvatar(top,item.avatar);top.append(node('span',(item.categories||[{name:item.category}]).map(t=>t.name).join(' · ')),node('span',date(item.updatedAt)));
     if(item.replyCount===0){button.classList.add('awaiting-answer');if(item.waitingUrgent)button.classList.add('awaiting-urgent');top.append(node('span',item.waitingUrgent?'Needs an answer · less than 24h left':'Waiting for an answer','awaiting-badge'));}
     if(item.unread)top.append(node('span','Unread','unread'));
     const title=node('h2',item.title),excerpt=node('p',item.excerpt.split('\n').slice(1).join('\n').trim(),'question-excerpt'),bottom=node('div',undefined,'question-meta');
@@ -78,8 +79,8 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
   function renderMessage(message,question=false){
     const article=node('article',undefined,question?'':'reply');
     article.append(node('span',question?'Question':'Answer','message-kind'));if(message.unread){article.classList.add('unread-pulse');article.append(node('span','New','message-new'));pulseObserver.observe(article);}
-    const meta=node('div',undefined,'message-meta');meta.append(node('strong',message.author),node('time',date(message.createdAt)));meta.lastChild.dateTime=new Date(message.createdAt).toISOString();
-    if(message.editedAt)meta.append(node('span','Edited '+date(message.editedAt)));article.append(meta,node('p',message.body,'message-body'));return article;
+    const meta=node('div',undefined,'message-meta');meta.append(node('strong',message.author),node('time',date(message.createdAt)));appendAvatar(meta,message.avatar);meta.lastChild.dateTime=new Date(message.createdAt).toISOString();
+    if(message.editedAt)meta.append(node('span','Edited '+date(message.editedAt)));article.append(meta,node('p',message.body,'message-body'));appendAttachments(article,message.attachments);return article;
   }
   function renderVotes(article,reply){
     let bar=article.querySelector('.reply-votes');
@@ -142,7 +143,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
     event.preventDefault();if(sending)return;const categoryIds=[...document.querySelectorAll('input[name="question-topic"]:checked')].map(el=>Number(el.value)),body=$('#question-body').value.trim();
     if(!categoryIds.length){status('#question-status','Choose at least one topic from Work & Education or Hobbies & Interests.',true);$('#picker-work').open=true;$('#search-work').focus();return;}if(!body){status('#question-status','Enter your question.',true);$('#question-body').focus();return;}
     const current=epoch;sending=true;$('#send-question').disabled=true;status('#question-status','Preparing your preview…');
-    try{const result=await api('/api/questions/preview',{categoryIds,body});if(current!==epoch)return;questionPreview={payload:{categoryIds:result.categoryIds,body:result.body},epoch:current,owner:identity.address};$('#question-preview-body').textContent=result.body;$('#question-preview-topics').textContent=result.topics.join(' · ');$('#question-preview-count').textContent=result.recipientCount+' unique '+(result.recipientCount===1?'recipient':'recipients');$('#question-preview-status').textContent='';status('#question-status');document.activeElement?.blur();$('#question-preview-dialog').showModal();$('#question-preview-dialog').scrollTop=0;}
+    try{const attachment=await selectedFile($('#question-file'));const result=await api('/api/questions/preview',{categoryIds,body});if(current!==epoch)return;questionPreview={payload:{categoryIds:result.categoryIds,body:result.body,...(attachment?{attachment}:{})},epoch:current,owner:identity.address};$('#question-preview-body').textContent=result.body;$('#question-preview-file').textContent=attachment?'Attachment: '+attachment.name:'';$('#question-preview-topics').textContent=result.topics.join(' · ');$('#question-preview-count').textContent=result.recipientCount+' unique '+(result.recipientCount===1?'recipient':'recipients');$('#question-preview-status').textContent='';status('#question-status');document.activeElement?.blur();$('#question-preview-dialog').showModal();$('#question-preview-dialog').scrollTop=0;}
     catch(error){if(current===epoch)await failure(error,'#question-status');}
     finally{sending=false;$('#send-question').disabled=false;}
   });
@@ -158,7 +159,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
   $('#reply-form').addEventListener('submit',async event=>{
     event.preventDefault();if(sending||!threadId)return;const body=$('#reply-body').value.trim();if(!body){status('#reply-status','Enter a reply.',true);$('#reply-body').focus();return;}
     const current=epoch,id=threadId;sending=true;$('#send-reply').disabled=true;status('#reply-status','Posting your reply…');
-    try{await signedSend('/api/questions/'+id+'/replies',{body},text=>status('#reply-status',text));if(current!==epoch)return;$('#reply-body').value='';status('#reply-status','Your reply has been posted.');await loadThread();}
+    try{const attachment=await selectedFile($('#reply-file'));await signedSend('/api/questions/'+id+'/replies',{body,...(attachment?{attachment}:{})},text=>status('#reply-status',text));if(current!==epoch)return;$('#reply-body').value='';$('#reply-file').value='';status('#reply-status','Your reply has been posted.');await loadThread();}
     catch(error){if(current===epoch)await failure(error,'#reply-status');}
     finally{sending=false;$('#send-reply').disabled=false;}
   });
@@ -211,7 +212,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
     }catch(error){if(current===epoch)await failure(error,'#wallet-status');}finally{if(current===epoch)$('#wallet-refresh').disabled=false;}
   }
   $('#wallet-refresh').addEventListener('click',loadWallet);$('#wallet-profile').addEventListener('click',onProfile);
-  return {openThread,clear,setAccount(account){if(identity?.address!==account?.address){lifecycle.clear();memberTools.clear();questionPreview=null;$('#question-preview-dialog').close();}identity=account;questionTools.setAccount(account);sounds.setAccount(account);rewards.setAccount(account);$('#wallet-button').hidden=!account;},openProfile(){if(identity)shell('profile');},setIdentity(account,profile,openInbox=false){identity=account;questionTools.setAccount(account);globe.setAccount(account);sounds.setAccount(account);rewards.setAccount(account);$('#admin-nav').hidden=account.role!=='admin';$('#notifications-button').hidden=false;loadNotifications();$('#member-nav').hidden=false;$('#ask-question').hidden=false;$('#member-name').hidden=false;$('#member-name').textContent=profile.nickname;if(openInbox){if(account.role==='admin')showAdmin();else ask();}}};
+  return {openThread,clear,setAccount(account){if(identity?.address!==account?.address){lifecycle.clear();memberTools.clear();questionPreview=null;$('#question-preview-dialog').close();}identity=account;questionTools.setAccount(account);sounds.setAccount(account);rewards.setAccount(account);$('#wallet-button').hidden=!account;},openProfile(){if(identity)shell('profile');},setIdentity(account,profile,openInbox=false){identity=account;questionTools.setAccount(account);globe.setAccount(account);sounds.setAccount(account);rewards.setAccount(account);$('#admin-nav').hidden=account.role!=='admin';$('#notifications-button').hidden=false;loadNotifications();$('#member-nav').hidden=false;$('#ask-question').hidden=false;$('#member-name').hidden=false;$('#member-name').textContent=profile.nickname;appendAvatar($('#member-name'),profile.avatar);if(openInbox){if(account.role==='admin')showAdmin();else ask();}}};
 }
 
 // History stores navigation destinations only, never transaction or form state.

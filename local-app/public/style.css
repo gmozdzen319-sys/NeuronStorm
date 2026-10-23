@@ -203,3 +203,5 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 .profile-required{color:#ff5265;margin-left:3px;font-weight:700}.profile-field-error{color:#ffb4bc;background:#220c14;border-left:3px solid #ff5265;padding:10px 14px;font-size:14px;line-height:1.5}
 
 .profile-onboarding .brand{cursor:default;opacity:.65}.profile-onboarding #wallet-button{opacity:.45;cursor:not-allowed}
+
+.profile-avatar{width:32px;height:32px;border-radius:50%;object-fit:cover;flex-shrink:0;border:1px solid #315364;vertical-align:middle;margin-right:8px}.profile-avatar--large{width:96px;height:96px;margin:0 0 14px}.content-attachment{display:block;width:fit-content;max-width:100%;overflow-wrap:anywhere;padding:12px 16px;margin:14px 0;border:1px solid #315364;border-radius:8px;background:#0b1c28;color:#65dcee;text-decoration:none}.content-attachment:hover{border-color:#65dcee}.avatar-upload{margin-bottom:24px}input[type=file]{max-width:100%;box-sizing:border-box;font:inherit}input[type=file]::file-selector-button{background:#122b3b;color:#c4edff;border:1px solid #315364;border-radius:6px;padding:9px;margin-right:10px;cursor:pointer}

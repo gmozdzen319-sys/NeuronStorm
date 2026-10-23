@@ -1,3 +1,4 @@
+import {fileMetadata} from './content-files.mjs';
 import {requireProfile,allowed} from './threads.mjs';
 import {requireAdmin} from './admin.mjs';
 const fail=(status,message)=>Object.assign(Error(message),{status});
@@ -7,7 +8,7 @@ export async function library(db,account,input,params=new URLSearchParams(),now=
  return db.transaction(async () => {
 
  (await requireProfile(db,account));const owner=account.address.toLowerCase();
- if(!input)return (await pageRows(db,"SELECT reply_id AS \"replyId\",question,answer,author,version,saved_at AS \"savedAt\" FROM saved_answers WHERE owner=$1 ORDER BY saved_at DESC,reply_id",[owner],params));
+ if(!input){const result=(await pageRows(db,"SELECT reply_id AS \"replyId\",question,answer,author,version,saved_at AS \"savedAt\" FROM saved_answers WHERE owner=$1 ORDER BY saved_at DESC,reply_id",[owner],params));for(const row of result.items)row.attachments=await fileMetadata(db,'saved',row.replyId,owner);return result;}
  if(!Number.isSafeInteger(input.replyId))throw fail(400,'Choose an answer.');
  if(input.action==='remove'){(await db.prepare("DELETE FROM saved_answers WHERE owner=$1 AND reply_id=$2").run(owner,input.replyId));return {ok:true};}
  if(input.action!=='save')throw fail(400,'Choose save or remove.');
