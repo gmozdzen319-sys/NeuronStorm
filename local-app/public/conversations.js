@@ -216,7 +216,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
     }catch(error){if(current===epoch)await failure(error,'#wallet-status');}finally{if(current===epoch)$('#wallet-refresh').disabled=false;}
   }
   $('#wallet-refresh').addEventListener('click',loadWallet);$('#wallet-profile').addEventListener('click',onProfile);
-  return {openThread,clear,setAccount(account){if(identity?.address!==account?.address){lifecycle.clear();memberTools.clear();questionPreview=null;$('#question-preview-dialog').close();}identity=account;questionTools.setAccount(account);sounds.setAccount(account);rewards.setAccount(account);$('#wallet-button').hidden=!account;},openProfile(){if(identity)shell('profile');},setIdentity(account,profile,openInbox=false){identity=account;questionTools.setAccount(account);globe.setAccount(account);sounds.setAccount(account);rewards.setAccount(account);$('#admin-nav').hidden=account.role!=='admin';$('#notifications-button').hidden=false;loadNotifications();$('#member-nav').hidden=false;$('#ask-question').hidden=false;$('#member-name').hidden=false;$('#member-name').textContent=profile.nickname;appendAvatar($('#member-name'),profile.avatar);if(openInbox){if(account.role==='admin')showAdmin();else ask();}}};
+  return {openDefault(){if(identity?.role==='admin')showAdmin();else ask();},openThread,clear,setAccount(account){if(identity?.address!==account?.address){lifecycle.clear();memberTools.clear();questionPreview=null;$('#question-preview-dialog').close();}identity=account;questionTools.setAccount(account);sounds.setAccount(account);rewards.setAccount(account);$('#wallet-button').hidden=!account;},openProfile(){if(identity)shell('profile');},setIdentity(account,profile,openInbox=false){identity=account;questionTools.setAccount(account);globe.setAccount(account);sounds.setAccount(account);rewards.setAccount(account);$('#admin-nav').hidden=account.role!=='admin';$('#notifications-button').hidden=false;loadNotifications();$('#member-nav').hidden=false;$('#ask-question').hidden=false;$('#member-name').hidden=false;$('#member-name').textContent=profile.nickname;appendAvatar($('#member-name'),profile.avatar);if(openInbox){if(account.role==='admin')showAdmin();else ask();}}};
 }
 
 // History stores navigation destinations only, never transaction or form state.
@@ -234,5 +234,9 @@ export function createSectionHistory(browser,restore){
   const saved=event.state?.[key];if(!saved||saved.owner!==owner)return;
   replaying=true;try{restore(saved.route);}finally{replaying=false;}
  });
- return {record,setOwner(value){owner=value;}};
+ function restoreCurrent(){
+  const saved=browser.history.state?.[key];if(!owner||saved?.owner!==owner)return false;
+  replaying=true;try{return restore(saved.route)!==false;}finally{replaying=false;}
+ }
+ return {record,restoreCurrent,setOwner(value){owner=value;}};
 }

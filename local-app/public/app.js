@@ -99,7 +99,7 @@ async function loadProfile() {
     const [saved,topics]=await Promise.all([api('/api/profile'),api('/api/categories')]);
     if(revision!==profileRevision)return;
     profile=saved.profile;catalog=topics.categories;profileNotice();updateOnboarding();
-    if(profile)conversations.setIdentity(currentAccount,profile,true);else showEditor();
+    if(profile){conversations.setIdentity(currentAccount,profile);if(!sectionHistory.restoreCurrent())conversations.openDefault();}else showEditor();
   } catch(error) {
     if(revision!==profileRevision)return;
     if(error.httpStatus===401){await renderSession(null);notice('Your session has expired. Please sign in again.',true);}
@@ -211,12 +211,12 @@ if(isBlip(getWalletProvider())){
   while(node=walker.nextNode())if(node.parentElement.tagName!=='SCRIPT'&&!node.parentElement.closest('#blip-info, #auth-dialog'))node.textContent=node.textContent.replaceAll('Pelagus','Blip').replaceAll('PELAGUS','BLIP');
 }
 const sectionHistory=createSectionHistory(window,route=>{
- if(!currentAccount||onboardingState(currentAccount,profile,setupReady).locked||!route||!['thread','profile-edit','profile','wallet','notifications','inbox','mine','ask','admin','reports','blocked','library','ranking'].includes(route.view))return;
- if(route.view==='thread'&&typeof route.id==='string'){conversations.openThread(route.id,route.fromAdmin===true);return;}
- if(route.view==='profile-edit'){showProfile();showEditor();return;}
- if(route.view==='notifications'){$('#notifications-button').click();return;}
+ if(!currentAccount||onboardingState(currentAccount,profile,setupReady).locked||!route||!['thread','profile-edit','profile','wallet','notifications','inbox','mine','ask','admin','reports','blocked','library','ranking'].includes(route.view))return false;
+ if(route.view==='thread'){if(typeof route.id!=='string')return false;conversations.openThread(route.id,route.fromAdmin===true);return true;}
+ if(route.view==='profile-edit'){showProfile();showEditor();return true;}
+ if(route.view==='notifications'){$('#notifications-button').click();return true;}
  const control=document.querySelector('[data-view="'+route.view+'"]');
- if(control&&!control.hidden&&!control.disabled)control.click();
+ if(control&&!control.hidden&&!control.disabled){control.click();return true;}return false;
 });
 document.addEventListener('neuron-wallet-view',()=>sectionHistory.record({view:'wallet'}));
 const conversations=createConversations({api,onNavigate:route=>sectionHistory.record(route),getPaymentProvider:paymentProvider,onPasskeyPayment:intent=>passkeyUI.openPayment(intent),onProfile:async()=>{if(!profile){conversations.openProfile();showEditor();return;}if(profile){profileNotice();showProfile();await refreshPoints();}},onExpired:async()=>{await renderSession(null);notice('Your session has expired. Please sign in again.',true);}});
