@@ -1,6 +1,6 @@
 export function verificationIndicator(field){
  const box=document.createElement('span');box.className='verification-indicator'+(field.verified?' is-verified':'');
- const label=document.createElement('span');label.textContent=field.name+' — '+field.percent+'%'+(field.verified?' VERIFIED':'');box.append(label);
+ const label=document.createElement('span');label.textContent=field.name+' — '+field.percent+'%'+(field.verified?' VERIFIED':' verified');box.append(label);
  if(field.verified){const badge=document.createElement('span');badge.className='verification-badge';badge.textContent='✓';badge.setAttribute('aria-label','Community verified');box.append(badge);}
  const bar=document.createElement('progress');bar.max=100;bar.value=field.percent;bar.setAttribute('aria-label',field.name+' community verification');box.append(bar);
  return box;
