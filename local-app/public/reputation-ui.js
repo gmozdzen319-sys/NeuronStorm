@@ -7,9 +7,9 @@ export function scoreCard(score){
  for(const [label,value] of [['Total Reputation',points(score.units)],['Weekly Score',points(score.weekly.units)],['Weekly Rank',score.weeklyRank?'#'+score.weeklyRank:'—'],['Helpful',score.helpful],['Not Helpful',score.notHelpful],['Best Answers / Solved',score.bestAnswers],['Q&A Reputation',points(score.qaUnits)],['Debate Reputation',points(score.debateUnits)]]){
   const item=el('div','');item.append(el('dt',label),el('dd',value));stats.append(item);
  }
- box.append(stats,el('h3','Experience recognised by the community'));
+ box.append(stats);
  const cats=el('div','','reputation-categories');for(const c of score.categories)cats.append(el('span',c.name+' · '+points(c.units),'reputation-chip'));
- box.append(cats);if(!score.categories.length)box.append(el('p','Your evaluated contributions will appear here.','field-hint'));
+ box.append(cats);
  return box;
 }
 export function renderReputation(score){const host=document.querySelector('#profile-reputation');if(host&&score)host.replaceChildren(scoreCard(score));}
