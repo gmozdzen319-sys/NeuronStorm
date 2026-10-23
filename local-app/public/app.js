@@ -7,7 +7,7 @@ import {startNeuronBackground} from './neuron-background.js';
 startNeuronBackground();
 import {createTokenUI} from './token-ui.js';
 import { connectWallet, signIn, walletError } from './wallet.js';
-import { createConversations } from './conversations.js';
+import { createConversations, createSectionHistory } from './conversations.js';
 const $ = selector => document.querySelector(selector);
 const login = $('#login'), logout = $('#logout'), status = $('#status'), form = $('#profile-form');
 let legalInfo=null, selectedProvider=null;
@@ -71,6 +71,7 @@ function renderSelected(kind) {
 const topicSuggestions={};
 function fillOptions(){for(const control of Object.values(topicSuggestions))control.refresh();}
 function showEditor() {
+  if(profile)sectionHistory.record({view:'profile-edit'});
   $('#profile-wallet-setup').hidden=!!profile||currentAccount?.method!=='passkey';
   for(const name of ['nickname','topics']){$('#'+name+'-error').hidden=true;$('#'+name+'-error').textContent='';}
   for(const kind of ['work','hobbies'])$('#'+kind+'-input').removeAttribute('aria-invalid');
@@ -106,7 +107,7 @@ async function renderSession(account) {
   const identity=a=>a?.method==='passkey'?'passkey:'+a.id:a?.address?.toLowerCase();
   const changed=identity(currentAccount)!==identity(account);
   if(changed){conversations.clear();profileRevision++;loading=false;profile=null;}
-  currentAccount=account;updateOnboarding();if(account?.method!=='passkey')$('#profile-wallet-setup').hidden=true;conversations.setAccount(account);tokenUI.setAccount(account?.method==='passkey'?null:account);
+  currentAccount=account;sectionHistory.setOwner(identity(account)||null);updateOnboarding();if(account?.method!=='passkey')$('#profile-wallet-setup').hidden=true;conversations.setAccount(account);tokenUI.setAccount(account?.method==='passkey'?null:account);
   login.hidden=!!account;logout.hidden=!account;if(changed||!account)$('#landing').hidden=!!account;if(changed||!account)$('#profile-area').hidden=!account;
   $('#sign-in-method').textContent=account?.method==='passkey'?'Signed in with Passkey':'Signed in with '+walletName(selectedProvider||getWalletProvider());
   $('#address').textContent=account?.method==='passkey'?'':account?.address||'';$('#role').textContent=account?.role==='admin'?'Administrator':'';
@@ -204,7 +205,16 @@ if(isBlip(getWalletProvider())){
   const walker=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT);let node;
   while(node=walker.nextNode())if(node.parentElement.tagName!=='SCRIPT'&&!node.parentElement.closest('#blip-info, #auth-dialog'))node.textContent=node.textContent.replaceAll('Pelagus','Blip').replaceAll('PELAGUS','BLIP');
 }
-const conversations=createConversations({api,getPaymentProvider:paymentProvider,onPasskeyPayment:intent=>passkeyUI.openPayment(intent),onProfile:async()=>{if(!profile){conversations.openProfile();showEditor();return;}if(profile){profileNotice();showProfile();await refreshPoints();}},onExpired:async()=>{await renderSession(null);notice('Your session has expired. Please sign in again.',true);}});
+const sectionHistory=createSectionHistory(window,route=>{
+ if(!currentAccount||onboardingState(currentAccount,profile,setupReady).locked||!route||!['thread','profile-edit','profile','wallet','notifications','inbox','mine','ask','admin','reports','blocked','library','ranking'].includes(route.view))return;
+ if(route.view==='thread'&&typeof route.id==='string'){conversations.openThread(route.id,route.fromAdmin===true);return;}
+ if(route.view==='profile-edit'){showProfile();showEditor();return;}
+ if(route.view==='notifications'){$('#notifications-button').click();return;}
+ const control=document.querySelector('[data-view="'+route.view+'"]');
+ if(control&&!control.hidden&&!control.disabled)control.click();
+});
+document.addEventListener('neuron-wallet-view',()=>sectionHistory.record({view:'wallet'}));
+const conversations=createConversations({api,onNavigate:route=>sectionHistory.record(route),getPaymentProvider:paymentProvider,onPasskeyPayment:intent=>passkeyUI.openPayment(intent),onProfile:async()=>{if(!profile){conversations.openProfile();showEditor();return;}if(profile){profileNotice();showProfile();await refreshPoints();}},onExpired:async()=>{await renderSession(null);notice('Your session has expired. Please sign in again.',true);}});
 const tokenUI=createTokenUI({api,onExpired:()=>renderSession(null)});
 const passkeyUI=createPasskeyUI({api,onSetupReady:ready=>{setupReady=ready;updateOnboarding();},onAccount:renderSession,onExternal:async method=>{
   selectedProvider=method==='pelagus'?window.pelagus:getWalletProvider();

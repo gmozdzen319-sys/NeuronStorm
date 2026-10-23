@@ -260,7 +260,7 @@ export function createPasskeyUI({api,onExternal,onAccount,onSetupReady=()=>{}}){
       const note=document.createElement('p');note.className='field-hint';note.textContent='A synced passkey may exist on more than one device. This list shows credentials, not physical devices. Adding or removing a wallet key is unavailable until wallet activation. Account recovery beyond an authorized passkey is not available.';$('#pk-devices').append(note);
     }catch(error){if(revision===epoch)$('#pk-devices').textContent=error.message;}
   });
-  $('#wallet-button').addEventListener('click',event=>{if(account){event.stopImmediatePropagation();$('#landing').hidden=true;$('#profile-area').hidden=true;$('#conversations').hidden=true;$('#passkey-home').hidden=false;$('#pk-title').focus();}},true);
+  $('#wallet-button').addEventListener('click',event=>{if(account){event.stopImmediatePropagation();$('#landing').hidden=true;$('#profile-area').hidden=true;$('#conversations').hidden=true;$('#passkey-home').hidden=false;$('#pk-title').focus();document.dispatchEvent(new Event('neuron-wallet-view'));}},true);
   async function openPayment(intent){
     if(!account)throw Error('Sign in with your passkey.');
     const owner=account.id;await setAccount(account,true);if(account?.id!==owner)throw Error('Your session changed.');

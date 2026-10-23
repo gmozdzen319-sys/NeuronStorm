@@ -7,7 +7,7 @@ import {createRewardsUI} from './rewards-ui.js';
 import {createNotificationSound} from './notification-sound.js';
 import {createSignedSender} from './wallet.js';
 import {createDebate} from './debate.js';
-export function createConversations({api,onProfile,onExpired,getPaymentProvider,onPasskeyPayment}) {
+export function createConversations({api,onProfile,onExpired,getPaymentProvider,onPasskeyPayment,onNavigate=()=>{}}) {
   const $=s=>document.querySelector(s), root=$('#conversations');
   let identity=null, view='inbox', threadId=null, backView='inbox', epoch=0, revision=0, timerBusy=false, signature='', sending=false;
   let adminPage=1,adminPages=1,adminSearch='',adminState='active',adminThread=false,moderated=null,pendingModeration=null,notificationPage=1,notificationPages=1,notificationThrough=0,notificationSignature='';
@@ -22,7 +22,8 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
   const date=value=>new Intl.DateTimeFormat('en-GB',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value));
   const node=(tag,text,className)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el;};
   function status(id,text='',error=false){const el=$(id);el.textContent=text;el.classList.toggle('error',error);}
-  function shell(next){
+  function shell(next,detail={}){
+    onNavigate({view:next,...detail});
     $('#passkey-home').hidden=true;
     debate.stop();epoch++;view=next;$('#blocked-view').hidden=next!=='blocked';$('#reports-view').hidden=next!=='reports';$('#library-view').hidden=next!=='library';$('#ranking-view').hidden=next!=='ranking';$('#wallet-view').hidden=next!=='wallet';$('#admin-view').hidden=next!=='admin';$('#notifications-view').hidden=next!=='notifications';signature='';revision=0;
     $('#landing').hidden=next!=='ask';root.hidden=next==='profile';$('#profile-area').hidden=next!=='profile';
@@ -116,7 +117,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
   async function openThread(id,fromAdmin=false){
     adminThread=fromAdmin;if(fromAdmin)backView='admin';
     if(!fromAdmin&&['mine','inbox','notifications'].includes(view))backView=view;
-    shell('thread');globe.show();lifecycle.clock($('#thread-clock'),null);threadId=id;$('#admin-thread-actions').hidden=true;$('#reply-form').hidden=false;$('#reply-form').reset();status('#reply-status');status('#thread-status','Loading conversation…');$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();
+    shell('thread',{id,fromAdmin});globe.show();lifecycle.clock($('#thread-clock'),null);threadId=id;$('#admin-thread-actions').hidden=true;$('#reply-form').hidden=false;$('#reply-form').reset();status('#reply-status');status('#thread-status','Loading conversation…');$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();
     $('#back-to-questions').textContent=backView==='admin'?'Back to Admin Dashboard':backView==='notifications'?'Back to Notifications':backView==='mine'?'Back to My Questions':'Back to Questions for You';
     await loadThread();if(view==='thread')$('#thread-title').focus();
   }
@@ -210,5 +211,23 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
     }catch(error){if(current===epoch)await failure(error,'#wallet-status');}finally{if(current===epoch)$('#wallet-refresh').disabled=false;}
   }
   $('#wallet-refresh').addEventListener('click',loadWallet);$('#wallet-profile').addEventListener('click',onProfile);
-  return {clear,setAccount(account){if(identity?.address!==account?.address){lifecycle.clear();memberTools.clear();questionPreview=null;$('#question-preview-dialog').close();}identity=account;questionTools.setAccount(account);sounds.setAccount(account);rewards.setAccount(account);$('#wallet-button').hidden=!account;},openProfile(){if(identity)shell('profile');},setIdentity(account,profile,openInbox=false){identity=account;questionTools.setAccount(account);globe.setAccount(account);sounds.setAccount(account);rewards.setAccount(account);$('#admin-nav').hidden=account.role!=='admin';$('#notifications-button').hidden=false;loadNotifications();$('#member-nav').hidden=false;$('#ask-question').hidden=false;$('#member-name').hidden=false;$('#member-name').textContent=profile.nickname;if(openInbox){if(account.role==='admin')showAdmin();else ask();}}};
+  return {openThread,clear,setAccount(account){if(identity?.address!==account?.address){lifecycle.clear();memberTools.clear();questionPreview=null;$('#question-preview-dialog').close();}identity=account;questionTools.setAccount(account);sounds.setAccount(account);rewards.setAccount(account);$('#wallet-button').hidden=!account;},openProfile(){if(identity)shell('profile');},setIdentity(account,profile,openInbox=false){identity=account;questionTools.setAccount(account);globe.setAccount(account);sounds.setAccount(account);rewards.setAccount(account);$('#admin-nav').hidden=account.role!=='admin';$('#notifications-button').hidden=false;loadNotifications();$('#member-nav').hidden=false;$('#ask-question').hidden=false;$('#member-name').hidden=false;$('#member-name').textContent=profile.nickname;if(openInbox){if(account.role==='admin')showAdmin();else ask();}}};
+}
+
+// History stores navigation destinations only, never transaction or form state.
+export function createSectionHistory(browser,restore){
+ let replaying=false,owner=null;
+ const key='neuronSection';
+ function record(route){
+  if(replaying)return;
+  const previous=browser.history.state?.[key];
+  const next={owner,route};
+  if(JSON.stringify(previous)===JSON.stringify(next))return;
+  browser.history[previous?.owner===owner?'pushState':'replaceState']({...browser.history.state,[key]:next},'');
+ }
+ browser.addEventListener('popstate',event=>{
+  const saved=event.state?.[key];if(!saved||saved.owner!==owner)return;
+  replaying=true;try{restore(saved.route);}finally{replaying=false;}
+ });
+ return {record,setOwner(value){owner=value;}};
 }
