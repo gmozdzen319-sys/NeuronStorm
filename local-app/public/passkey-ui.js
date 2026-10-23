@@ -80,6 +80,19 @@ export function createPasskeyUI({api,onExternal,onAccount,onSetupReady=()=>{}}){
   $('#auth-pelagus').addEventListener('click',()=>{dialog.close();onExternal('pelagus');});
   $('#auth-billpay').addEventListener('click',()=>{dialog.close();onExternal('billpay');});
   $('#auth-passkey').addEventListener('click',()=>{$('#passkey-options').hidden=false;$('#passkey-signin').focus();});
+  // Decorative click feedback only: never awaited or connected to authentication.
+  $('#auth-passkey').addEventListener('click',event=>{
+    if(!event.isTrusted)return;
+    try{
+      const Audio=window.AudioContext||window.webkitAudioContext;if(!Audio)return;
+      const audio=new Audio(),tone=audio.createOscillator(),volume=audio.createGain(),start=audio.currentTime;
+      tone.type='sine';tone.frequency.setValueAtTime(620,start);tone.frequency.exponentialRampToValueAtTime(1040,start+.13);
+      volume.gain.setValueAtTime(0,start);volume.gain.linearRampToValueAtTime(.025,start+.012);volume.gain.exponentialRampToValueAtTime(.0001,start+.17);
+      tone.connect(volume);volume.connect(audio.destination);tone.start(start);tone.stop(start+.18);
+      tone.onended=()=>{tone.disconnect();volume.disconnect();audio.close().catch(()=>{});};
+      if(audio.state==='suspended')audio.resume().catch(()=>audio.close().catch(()=>{}));
+    }catch{/* Audio is optional and must never interfere with the existing click. */}
+  });
   async function authenticate(kind){
     if(busy)return;
     if(kind==='register'&&legal?.published&&!$('#passkey-agree').checked){message('Read and accept the Terms of Use first.');$('#passkey-agree').focus();return;}

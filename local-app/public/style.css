@@ -179,6 +179,13 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 #auth-dialog .auth-method--blip small{color:#c7d1b9}
 @media(max-width:420px){#auth-dialog .auth-method{gap:10px;padding:13px 12px}#auth-dialog .auth-brand{width:48px;flex-basis:48px}#auth-dialog .auth-method-copy{font-size:13px}}
 @media(prefers-reduced-motion:reduce){#auth-dialog .auth-method{transition:none}}
+#auth-passkey .auth-method-copy{white-space:nowrap}
+.auth-fingerprint{position:relative;display:block;flex:0 0 34px;width:34px;height:40px;margin-left:auto;color:var(--auth-accent);overflow:hidden;pointer-events:none}
+.auth-fingerprint svg{width:100%;height:100%;opacity:.8}
+.auth-fingerprint-scan{position:absolute;inset:0 0 auto;height:2px;background:linear-gradient(90deg,transparent,#c4edff,transparent);box-shadow:0 0 9px 2px #55c9f455;animation:auth-biometric-scan 3.8s ease-in-out infinite}
+@keyframes auth-biometric-scan{0%,100%{transform:translateY(2px);opacity:0}15%,75%{opacity:.7}85%{transform:translateY(37px);opacity:0}}
+@media(max-width:380px){#auth-dialog #auth-passkey{gap:8px}#auth-passkey .auth-brand{width:32px;flex-basis:32px}#auth-passkey .auth-method-copy{font-size:12px}.auth-fingerprint{width:28px;flex-basis:28px}}
+@media(prefers-reduced-motion:reduce){.auth-fingerprint-scan{animation:none;opacity:0}}
 
 /* Send milestone progress: existing Wallet surfaces, borders and accents. */
 .pk-progress{margin-top:20px;padding:16px 18px;border:1px solid #255e81;border-radius:8px;background:#0a1421;box-shadow:0 0 22px #008cff1a;min-width:0}
