@@ -1,4 +1,5 @@
 import {isBlocked} from './contact-preferences.mjs';
+import {debateFields,verificationForAccounts,recordVerificationVote} from './verification.mjs';
 import {QUESTION_LIFETIME} from './lifecycle.mjs';
 import {requireProfile,allowed} from './threads.mjs';
 const fail=(status,message)=>Object.assign(new Error(message),{status});
@@ -14,6 +15,7 @@ export async function voteOnDebate(db,account,id,messageId,input,now){
   if(voter===m.author)throw fail(403,'You cannot rate your own message.');
   if(await isBlocked(db,voter,m.author))throw fail(403,'Ratings between these accounts are blocked.');
   if(![1,-1,0].includes(input.value))throw fail(400,'Choose Helpful, Not Helpful or remove your vote.');
+  await recordVerificationVote(db,account,id,messageId,input.value,now);
   await db.query("SELECT set_config('neuron.event_time',$1,true)",[String(now)]);
   if(!input.value)await db.prepare('DELETE FROM debate_votes WHERE message_id=$1 AND voter=$2').run(messageId,voter);
   else await db.prepare(`INSERT INTO debate_votes VALUES($1,$2,$3,$4) ON CONFLICT(message_id,voter)
@@ -27,12 +29,24 @@ export async function debate(db,account,id,session,params,input,now){
  await db.lock("question:"+id);
 
   (await requireProfile(db,account));const question=(await allowed(db,id,account));if(question.created_at+QUESTION_LIFETIME<=now)throw fail(409,'This conversation has expired.');const address=account.address.toLowerCase();
+  if(input)await db.lock('profile:'+address);
+  const fields=await debateFields(db,id);
+  const selectable=await db.prepare(`SELECT DISTINCT f.id FROM profile_categories pc JOIN categories c ON c.id=pc.category_id JOIN verification_fields f USING(normalized_name) WHERE pc.address=$1`).all(address);
+  const eligibleFields=new Set(selectable.map(f=>f.id)),availableFields=fields.filter(f=>eligibleFields.has(f.id));
   if(input){
     if((await isBlocked(db,address,question.author)))throw fail(403,'Messages between these accounts are blocked.');
     if(typeof input.body!=='string'||!input.body.trim()||input.body.trim().length>2000||typeof input.clientId!=='string'||!/^[a-f0-9-]{36}$/.test(input.clientId))throw fail(400,'Enter a debate message between 1 and 2,000 characters.');
-    const existing=(await db.prepare("SELECT body FROM debate_messages WHERE question_id=$1 AND author=$2 AND client_id=$3").get(id,address,input.clientId));
+    const followUp=!availableFields.length&&address===question.author;
+    if(!availableFields.length&&!followUp)throw fail(403,'A topic from this debate must be present in your profile.');
+    const field=followUp?null:Number(input.fieldId??availableFields[0]?.id),kind=followUp?'follow_up':'field';
+    if(followUp&&input.fieldId!=null&&input.fieldId!==0)throw fail(403,'Follow-up questions do not select a verification topic.');
+    if(!followUp&&(!Number.isSafeInteger(field)||!fields.some(f=>f.id===field)))throw fail(400,'Choose a topic belonging to this debate.');
+    if(!followUp&&!eligibleFields.has(field))throw fail(403,'Choose a debate topic from your profile.');
+    const existing=(await db.prepare("SELECT m.id,m.body,c.field_id,c.kind FROM debate_messages m LEFT JOIN verification_contributions c ON c.message_id=m.id WHERE question_id=$1 AND author=$2 AND client_id=$3").get(id,address,input.clientId));
     if(existing&&existing.body!==input.body.trim())throw fail(409,'This message request was already used.');
+    if(existing?.kind&&(existing.field_id!==field||existing.kind!==kind))throw fail(409,'This contribution already belongs to another topic.');
     (await db.prepare("INSERT INTO debate_messages(question_id,author,body,client_id,created_at) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING").run(id,address,input.body.trim(),input.clientId,now));
+    if(!existing)await db.prepare(`INSERT INTO verification_contributions(message_id,field_id,kind) SELECT id,$4::bigint,$5::text FROM debate_messages WHERE question_id=$1 AND author=$2 AND client_id=$3`).run(id,address,input.clientId,field,kind);
   }
   const before=Number(params.get('before')||0),after=Number(params.get('after')||0);
   if(!Number.isSafeInteger(before)||before<0||!Number.isSafeInteger(after)||after<0)throw fail(400,'Invalid debate page.');
@@ -59,7 +73,17 @@ export async function debate(db,account,id,session,params,input,now){
    FROM debate_messages m WHERE m.question_id=$1 AND m.id=ANY($3::bigint[])
    AND NOT EXISTS(SELECT 1 FROM blocked_members b WHERE (b.owner=$2 AND b.target=m.author) OR (b.target=$2 AND b.owner=m.author))`).all(id,address,ids):[];
   const byId=new Map(ratings.map(r=>[r.id,r]));for(const m of messages)Object.assign(m,byId.get(m.id));
-  return {ratings,canPost:!(await isBlocked(db,address,question.author)),messages,online,hasEarlier:!!oldest&&!!(await db.prepare("SELECT 1 FROM debate_messages WHERE question_id=$1 AND id<$2 LIMIT 1").get(id,oldest))};
+  const contributions=ids.length?await db.prepare('SELECT m.id,m.author,c.field_id,c.kind FROM debate_messages m LEFT JOIN verification_contributions c ON c.message_id=m.id WHERE m.question_id=$1 AND m.id=ANY($2::bigint[])').all(id,ids):[];
+  const scores=await verificationForAccounts(db,[...new Set([address,...contributions.map(c=>c.author)])],now),ownFields=new Set((scores.get(address)||[]).map(f=>f.id));
+  const contributionById=new Map(contributions.map(c=>[c.id,c]));
+  for(const r of ratings){
+   const contribution=contributionById.get(r.id);
+   r.canVote=!r.mine&&(!contribution.field_id||ownFields.has(contribution.field_id));
+   r.verification=(scores.get(contribution.author)||[]).find(f=>f.id===contribution.field_id)||null;
+   r.followUp=contribution.kind==='follow_up';
+   const message=messages.find(m=>m.id===r.id);if(message)Object.assign(message,{canVote:r.canVote,verification:r.verification,followUp:r.followUp});
+  }
+  return {fields:availableFields,followUp:!availableFields.length&&address===question.author,ratings,canPost:(availableFields.length>0||address===question.author)&&!(await isBlocked(db,address,question.author)),messages,online,hasEarlier:!!oldest&&!!(await db.prepare("SELECT 1 FROM debate_messages WHERE question_id=$1 AND id<$2 LIMIT 1").get(id,oldest))};
 
  });
 }

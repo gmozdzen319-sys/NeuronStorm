@@ -1,4 +1,5 @@
 import {appendAvatar} from './file-ui.js';
+import {verificationIndicator} from './verification-ui.js';
 export function createDebate(api,onExpired,getAccount=()=>null,onMessage=()=>{}){
   const $=s=>document.querySelector(s),panel=$('#debate-panel'),list=$('#debate-messages');
   new ResizeObserver(entries=>document.documentElement.style.setProperty('--header-height',entries[0].target.getBoundingClientRect().height+'px')).observe(document.querySelector('header'));
@@ -7,15 +8,19 @@ export function createDebate(api,onExpired,getAccount=()=>null,onMessage=()=>{})
   const node=(tag,text)=>{const n=document.createElement(tag);n.textContent=text;return n;};
   function stop(){initialized=false;id=null;generation++;latest=0;earliest=0;pending=null;list.replaceChildren();$('#debate-online').textContent='';$('#debate-status').textContent='';$('#debate-form').reset();panel.hidden=true;}
   function votes(article,message){
- const signature=JSON.stringify([message.upvotes,message.downvotes,message.myVote,message.mine]);let bar=article.querySelector('.debate-votes');if(bar?.dataset.signature===signature)return;if(!bar){bar=node('div','');bar.className='debate-votes';article.append(bar);}bar.dataset.signature=signature;bar.replaceChildren();
- for(const [value,label,count] of [[1,'Helpful',message.upvotes],[-1,'Not Helpful',message.downvotes]]){const b=node('button',(value===1?'👍 ':'👎 ')+(count||0));b.type='button';b.className='text-button';b.setAttribute('aria-label',label);b.setAttribute('aria-pressed',String(message.myVote===value));b.disabled=!!message.mine;
- b.onclick=async()=>{b.disabled=true;const current=generation,q=id;try{await api('/api/questions/'+q+'/debate/'+message.id+'/vote',{value:message.myVote===value?0:value});if(current===generation){const result=await api('/api/questions/'+q+'/debate?before='+(message.id+1));if(current===generation)render(result,true);}}catch(error){await failure(error,current);}finally{b.disabled=!!message.mine;}};bar.append(b);}
+ if(message.followUp&&!article.querySelector('.follow-up-label')){const label=node('small','Follow-up question');label.className='follow-up-label field-hint';article.querySelector('.debate-author').append(label);}
+ const verificationKey=JSON.stringify(message.verification||null);if(article.dataset.verification!==verificationKey){article.dataset.verification=verificationKey;article.querySelector('.verification-indicator')?.remove();if(message.verification){const heading=article.querySelector('.debate-author')||article;heading.append(verificationIndicator(message.verification));}}
+ const signature=JSON.stringify([message.upvotes,message.downvotes,message.myVote,message.mine,message.canVote]);let bar=article.querySelector('.debate-votes');if(bar?.dataset.signature===signature)return;if(!bar){bar=node('div','');bar.className='debate-votes';article.append(bar);}bar.dataset.signature=signature;bar.replaceChildren();
+ for(const [value,label,count] of [[1,'Helpful',message.upvotes],[-1,'Not Helpful',message.downvotes]]){const b=node('button',(value===1?'👍 ':'👎 ')+(count||0));b.type='button';b.className='text-button';b.setAttribute('aria-label',label);b.setAttribute('aria-pressed',String(message.myVote===value));b.disabled=!!message.mine||message.canVote===false;
+ b.onclick=async()=>{b.disabled=true;const current=generation,q=id;try{await api('/api/questions/'+q+'/debate/'+message.id+'/vote',{value:message.myVote===value?0:value});if(current===generation){const result=await api('/api/questions/'+q+'/debate?before='+(message.id+1));if(current===generation)render(result,true);}}catch(error){await failure(error,current);}finally{b.disabled=!!message.mine||message.canVote===false;}};bar.append(b);}
  }
  function render(result,older=false){
+    $('#debate-body').previousElementSibling.textContent=result.followUp?'Follow-up question':'Your message';
+    const picker=$('#debate-field');if(result.fields){const selected=picker.value,signature=JSON.stringify(result.fields);if(picker.dataset.fields!==signature){picker.replaceChildren(...result.fields.map(f=>new Option(f.name,f.id)));if(result.fields.some(f=>String(f.id)===selected))picker.value=selected;picker.dataset.fields=signature;}$('#debate-field-picker').hidden=result.fields.length<2;}
     $('#debate-form').hidden=result.canPost===false;for(const m of result.ratings||[]){const a=list.querySelector(`[data-message-id="${m.id}"]`);if(a)votes(a,m);}
     const bottom=list.scrollHeight-list.scrollTop-list.clientHeight<60,height=list.scrollHeight;
     const fragment=document.createDocumentFragment();
-    for(const message of result.messages){const existing=list.querySelector(`[data-message-id="${message.id}"]`);if(existing){votes(existing,message);continue;}const article=node('article','');article.dataset.messageId=message.id;article.className='debate-message'+(message.mine?' mine':'');const time=new Intl.DateTimeFormat('en-GB',{dateStyle:'short',timeStyle:'short'}).format(new Date(message.createdAt));article.append(node('strong',message.mine?'You':message.author),node('p',message.body),node('small',time));appendAvatar(article,message.avatar);votes(article,message);fragment.append(article);latest=Math.max(latest,message.id);earliest=earliest?Math.min(earliest,message.id):message.id;}
+    for(const message of result.messages){const existing=list.querySelector(`[data-message-id="${message.id}"]`);if(existing){votes(existing,message);continue;}const article=node('article','');article.dataset.messageId=message.id;article.className='debate-message'+(message.mine?' mine':'');const time=new Intl.DateTimeFormat('en-GB',{dateStyle:'short',timeStyle:'short'}).format(new Date(message.createdAt));const heading=node('div','');heading.className='debate-author';heading.append(node('strong',message.mine?'You':message.author));appendAvatar(heading,message.avatar);article.append(heading,node('p',message.body),node('small',time));votes(article,message);fragment.append(article);latest=Math.max(latest,message.id);earliest=earliest?Math.min(earliest,message.id):message.id;}
     if(older)list.prepend(fragment);else list.append(fragment);
     if(older)list.scrollTop+=list.scrollHeight-height;else if(bottom)list.scrollTop=list.scrollHeight;
     $('#debate-online').textContent=result.online.length?`${result.online.length} online · ${result.online.join(', ')}`:'No one else is here yet.';
@@ -30,7 +35,7 @@ export function createDebate(api,onExpired,getAccount=()=>null,onMessage=()=>{})
   $('#debate-earlier').addEventListener('click',()=>refresh(true));
   $('#debate-form').addEventListener('submit',async event=>{
     event.preventDefault();if(!id||posting)return;const body=$('#debate-body').value.trim();if(!body)return;const current=generation,q=id;
-    if(!pending||pending.body!==body)pending={body,clientId:crypto.randomUUID()};posting=true;$('#debate-send').disabled=true;
+    const fieldId=Number($('#debate-field').value);if(!pending||pending.body!==body||pending.fieldId!==fieldId)pending={body,fieldId,clientId:crypto.randomUUID()};posting=true;$('#debate-send').disabled=true;
     try{await api('/api/questions/'+q+'/debate',pending);if(current!==generation)return;pending=null;$('#debate-body').value='';await refresh();}
     catch(error){await failure(error,current);}finally{posting=false;$('#debate-send').disabled=false;}
   });

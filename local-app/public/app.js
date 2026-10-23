@@ -1,3 +1,4 @@
+import {renderVerification} from './verification-ui.js';
 import {selectedFile,appendAvatar} from './file-ui.js';
 import {profileErrors,onboardingState} from './profile-validation.js';
 import {createPasskeyUI} from './passkey-ui.js';
@@ -47,7 +48,7 @@ function profileNotice(message = '', type = '') { const target=$('#profile-statu
 function showProfile() {
   for(const control of Object.values(topicSuggestions))control.close();
   conversations.openProfile();
-  $('#saved-avatar').replaceChildren();appendAvatar($('#saved-avatar'),profile.avatar,true);
+  $('#saved-avatar').replaceChildren();appendAvatar($('#saved-avatar'),profile.avatar,true);renderVerification($('#profile-verification'),profile.verification);
   $('#profile-eyebrow').textContent='YOUR CORNER OF NEURON STORM';
   $('#profile-title').textContent='My Profile';
   $('#profile-intro').textContent='Your experience, your interests, your next conversation.';

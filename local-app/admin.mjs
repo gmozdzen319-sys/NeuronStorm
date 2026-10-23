@@ -71,5 +71,5 @@ export async function adminMembers(db,account,params){
  const pages=Math.max(1,Math.ceil(total/50)),page=Math.min(requested,pages);
  const direction=order==='newest'?'DESC':'ASC';
  const members=await db.prepare(`SELECT * FROM (${source}) members WHERE ${match} ORDER BY "createdAt" ${direction},identity ${direction} LIMIT 50 OFFSET $3`).all(search,method,(page-1)*50);
- return {page,pages,total,members:members.map(({identity,...row})=>row)};
+ return {page,pages,total,members:members.map(({identity,...row})=>({...row,memberId:row.accountId?'passkey:'+row.accountId:identity}))};
 }
