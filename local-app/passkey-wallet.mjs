@@ -84,13 +84,8 @@ export function createPasskeyWallet(db,{readMetadata=createTokenMetadataReader()
       }catch{return {...base,status:'unavailable',reason:'We could not safely verify your wallet. Refresh later. No transaction was sent.'};}
     },
     async receive(account){const s=await service.state(account);if(!s.receiveAvailable)throw fail(423,s.reason);return {address:s.address,quaiBalance:s.quaiBalance,receiveCompatible:WALLET_GENERATION===2,network:'Quai Mainnet · Cyprus-1',qr:await QRCode.toDataURL(s.address,{errorCorrectionLevel:'M',width:232,margin:4})};},
-    async preview(account,input){requireAccount(account);return readMetadata(input.contract);},
-    async add(account,input){requireAccount(account);const metadata=await readMetadata(input.contract);
-      if(metadata.contract.toLowerCase()===NS_TOKEN.address.toLowerCase())throw fail(409,'NS is already included in your wallet.');
-      // Re-read metadata and require the user's reviewed result, not arbitrary labels.
-      for(const key of ['name','symbol','decimals'])if(input[key]!==metadata[key])throw fail(409,'Token details changed. Review them again.');
-      const result=await db.prepare('INSERT INTO passkey_tokens VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING').run(account.id,metadata.contract.toLowerCase(),metadata.name,metadata.symbol,metadata.decimals);
-      if(!result.changes)throw fail(409,'This token is already in your wallet.');return {added:true};},
+    async preview(account){requireAccount(account);throw fail(403,'Adding custom tokens is no longer available.');},
+    async add(account){requireAccount(account);throw fail(403,'Adding custom tokens is no longer available.');},
     blocked(account){requireAccount(account);throw fail(423,WALLET_BLOCKED);}
   };
   return service;
