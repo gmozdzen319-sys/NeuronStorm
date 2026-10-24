@@ -1,6 +1,6 @@
 {
   "name": "neuron-storm-local",
-  "version": "0.19.12",
+  "version": "0.20.2",
   "private": true,
   "type": "module",
   "engines": {
