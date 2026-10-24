@@ -20,6 +20,7 @@ import {archiveText} from './archive.mjs';
 import {Readable} from 'node:stream';
 import {pipeline} from 'node:stream/promises';
 import {globeData,clientIp,lookupCountry} from './geography.mjs';
+import {conversationGlobe} from './conversation-globe.mjs';
 import {expireQuestions,acceptedAnswers} from './lifecycle.mjs';
 import {createPayments,REWARD_ADDRESS} from './payments.mjs';
 import {presence,rewardGrowth} from './community.mjs';
@@ -170,6 +171,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if(path==='/api/library'&&['GET','POST'].includes(req.method))return json(200,(await library(db,(await account(req)),req.method==='POST'?await body(req):null,new URL(req.url,origin).searchParams,now())));
       if(path==='/api/reports'&&req.method==='POST')return json(200,(await reportContent(db,(await account(req)),await body(req),now())));
       if(path==='/api/questions/preview'&&req.method==='POST')return json(200,(await previewQuestion(db,(await account(req)),await body(req))));
+      if(path==='/api/globe/conversation'&&req.method==='POST')return json(200,await conversationGlobe(db,await account(req),await actionSession(req),clientIp(req,trustProxy),await body(req),now(),geoLookup));
       if(path==='/api/globe'&&['GET','POST'].includes(req.method))return json(200,(await globeData(db,(await account(req)),clientIp(req,trustProxy),req.method==='POST'?await body(req):null,now(),geoLookup)));
       if(path==='/api/presence'&&req.method==='POST'){
         const input=await body(req);let visitor=cookies(req).ns_visitor;

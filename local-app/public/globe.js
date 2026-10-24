@@ -1,4 +1,5 @@
 import {bindGlobeGestures,clampZoom} from './globe-controls.js';
+import {appendAvatar} from './file-ui.js';
 const TAU=Math.PI*2;
 export function spherePoint(lat,lon){const a=lat*Math.PI/180,b=lon*Math.PI/180;return [Math.cos(a)*Math.sin(b),Math.sin(a),Math.cos(a)*Math.cos(b)];}
 export function createGlobe({api,getAccount}){
@@ -6,6 +7,7 @@ export function createGlobe({api,getAccount}){
   const reduced=matchMedia('(prefers-reduced-motion: reduce)');
   let map=[],countries=new Map(),data=null,owner=null,epoch=0,busy=false,paused=reduced.matches,angle=-.25,frame=0,last=0,miniVisible=false,loaded=false;
   let paths=[],tilt=.15,zoomLevel=1;
+  let questionId=null;const avatarImages=new Map();
   const label=code=>countries.get(code)?.name||code;
   const point=code=>{const c=countries.get(code);return c?spherePoint(c.lat,c.lon):null;};
   function rebuild(){
@@ -23,14 +25,19 @@ export function createGlobe({api,getAccount}){
     if(!data)return;$('#globe-share').checked=data.enabled;
     $('#globe-location').textContent=data.viewerCountry?'Your connection: '+label(data.viewerCountry):'Your country is unavailable (for example, a local network).';
     $('#globe-count').textContent=data.sharingOnline+' members sharing · '+data.countries.length+' countries';
-    $('#globe-summary').textContent=data.sharingOnline===0?'No members are sharing a country yet.':!data.viewerCountry?'Country markers are live. Your location is unavailable, so no connection arcs are drawn.':'Live, approximate connections · refreshed every 25 seconds';
+    $('#globe-summary').textContent=data.participants.length+' participants on the globe · '+data.online.length+' online in this conversation';
+    const online=$('#globe-online');online.replaceChildren();
+    for(const member of data.online){const row=document.createElement('div');row.className='globe-online-member';appendAvatar(row,member.avatar);const name=document.createElement('span');name.textContent=member.nickname+(member.mine?' · You':'');row.append(name);online.append(row);}
+    if(!data.online.length)online.textContent='No participants are online here right now.';
+    const avatarIds=new Set(data.participants.map(p=>p.avatar?.id).filter(Boolean));for(const id of avatarImages.keys())if(!avatarIds.has(id))avatarImages.delete(id);
+    for(const id of avatarIds)if(!avatarImages.has(id)){const image=new Image();avatarImages.set(id,image);image.onload=()=>draw();image.src='/api/files/'+encodeURIComponent(id);}
     const list=$('#globe-countries');list.replaceChildren();for(const c of data.countries){const row=document.createElement('div');row.textContent=label(c.country)+' · '+c.count;list.append(row);}
   }
   async function refresh(input={active:!document.hidden}){
-    if(!owner||busy)return;busy=true;const current=epoch;
-    try{const result=await api('/api/globe',input);if(current!==epoch)return;data=result;text();rebuild();$('#globe-status').textContent='';draw();}
-    catch(error){if(current===epoch){data=null;paths=[];$('#globe-location').textContent='';$('#globe-status').textContent='Live location data unavailable. Please try again.';$('#globe-summary').textContent='Live connections unavailable';$('#globe-countries').replaceChildren();$('#globe-count').textContent='';draw();}}
-    finally{busy=false;}
+    if(!owner||!questionId||busy)return;busy=true;const current=epoch;
+    try{const result=await api('/api/globe/conversation',{...input,questionId});if(current!==epoch)return;data=result;text();rebuild();$('#globe-status').textContent='';draw();}
+    catch(error){if(current===epoch){data=null;paths=[];$('#globe-online').replaceChildren();$('#globe-location').textContent='';$('#globe-status').textContent='Live location data unavailable. Please try again.';$('#globe-summary').textContent='Live connections unavailable';$('#globe-countries').replaceChildren();$('#globe-count').textContent='';draw();}}
+    finally{busy=false;if(current!==epoch&&owner&&questionId)refresh();}
   }
   async function loadMap(){if(loaded)return;loaded=true;try{const response=await fetch('/world-map.json');if(!response.ok)throw Error();const result=await response.json();map=result.countries.map(c=>({...c,lines:c.rings.map(r=>r.map(([lon,lat])=>spherePoint(lat,lon)))}));countries=new Map(map.map(c=>[c.code,c]));text();rebuild();draw();}catch{loaded=false;$('#globe-status').textContent='The globe map could not be loaded.';}}
   function projection(p,cx,cy,r){const c=Math.cos(angle),s=Math.sin(angle),x=p[0]*c+p[2]*s,z=p[2]*c-p[0]*s,y=p[1]*Math.cos(tilt)-z*Math.sin(tilt),depth=p[1]*Math.sin(tilt)+z*Math.cos(tilt);return [cx+x*r,cy-y*r,depth];}
@@ -48,6 +55,14 @@ export function createGlobe({api,getAccount}){
     const markers=new Set((data?.countries||[]).map(c=>c.country));if(data?.viewerCountry)markers.add(data.viewerCountry);
     for(const code of markers){const p=point(code);if(!p)continue;const [x,y,z]=projection(p,cx,cy,r);if(z<0)continue;const mine=code===data?.viewerCountry;ctx.fillStyle=mine?'#ff7993':'#70e1f4';ctx.shadowColor=ctx.fillStyle;ctx.shadowBlur=8;ctx.beginPath();ctx.arc(x,y,canvas===mini?2.5:4,0,TAU);ctx.fill();ctx.shadowBlur=0;
       if(canvas===large){ctx.font='11px system-ui';ctx.fillText(mine?'You · '+label(code):label(code),x+8,y-8);}
+    }
+    const grouped=new Map();for(const member of data?.participants||[]){if(!grouped.has(member.country))grouped.set(member.country,[]);grouped.get(member.country).push(member);}
+    for(const [code,members] of grouped){const p=point(code);if(!p)continue;const [px,py,z]=projection(p,cx,cy,r);if(z<0)continue;
+     members.forEach((member,index)=>{const radius=canvas===mini?5:12,spread=members.length===1?0:radius*2*Math.sqrt(index+1),a=index*2.4,x=px+Math.cos(a)*spread,y=py+Math.sin(a)*spread;
+      ctx.save();ctx.beginPath();ctx.arc(x,y,radius,0,TAU);ctx.clip();ctx.fillStyle='#193342';ctx.fillRect(x-radius,y-radius,radius*2,radius*2);
+      const image=avatarImages.get(member.avatar?.id);if(image?.complete&&image.naturalWidth)ctx.drawImage(image,x-radius,y-radius,radius*2,radius*2);else{ctx.fillStyle='#b8e9f1';ctx.font=radius+'px system-ui';ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillText((member.nickname||'?').slice(0,1).toUpperCase(),x,y);}ctx.restore();
+      ctx.beginPath();ctx.arc(x,y,radius,0,TAU);ctx.strokeStyle=member.online?'#70e1f4':'#698695';ctx.lineWidth=member.online?2:1;ctx.stroke();
+     });
     }
   }
   function draw(time=performance.now()){if(!document.hidden){if(dialog.hasAttribute('open'))render(large,time);else if(miniVisible)render(mini,time);}}
@@ -100,5 +115,6 @@ export function createGlobe({api,getAccount}){
   updateZoom();
   document.addEventListener('visibilitychange',()=>{refresh();resizeGlobe();wake();});setInterval(()=>{if(!document.hidden)refresh();},25000);
   function setAccount(account){const next=account?.address||null;if(next===owner)return;owner=next;epoch++;data=null;paths=[];closeGlobe();$('#globe-countries').replaceChildren();$('#globe-count').textContent='';$('#globe-location').textContent='';$('#globe-share').checked=false;draw();if(next){loadMap();refresh();}}
-  return {setAccount,show(){loadMap();refresh();wake();},clear(){setAccount(null);}};
+  function hide(){const previous=questionId;questionId=null;epoch++;data=null;paths=[];avatarImages.clear();$('#globe-online').replaceChildren();closeGlobe();if(previous&&owner)api('/api/globe/conversation',{questionId:previous,active:false}).catch(()=>{});draw();}
+  return {setAccount,show(id){if(questionId!==id){hide();questionId=id;}loadMap();refresh();wake();},hide,clear(){hide();setAccount(null);}};
 }

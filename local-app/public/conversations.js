@@ -25,7 +25,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
   const node=(tag,text,className)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el;};
   function status(id,text='',error=false){const el=$(id);el.textContent=text;el.classList.toggle('error',error);}
   function shell(next,detail={}){
-    onNavigate({view:next,...detail});
+    onNavigate({view:next,...detail});if(next!=='thread')globe.hide();
     $('#passkey-home').hidden=true;
     debate.stop();epoch++;view=next;$('#blocked-view').hidden=next!=='blocked';$('#reports-view').hidden=next!=='reports';$('#library-view').hidden=next!=='library';$('#ranking-view').hidden=next!=='ranking';$('#wallet-view').hidden=next!=='wallet';$('#admin-view').hidden=next!=='admin';$('#notifications-view').hidden=next!=='notifications';signature='';revision=0;
     $('#landing').hidden=next!=='ask';root.hidden=next==='profile';$('#profile-area').hidden=next!=='profile';
@@ -122,7 +122,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
   async function openThread(id,fromAdmin=false){
     adminThread=fromAdmin;if(fromAdmin)backView='admin';
     if(!fromAdmin&&['mine','inbox','notifications'].includes(view))backView=view;
-    shell('thread',{id,fromAdmin});globe.show();lifecycle.clock($('#thread-clock'),null);threadId=id;$('#admin-thread-actions').hidden=true;$('#reply-form').hidden=false;$('#reply-form').reset();status('#reply-status');status('#thread-status','Loading conversation…');$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();
+    shell('thread',{id,fromAdmin});globe.show(id);lifecycle.clock($('#thread-clock'),null);threadId=id;$('#admin-thread-actions').hidden=true;$('#reply-form').hidden=false;$('#reply-form').reset();status('#reply-status');status('#thread-status','Loading conversation…');$('#original-question').replaceChildren();$('#thread-replies').replaceChildren();
     $('#back-to-questions').textContent=backView==='admin'?'Back to Admin Dashboard':backView==='notifications'?'Back to Notifications':backView==='mine'?'Back to My Questions':'Back to Questions for You';
     await loadThread();if(view==='thread')$('#thread-title').focus();
   }
