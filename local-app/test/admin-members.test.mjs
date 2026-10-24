@@ -18,10 +18,15 @@ test('Admin directory sorts by registration, shows real v3 assignment and never 
  let r=await adminMembers(db,owner,new URLSearchParams());assert.deepEqual(r.members.map(x=>x.createdAt),[1,2]);assert.equal(r.members[0].method,'external_unknown');
  assert.equal(r.members[1].address,wallet);assert.equal(r.members[1].method,'passkey');assert.equal(r.members[1].walletStatus,'reserved');assert.equal(r.members[1].accountId,'pk');assert(!JSON.stringify(r.members[1]).includes(social));
  r=await adminMembers(db,owner,new URLSearchParams({search:wallet}));assert.equal(r.total,1);assert.equal(r.members[0].address,wallet);
+ assert.equal(r.members[0].walletAssignedAt,2);assert.equal(r.members[0].walletConfirmedAt,null);
+ await db.prepare("INSERT INTO passkey_fee_approvals(account_id,quote,commitment,expires_at,phase) VALUES('pk','{}','test',999,'confirmed')").run();
+ const confirmation=(await db.prepare("SELECT (extract(epoch FROM min(recorded_at))*1000)::bigint AS at FROM passkey_fee_approval_history WHERE account_id='pk'").get()).at;
+ r=await adminMembers(db,owner,new URLSearchParams({search:wallet}));assert.equal(r.members[0].walletConfirmedAt,confirmation);assert.equal(r.members[0].createdAt,2);
  await assert.rejects(adminMembers(db,owner,new URLSearchParams({page:'0'})),e=>e.status===400);
  r=await adminMembers(db,owner,new URLSearchParams({order:'newest'}));assert.deepEqual(r.members.map(x=>x.createdAt),[2,1]);
  r=await adminMembers(db,owner,new URLSearchParams({method:'passkey'}));assert.equal(r.total,1);assert.equal(r.members[0].address,wallet);
  r=await adminMembers(db,owner,new URLSearchParams({method:'external_unknown'}));assert.equal(r.total,1);assert.equal(r.members[0].address,admin);
+ assert.equal(r.members[0].walletAssignedAt,null);assert.equal(r.members[0].walletConfirmedAt,null);
  for(const [method,address,at] of [['pelagus','0x0000000000000000000000000000000000000044',3],['blippay','0x0000000000000000000000000000000000000055',4]]){
   await db.prepare('INSERT INTO accounts VALUES($1,$2)').run(address,at);
   await db.prepare('INSERT INTO account_registration_methods VALUES($1,$2,$3)').run(address,method,at);

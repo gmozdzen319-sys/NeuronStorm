@@ -58,6 +58,7 @@ export async function adminMembers(db,account,params){
  CASE WHEN c.account_id IS NOT NULL THEN 'passkey' ELSE COALESCE(m.method,'external_unknown') END AS method,
  CASE WHEN c.account_id IS NULL THEN a.address ELSE COALESCE(w.address,v.address) END AS address,
  CASE WHEN w.address IS NOT NULL THEN 'v3' WHEN v.address IS NOT NULL THEN 'v2' ELSE NULL END AS version,
+ CASE WHEN w.address IS NOT NULL THEN w.created_at WHEN v.address IS NOT NULL THEN v.created_at ELSE NULL END AS "walletAssignedAt",
  CASE WHEN c.account_id IS NULL THEN 'External wallet' WHEN w.address IS NOT NULL THEN COALESCE(ap.phase,'reserved') ELSE 'Legacy assignment' END AS "walletStatus"
  FROM accounts a LEFT JOIN profiles p ON p.address=a.address
  LEFT JOIN passkey_community_accounts c ON c.address=a.address
@@ -71,5 +72,11 @@ export async function adminMembers(db,account,params){
  const pages=Math.max(1,Math.ceil(total/50)),page=Math.min(requested,pages);
  const direction=order==='newest'?'DESC':'ASC';
  const members=await db.prepare(`SELECT * FROM (${source}) members WHERE ${match} ORDER BY "createdAt" ${direction},identity ${direction} LIMIT 50 OFFSET $3`).all(search,method,(page-1)*50);
+ for(const member of members){
+  member.walletConfirmedAt=null;
+  if(member.version){const table=member.version==='v3'?'passkey_fee_approval_history':'passkey_clone_approval_history_v2';
+   member.walletConfirmedAt=(await db.prepare(`SELECT (extract(epoch FROM min(recorded_at))*1000)::bigint AS at FROM ${table} WHERE account_id=$1 AND evidence::jsonb->>'phase'='confirmed'`).get(member.accountId)).at;
+  }
+ }
  return {page,pages,total,members:members.map(({identity,...row})=>({...row,memberId:row.accountId?'passkey:'+row.accountId:identity}))};
 }
