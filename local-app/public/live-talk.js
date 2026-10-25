@@ -1,4 +1,12 @@
 // Live audio only. No MediaRecorder, audio upload, transcription or replay.
+export async function requestLiveMicrophone(mediaDevices=globalThis.navigator?.mediaDevices){
+ if(!mediaDevices?.getUserMedia)throw Error('Microphone access is unavailable. Open Neuron Storm in a supported browser over HTTPS.');
+ let stream;
+ try{stream=await mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});}
+ catch(e){throw Error(e.name==='NotAllowedError'?'Allow microphone access in your browser settings, then tap Join again.':e.name==='NotFoundError'?'No microphone was found on this device.':'Cannot access the microphone. Close other apps using it, then tap Join again.');}
+ finally{stream?.getTracks().forEach(track=>track.stop());}
+ // Permission only: never publish or keep the microphone open while listening.
+}
 export function createLiveTalkUI(api){
  const panel=document.createElement('section');panel.className='live-talk';panel.setAttribute('aria-label','Live Talk');
  const el=(tag,text='')=>{const e=document.createElement(tag);e.textContent=text;return e;};
@@ -12,7 +20,8 @@ export function createLiveTalkUI(api){
  const currentTurn=()=>data?.turns.find(t=>t.endedAt===null&&t.endsAt>now());
  const time=ms=>`${String(Math.floor(Math.max(0,ms)/60000)).padStart(2,'0')}:${String(Math.floor(Math.max(0,ms)/1000)%60).padStart(2,'0')}`;
  const join=button('Join',()=>act(async()=>{
-  const q=id,g=epoch;const sdk=await import('./livekit-client.js');
+  const q=id,g=epoch;await requestLiveMicrophone();if(g!==epoch)return;
+  const sdk=await import('./livekit-client.js');
   if(g!==epoch)return;
   const result=await api(`/api/questions/${q}/live-talk`,{action:'join'});
   if(g!==epoch){api(`/api/questions/${q}/live-talk`,{action:'leave'}).catch(()=>{});return;}
@@ -27,7 +36,7 @@ export function createLiveTalkUI(api){
  const hand=button('✋ Raise hand',()=>act(()=>action(data?.queued?'lower':'raise',{fieldId:Number(select.value)})));
  const microphone=button('Enable mic',()=>act(async()=>{if(!currentTurn()?.mine||!room?.localParticipant.permissions?.canPublish)return;mic=!mic;try{await room.localParticipant.setMicrophoneEnabled(mic);}catch(e){mic=false;throw e;}}));
  const end=button('End turn',()=>act(async()=>{if(room)await room.localParticipant.setMicrophoneEnabled(false);mic=false;await action('finish');}));
- const resume=button('Enable sound',()=>act(()=>room?.startAudio()));
+ const resume=button('Enable sound',()=>act(async()=>{await room?.startAudio();for(const a of audio.querySelectorAll('audio'))await a.play();}));
  const leave=button('Leave',()=>act(async()=>{const q=id;disconnect();await api(`/api/questions/${q}/live-talk`,{action:'leave'});await refresh();}));
  panel.append(heading,status,select,buttons,queue,rating,privacy,audio);
  document.querySelector('#debate-mute').before(panel);
@@ -48,12 +57,12 @@ export function createLiveTalkUI(api){
   if((data?.finished||data?.endsAt&&now()>=data.endsAt)&&room)disconnect();
   if(mic&&!turn?.mine){mic=false;room?.localParticipant.setMicrophoneEnabled(false).catch(()=>{});}
   clock.textContent=data?.endsAt?'Talk remaining '+time(data.endsAt-now()):'1 min / turn · 10 min / question';
-  status.textContent=error||(data?.finished?'Live Talk has ended. Continue in the text debate.':!data?.enabled?'Live Talk is not available yet.':turn?`${turn.nickname} · ${turn.topic||'Follow-up'} · ${time(turn.endsAt-now())}`:connected?'Listening · raise your hand to speak.':'Join to listen. One person speaks at a time.');
+  status.textContent=error||(data?.finished?'Live Talk has ended. Continue in the text debate.':!data?.enabled?'Live Talk is not available yet.':turn?`${turn.nickname} · ${turn.topic||'Follow-up'} · ${time(turn.endsAt-now())}${turn.mine&&!mic?' · Tap Enable mic to speak.':''}`:connected?'Listening · raise your hand to speak.':'Join and allow microphone access. One person speaks at a time.');
   join.hidden=connected;join.disabled=pending||!data?.enabled||data?.finished||data?.participants>=10;
   for(const b of [hand,microphone,end,resume,leave]){b.hidden=!connected;b.disabled=pending;}
   hand.textContent=data?.queued?'✋ Leave queue':'✋ Raise hand';hand.disabled=pending||!data?.canSpeak||!!turn?.mine;
   microphone.hidden=!connected||!turn?.mine;microphone.disabled=pending||!room?.localParticipant.permissions?.canPublish;microphone.textContent=mic?'Mute mic':'Enable mic';
-  end.hidden=!connected||!turn?.mine;resume.hidden=!connected||room?.canPlaybackAudio!==false;
+  end.hidden=!connected||!turn?.mine;resume.hidden=!connected;
   select.hidden=!connected||data?.fields.length<2;select.disabled=data?.queued||!!turn?.mine||pending;
   queue.textContent=connected?`${data?.participants||0}/10 connected${data?.queue.length?' · Queue: '+data.queue.map(m=>m.mine?'You':m.nickname).join(' → '):''}`:'';
   const rated=turn||data?.turns[0],signature=JSON.stringify(rated&&[rated.id,rated.upvotes,rated.downvotes,rated.myVote,rated.canVote]);
