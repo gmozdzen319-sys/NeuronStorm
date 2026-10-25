@@ -1,4 +1,6 @@
-// Verification is separate from reputation. Only this Debate vote path awards it.
+import {randomInt} from 'node:crypto';
+import {verificationDueAt} from './live-talk-policy.mjs';
+// Verification is separate from reputation. Text and live contributions share it.
 export const VERIFICATION_WAIT=48*60*60*1000;
 const fail=(status,message)=>Object.assign(Error(message),{status});
 export async function registerVerificationFields(db,address,now){
@@ -24,11 +26,11 @@ export async function verificationForAccounts(db,addresses,now,{admin=false}={})
  if(!addresses.length)return new Map();
  const rows=await db.prepare(`SELECT m.address,f.id,f.name,m.first_seen AS "firstSeen",m.date_source AS "dateSource",m.achieved_at AS "achievedAt",
  EXISTS(SELECT 1 FROM profile_categories pc JOIN categories c ON c.id=pc.category_id WHERE pc.address=m.address AND c.normalized_name=f.normalized_name) AS active,
- count(v.message_id) FILTER(WHERE v.counted AND v.value=1) AS positive,
- count(v.message_id) FILTER(WHERE v.counted AND v.value=-1) AS negative
+ count(v.message_id) FILTER(WHERE (CASE WHEN v.effective_at<=$2 THEN v.counted ELSE v.effective_counted END) AND (CASE WHEN v.effective_at<=$2 THEN v.value ELSE v.effective_value END)=1) AS positive,
+ count(v.message_id) FILTER(WHERE (CASE WHEN v.effective_at<=$2 THEN v.counted ELSE v.effective_counted END) AND (CASE WHEN v.effective_at<=$2 THEN v.value ELSE v.effective_value END)=-1) AS negative
  FROM verification_memberships m JOIN verification_fields f ON f.id=m.field_id
  LEFT JOIN verification_votes v ON v.recipient=m.address AND v.field_id=f.id
- WHERE m.address=ANY($1::text[]) GROUP BY f.id,m.address,m.field_id ORDER BY f.name,f.id`).all(addresses);
+ WHERE m.address=ANY($1::text[]) GROUP BY f.id,m.address,m.field_id ORDER BY f.name,f.id`).all(addresses,now);
  const result=new Map();for(const r of rows.filter(r=>admin||r.active)){const net=r.positive-r.negative,percent=Math.max(0,Math.min(100,Math.round(net*10000/30)/100));
   if(!result.has(r.address))result.set(r.address,[]);
   result.get(r.address).push({id:r.id,name:r.name,net,positive:r.positive,negative:r.negative,percent,verified:net>=30,...(admin?{active:r.active,firstSeen:r.firstSeen,dateSource:r.dateSource,achievedAt:r.achievedAt,waitingUntil:r.firstSeen+VERIFICATION_WAIT,waiting:now<r.firstSeen+VERIFICATION_WAIT}:{})});
@@ -48,10 +50,20 @@ export async function recordVerificationVote(db,account,qid,messageId,value,now)
  const recipientActive=await activeField(db,m.author,m.field_id);
  const counted=value!==0&&mature&&recipientActive;
  const reason=!value?'removed':!mature?'waiting':!recipientActive?'recipient_inactive':'eligible';
- await db.prepare(`INSERT INTO verification_votes(message_id,voter,recipient,field_id,value,counted,cast_at) VALUES($1,$2,$3,$4,$5,$6,$7)
- ON CONFLICT(message_id,voter) DO UPDATE SET value=excluded.value,counted=excluded.counted,cast_at=excluded.cast_at`).run(messageId,voter,m.author,m.field_id,value,counted,now);
+ const effectiveValue=previous?(previous.effective_at<=now?previous.value:previous.effective_value):0;
+ const effectiveCounted=previous?(previous.effective_at<=now?previous.counted:previous.effective_counted):false;
+ const due=verificationDueAt(now,randomInt);
+ await db.prepare(`INSERT INTO verification_votes(message_id,voter,recipient,field_id,value,counted,cast_at,effective_value,effective_counted,effective_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+ ON CONFLICT(message_id,voter) DO UPDATE SET value=excluded.value,counted=excluded.counted,cast_at=excluded.cast_at,effective_value=excluded.effective_value,effective_counted=excluded.effective_counted,effective_at=excluded.effective_at`).run(messageId,voter,m.author,m.field_id,value,counted,now,effectiveValue,effectiveCounted,due);
  await db.prepare(`INSERT INTO verification_events(message_id,question_id,voter,recipient,field_id,previous_value,value,previous_counted,counted,reason,occurred_at)
  VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`).run(messageId,qid,voter,m.author,m.field_id,previous?.value||0,value,previous?.counted||false,counted,reason,now);
- await db.prepare(`UPDATE verification_memberships SET achieved_at=$3 WHERE address=$1 AND field_id=$2 AND achieved_at IS NULL
- AND (SELECT COALESCE(sum(value) FILTER(WHERE counted),0) FROM verification_votes WHERE recipient=$1 AND field_id=$2)>=30`).run(m.author,m.field_id,now);
+}
+
+export async function settleVerification(db,now){
+ // Scores are already time-derived above, so a restart cannot lose an award.
+ // This only preserves the first observed completed milestone for admin history.
+ await db.prepare(`UPDATE verification_memberships m SET achieved_at=$1 WHERE achieved_at IS NULL AND
+ (SELECT COALESCE(sum(CASE WHEN v.effective_at<=$1 THEN v.value ELSE v.effective_value END)
+ FILTER(WHERE CASE WHEN v.effective_at<=$1 THEN v.counted ELSE v.effective_counted END),0)
+ FROM verification_votes v WHERE v.recipient=m.address AND v.field_id=m.field_id)>=30`).run(now);
 }

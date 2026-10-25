@@ -5,7 +5,7 @@ import {createApp,ADMIN} from './database.mjs';
 import {saveProfile,readProfile} from '../profiles.mjs';
 import {createQuestion,replyToThread,readThread} from '../threads.mjs';
 import {debate,voteOnDebate} from '../debate.mjs';
-import {verificationFields,debateFields,VERIFICATION_WAIT} from '../verification.mjs';
+import {verificationFields,debateFields,VERIFICATION_WAIT,settleVerification} from '../verification.mjs';
 import {reputation} from '../reputation.mjs';
 import {createHash} from 'node:crypto';
 import http from 'node:http';
@@ -17,7 +17,7 @@ async function fixture(t){
  const q=await createQuestion(db,accounts[0],{body:'Technical discussion',categoryIds:categories.map(c=>c.id)},now);
  const fields=await debateFields(db,q.id),mechanic=fields.find(f=>f.name==='Mechanic').id,cooking=fields.find(f=>f.name==='Cooking').id;
  const post=async(a=accounts[1],fieldId=mechanic,time=now)=>{const clientId=randomUUID();await debate(db,a,q.id,'session',new URLSearchParams(),{body:'Contribution',clientId,fieldId},time);return (await db.prepare('SELECT id FROM debate_messages WHERE client_id=$1').get(clientId)).id;};
- const score=async(a=accounts[1],admin=false)=>(await verificationFields(db,a.address,now,{admin}));
+ const score=async(a=accounts[1],admin=false)=>{const observed=now+VERIFICATION_WAIT+600000;await settleVerification(db,observed);return verificationFields(db,a.address,observed,{admin});};
  return {...app,accounts,now,q:q.id,mechanic,cooking,post,score};
 }
 test('Verification is separate; waiting votes never mature retroactively, repeated votes stay idempotent',async t=>{
@@ -52,12 +52,12 @@ test('Author without topic can participate but cannot rate or earn verification;
 test('30 votes by the same peer across contributions automatically verify; removal/re-add preserves history and achievement',async t=>{
  const f=await fixture(t),[,author,voter]=f.accounts,time=f.now+VERIFICATION_WAIT,messages=[];
  for(let i=0;i<30;i++){const m=await f.post(author,f.mechanic,time);messages.push(m);await voteOnDebate(f.db,voter,f.q,m,{value:1},time);}
- let score=(await f.score(author,true)).find(x=>x.id===f.mechanic);assert.equal(score.percent,100);assert.equal(score.verified,true);assert.equal(score.achievedAt,time);
+ let score=(await f.score(author,true)).find(x=>x.id===f.mechanic);assert.equal(score.percent,100);assert.equal(score.verified,true);assert.equal(score.achievedAt,f.now+VERIFICATION_WAIT+600000);
  await voteOnDebate(f.db,voter,f.q,messages[0],{value:-1},time+1);
- score=(await f.score(author,true)).find(x=>x.id===f.mechanic);assert.equal(score.net,28);assert.equal(score.verified,false);assert.equal(score.achievedAt,time);
+ score=(await f.score(author,true)).find(x=>x.id===f.mechanic);assert.equal(score.net,28);assert.equal(score.verified,false);assert.equal(score.achievedAt,f.now+VERIFICATION_WAIT+600000);
  await saveProfile(f.db,author.address,{nickname:'Member',work:[],hobbies:['Cooking']},time+2);assert(!(await f.score()).some(x=>x.id===f.mechanic));
  await saveProfile(f.db,author.address,{nickname:'Member',work:[' MECHANIC '],hobbies:['Cooking']},time+3);
- const restored=(await f.score(author,true)).find(x=>x.id===f.mechanic);assert.equal(restored.net,28);assert.equal(restored.firstSeen,f.now);assert.equal(restored.achievedAt,time);
+ const restored=(await f.score(author,true)).find(x=>x.id===f.mechanic);assert.equal(restored.net,28);assert.equal(restored.firstSeen,f.now);assert.equal(restored.achievedAt,f.now+VERIFICATION_WAIT+600000);
  await saveProfile(f.db,author.address,{nickname:'Member',work:[],hobbies:['Mechanic','Cooking']},time+4);
  assert.equal((await f.score()).find(x=>x.id===f.mechanic).net,28);
  await replyToThread(f.db,author,f.q,{body:'Formal answer'},time+5);assert.equal((await f.score()).find(x=>x.id===f.mechanic).net,28);

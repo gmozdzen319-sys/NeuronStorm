@@ -1,5 +1,7 @@
 import {readFileForAccount} from './content-files.mjs';
-import {verificationFields} from './verification.mjs';
+import {verificationFields,settleVerification} from './verification.mjs';
+import {configuredLiveTalk} from './live-talk-provider.mjs';
+import {createLiveTalk} from './live-talk.mjs';
 import {createTokenNotices} from './token-notices.mjs';
 import {createWalletRPC as notificationRPC} from './wallet/chain.mjs';
 import {currentWalletForIdentity} from './current-wallet.mjs';
@@ -51,8 +53,10 @@ const failure = (status, message) => Object.assign(new Error(message), { status 
 
 export async function createApp({ database = process.env.DATABASE_URL, databasePoolSize=5, origin = 'http://localhost:3000', now = Date.now, tokenFetch = fetch, marketFetch = fetch, paymentFetch = fetch, geoLookup=lookupCountry, trustProxy=process.env.RENDER==='true', legal=loadLegal() } = {}) {
   const runningVersion=JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version;
+  const liveTalkProvider=configuredLiveTalk();
   const sendProgress=createSendProgress();
   const db = await openDatabase(database,{max:databasePoolSize,walletGeneration:WALLET_GENERATION});
+  const liveTalk=createLiveTalk(db,liveTalkProvider,now);
   try{await initLegal(db,legal);}catch(error){await db.close();throw error;}
   let passkeyConfig;
   try{passkeyConfig=passkeyConfiguration(origin);}catch(error){await db.close();throw error;}
@@ -97,6 +101,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     res.setHeader('Cache-Control', 'no-store');
+    if(liveTalkProvider)res.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' https://*.livekit.cloud wss://*.livekit.cloud; frame-ancestors 'none'; base-uri 'none'; form-action 'self'`);
     const json = (status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' }); res.end(JSON.stringify(value)); };
     try {
       if (req.headers.host !== new URL(origin).host) throw failure(403, 'Open the website at ' + origin);
@@ -183,6 +188,8 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if(path==='/api/rounds'&&req.method==='GET')return json(200,{rounds:await rounds(db,now())});
       if(path==='/api/reputation'&&req.method==='GET'){const a=await account(req);if(!a)throw failure(401,'Sign in to view your reputation.');const r=new URL(req.url,origin).searchParams.get('round');return json(200,await reputation(db,a.address.toLowerCase(),now(),r===null?undefined:Number(r)));}
       const debateVote=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/debate\/(\d+)\/vote$/);
+      const liveRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/live-talk$/);
+      if(liveRoute&&['GET','POST'].includes(req.method))return json(200,await liveTalk.handle(await account(req),liveRoute[1],req.method==='POST'?await body(req):null));
       if(debateVote&&req.method==='POST')return json(200,await voteOnDebate(db,await account(req),debateVote[1],Number(debateVote[2]),await body(req),now()));
       if(path==='/api/rewards'&&req.method==='GET'){const balance=await readNeuron(REWARD_ADDRESS);return json(200,{address:REWARD_ADDRESS,balance:balance.balance,updatedAt:balance.updatedAt,...(await rewardGrowth(db,balance.balance,now()))});}
       const paymentStatus=path.match(/^\/api\/payments\/([a-f0-9-]{36})$/i);if(paymentStatus&&req.method==='GET')return json(200,await payments.status(await account(req),paymentStatus[1]));
@@ -308,7 +315,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0),cookie('ns_passkey_session','',0),cookie('ns_passkey_challenge','',0)]);
         return json(200, { ok: true });
       }
-      const files = { '/verification-ui.js':['public/verification-ui.js','text/javascript'], '/file-ui.js':['public/file-ui.js','text/javascript'], '/profile-validation.js':['public/profile-validation.js','text/javascript'], '/pelagus-mark.png':['public/brands/pelagus-mark.png','image/png'], '/blip-mark.svg':['public/brands/blip-mark.svg','image/svg+xml'], '/passkey-ui.js':['public/passkey-ui.js','text/javascript'], '/fonts/audiowide/Audiowide-Regular.ttf':['public/fonts/audiowide/Audiowide-Regular.ttf','font/ttf'], '/reputation-ui.js':['public/reputation-ui.js','text/javascript'], '/question-tools.js':['public/question-tools.js','text/javascript'], '/member-tools.js':['public/member-tools.js','text/javascript'], '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
+      const files = { '/live-talk.js':['public/live-talk.js','text/javascript'], '/livekit-client.js':['node_modules/livekit-client/dist/livekit-client.esm.mjs','text/javascript'], '/verification-ui.js':['public/verification-ui.js','text/javascript'], '/file-ui.js':['public/file-ui.js','text/javascript'], '/profile-validation.js':['public/profile-validation.js','text/javascript'], '/pelagus-mark.png':['public/brands/pelagus-mark.png','image/png'], '/blip-mark.svg':['public/brands/blip-mark.svg','image/svg+xml'], '/passkey-ui.js':['public/passkey-ui.js','text/javascript'], '/fonts/audiowide/Audiowide-Regular.ttf':['public/fonts/audiowide/Audiowide-Regular.ttf','font/ttf'], '/reputation-ui.js':['public/reputation-ui.js','text/javascript'], '/question-tools.js':['public/question-tools.js','text/javascript'], '/member-tools.js':['public/member-tools.js','text/javascript'], '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });
@@ -323,7 +330,9 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       return json(error.status || 500, { error: error.status ? error.message : 'Server error. Please try again.' });
     }
   });
-  let expiryTimer,provisionTimer,provisionWork,sendTimer,sendWork;
+  let expiryTimer,provisionTimer,provisionWork,sendTimer,sendWork,liveTimer,liveWork;
+  const liveMaintenance=()=>{if(!liveWork)liveWork=(async()=>{await settleVerification(db,now());await liveTalk.tick();})().catch(()=>console.error('[live-talk] maintenance deferred')).finally(()=>{liveWork=null;});};
+  server.on('listening',()=>{liveMaintenance();liveTimer=setInterval(liveMaintenance,3000);liveTimer.unref();});
   const reconcileSends=()=>{
     if(!feeWallet?.reconciler||sendWork)return;
     sendWork=feeWallet.reconciler.poll().catch(()=>console.error('Send verification deferred; no transaction resubmitted.')).finally(()=>{sendWork=null;});
@@ -340,8 +349,8 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   const runMaintenance=()=>maintain().catch(()=>console.error('Question maintenance failed.'));
   server.on('listening',()=>{runMaintenance();expiryTimer=setInterval(runMaintenance,10000);expiryTimer.unref();if(walletExecutor?.provisioner||autoActivation){provisionApproved();provisionTimer=setInterval(provisionApproved,10000);provisionTimer.unref();}});
   server.on('listening',()=>{if(feeWallet?.reconciler){reconcileSends();sendTimer=setInterval(reconcileSends,10000);sendTimer.unref();}});
-  server.on('close',()=>{clearInterval(expiryTimer);clearInterval(provisionTimer);clearInterval(sendTimer);});
-  return { server, db, async close(){clearInterval(expiryTimer);clearInterval(provisionTimer);clearInterval(sendTimer);if(server.listening)await new Promise(resolve=>server.close(resolve));if(maintenance)await maintenance.catch(()=>{});if(provisionWork)await provisionWork;if(sendWork)await sendWork;await db.close();} };
+  server.on('close',()=>{clearInterval(expiryTimer);clearInterval(provisionTimer);clearInterval(sendTimer);clearInterval(liveTimer);});
+  return { server, db, async close(){clearInterval(liveTimer);if(liveWork)await liveWork;clearInterval(expiryTimer);clearInterval(provisionTimer);clearInterval(sendTimer);if(server.listening)await new Promise(resolve=>server.close(resolve));if(maintenance)await maintenance.catch(()=>{});if(provisionWork)await provisionWork;if(sendWork)await sendWork;await db.close();} };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

@@ -14,6 +14,8 @@ export async function voteOnDebate(db,account,id,messageId,input,now){
   const voter=account.address.toLowerCase();
   if(voter===m.author)throw fail(403,'You cannot rate your own message.');
   if(await isBlocked(db,voter,m.author))throw fail(403,'Ratings between these accounts are blocked.');
+  const spoken=await db.prepare('SELECT id FROM live_talk_turns WHERE message_id=$1').get(messageId);
+  if(spoken&&!await db.prepare('SELECT 1 FROM live_talk_heard WHERE turn_id=$1 AND address=$2').get(spoken.id,voter))throw fail(403,'Only listeners present during this live contribution can rate it.');
   if(![1,-1,0].includes(input.value))throw fail(400,'Choose Helpful, Not Helpful or remove your vote.');
   await recordVerificationVote(db,account,id,messageId,input.value,now);
   await db.query("SELECT set_config('neuron.event_time',$1,true)",[String(now)]);
@@ -79,6 +81,8 @@ export async function debate(db,account,id,session,params,input,now){
   for(const r of ratings){
    const contribution=contributionById.get(r.id);
    r.canVote=!r.mine&&(!contribution.field_id||ownFields.has(contribution.field_id));
+   const spoken=await db.prepare('SELECT id FROM live_talk_turns WHERE message_id=$1').get(r.id);
+   if(spoken)r.canVote=r.canVote&&!!await db.prepare('SELECT 1 FROM live_talk_heard WHERE turn_id=$1 AND address=$2').get(spoken.id,address);
    // Old single-topic messages can display the known context without assigning
    // a verification contribution or retroactively awarding any points.
    const displayField=contribution.field_id??(!contribution.kind&&fields.length===1?fields[0].id:null);

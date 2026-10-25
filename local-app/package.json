@@ -1,6 +1,6 @@
 {
   "name": "neuron-storm-local",
-  "version": "0.20.7",
+  "version": "0.20.8",
   "private": true,
   "type": "module",
   "engines": {
@@ -16,6 +16,8 @@
     "@simplewebauthn/server": "13.3.3",
     "fast-xml-parser": "5.11.2",
     "file-type": "22.2.0",
+    "livekit-client": "2.23.0",
+    "livekit-server-sdk": "2.19.2",
     "pdf-lib": "1.17.1",
     "pg": "8.23.1",
     "qrcode": "1.5.4",
