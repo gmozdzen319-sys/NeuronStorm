@@ -11,6 +11,10 @@ import {createTokenUI} from './token-ui.js';
 import { connectWallet, signIn, walletError } from './wallet.js';
 import { createConversations, createSectionHistory } from './conversations.js';
 const $ = selector => document.querySelector(selector);
+// Informational UI only: never selects a provider or starts authentication.
+const walletHelp=$('#wallet-help-dialog'),walletHelpOpen=$('#wallet-help-open');
+walletHelpOpen.addEventListener('click',()=>{if(!walletHelp.open){walletHelp.showModal();walletHelp.scrollTop=0;}});
+walletHelp.addEventListener('close',()=>walletHelpOpen.focus({preventScroll:true}));
 const login = $('#login'), logout = $('#logout'), status = $('#status'), form = $('#profile-form');
 let legalInfo=null, selectedProvider=null;
 try{if(sessionStorage.getItem('ns-login-provider')==='pelagus')selectedProvider=window.pelagus;else if(sessionStorage.getItem('ns-login-provider')==='blip')selectedProvider=getWalletProvider();}catch{}
