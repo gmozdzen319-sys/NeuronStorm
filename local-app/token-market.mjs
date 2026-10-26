@@ -20,20 +20,11 @@ export function parseMarket(launch,quote,history,now=Date.now()){
     const state=data.tradeMarketStates?.find(valid);
     if(state&&uint(state.latestPriceQuoteE12))price=BigInt(state.latestPriceQuoteE12);
     const candles=(data.candles||[]).filter(c=>valid(c)&&uint(c.timestamp)&&uint(c.openPriceQuoteE12)&&uint(c.closePriceQuoteE12)&&c.interval===300).sort((a,b)=>Number(a.timestamp)-Number(b.timestamp));
-    const end=Math.floor(now/1000),start=end-3600;
+    const end=Math.floor(now/1000);
     const bars=candles.filter(c=>uint(c.highPriceQuoteE12)&&uint(c.lowPriceQuoteE12)).map(c=>({time:Number(c.timestamp),open:Number(c.openPriceQuoteE12)/1e12,high:Number(c.highPriceQuoteE12)/1e12,low:Number(c.lowPriceQuoteE12)/1e12,close:Number(c.closePriceQuoteE12)/1e12})).filter(c=>Number.isSafeInteger(c.time)&&c.time<=end&&[c.open,c.high,c.low,c.close].every(v=>Number.isFinite(v)&&v>0)&&c.low<=Math.min(c.open,c.close)&&c.high>=Math.max(c.open,c.close));
-    const recent=bars.filter(c=>c.time>=start);
-    // Empty trading intervals retain the last observed close, never a random price.
-    const previous=bars.filter(c=>c.time<start).at(-1);
-    if(recent.length||previous){
-      const filled=[];let last=previous?.close;
-      for(let time=Math.ceil(start/300)*300;time<=end;time+=300){
-        const bar=recent.find(c=>c.time===time);
-        if(bar){filled.push(bar);last=bar.close;}
-        else if(last)filled.push({time,open:last,high:last,low:last,close:last,noTrades:true});
-      }
-      if(filled.length)hourChart={start,end,unit:'QUAI',candles:filled};
-    }
+    // Keep actual trading candles; long periods without trades must not erase history.
+    const recent=[...new Map(bars.map(c=>[c.time,c])).values()].slice(-24);
+    if(recent.length)hourChart={start:recent[0].time,end,unit:'QUAI',spacing:'trading-intervals',candles:recent};
     const cutoff=Math.floor(now/1000)-86400;
     const earlier=candles.filter(c=>Number(c.timestamp)+300<=cutoff).at(-1);
     const baseline=earlier?earlier.closePriceQuoteE12:now-created<86400000?candles[0]?.openPriceQuoteE12:null;

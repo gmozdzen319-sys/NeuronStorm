@@ -31,13 +31,13 @@ test('reader uses only Quainance endpoints and caches successes and failures',as
 });
 
 
-test('hour chart uses validated recent candles and hides missing or stale history',()=>{
+test('chart preserves real trading history during quiet periods and rejects stale sources',()=>{
  const result=parseMarket(launch,quote,history(),now);assert.equal(result.hourChart.unit,'QUAI');
- assert.equal(result.hourChart.end-result.hourChart.start,3600);
+ assert.equal(result.hourChart.spacing,'trading-intervals');
  assert(result.hourChart.candles.every(p=>p.time>=result.hourChart.start&&p.time<=result.hourChart.end&&p.close>0));
  assert.equal(parseMarket(launch,quote,undefined,now).hourChart,null);
  const stale=history();stale.anchor.timestamp-=400;assert.equal(parseMarket(launch,quote,stale,now).hourChart,null);
- assert(parseMarket(launch,quote,history('2000000','1000000',Math.floor(now/1000)-7200),now).hourChart.candles.every(c=>c.noTrades&&c.close===.000001));
+ const older=parseMarket(launch,quote,history('2000000','1000000',Math.floor(now/1000)-7200),now).hourChart;assert.equal(older.candles.length,1);assert(older.start<now/1000-3600);assert(!older.candles[0].noTrades);
  const wrong=history();wrong.payload.data.candles[0].token='wrong';assert.equal(parseMarket(launch,quote,wrong,now).hourChart,null);
  assert.equal(parseMarket(launch,quote,history('2000000','1000000',Math.floor(now/1000)+300),now).hourChart,null);
 });
