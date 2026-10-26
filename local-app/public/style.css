@@ -249,3 +249,15 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 #notification-sound[aria-pressed=true]{opacity:1;color:#8eaac5}
 @keyframes notification-breathe{0%,100%{transform:scale(1);filter:drop-shadow(0 0 2px #40caff25)}50%{transform:scale(1.14);filter:drop-shadow(0 0 6px #40caff80)}}
 @media(prefers-reduced-motion:reduce){#notifications-button.unread-pulse .notification-bell{animation:none;filter:drop-shadow(0 0 4px #40caff60)}}
+
+/* Candles merge into the header beside the price, with no frame or visible data. */
+.brand-group{position:relative;isolation:isolate;flex:1;min-width:360px;max-width:580px;padding-right:150px}
+.brand-group>.brand,.brand-group>.token-live{position:relative;z-index:1;width:max-content;max-width:100%}
+.token-hour-chart{position:absolute;right:0;top:8px;bottom:5px;width:145px;pointer-events:none;opacity:.78;mask-image:linear-gradient(90deg,transparent,#000 12%,#000 95%,transparent)}
+.token-hour-chart svg{width:100%;height:100%;overflow:visible}
+.token-hour-chart line{stroke:currentColor;stroke-width:1}
+.token-hour-chart rect{fill:currentColor}
+.token-hour-chart .candle-up{color:#40caff;filter:drop-shadow(0 0 2px #40caff30)}
+.token-hour-chart .candle-down{color:#ff537d;filter:drop-shadow(0 0 2px #ff537d25)}
+@media(max-width:1150px){.brand-group{padding-right:95px;min-width:300px}.token-hour-chart{width:90px}}
+@media(max-width:540px){.brand-group{flex-basis:100%;max-width:none;padding-right:110px;min-width:0}.token-hour-chart{width:105px}.brand-group>.brand{font-size:18px}.brand-group .token-live small{font-size:10px}}

@@ -12,7 +12,7 @@ export function parseLaunch(response){
 export function parseMarket(launch,quote,history,now=Date.now()){
   const q=quote?.quai,quoteTime=Date.parse(q?.takenAt),created=Number(launch.createdAtTimestamp)*1000;
   if(q?.source!=='mexc'||typeof q.usd!=='number'||!Number.isFinite(q.usd)||q.usd<=0||!Number.isFinite(quoteTime)||quoteTime>now+60000||now-quoteTime>1800000||created>now)throw new Error('USD quote unavailable');
-  let price=BigInt(launch.latestPriceQuoteE12),changePercent=null;
+  let price=BigInt(launch.latestPriceQuoteE12),changePercent=null,hourChart=null;
   const data=history?.payload?.data,anchor=history?.anchor;
   const validHistory=data?._meta?.hasIndexingErrors===false&&Number.isSafeInteger(anchor?.timestamp)&&Math.abs(now/1000-anchor.timestamp)<300&&history?.input?.token===TOKEN&&history?.input?.marketAddress===launch.pair.address;
   if(validHistory){
@@ -20,13 +20,27 @@ export function parseMarket(launch,quote,history,now=Date.now()){
     const state=data.tradeMarketStates?.find(valid);
     if(state&&uint(state.latestPriceQuoteE12))price=BigInt(state.latestPriceQuoteE12);
     const candles=(data.candles||[]).filter(c=>valid(c)&&uint(c.timestamp)&&uint(c.openPriceQuoteE12)&&uint(c.closePriceQuoteE12)&&c.interval===300).sort((a,b)=>Number(a.timestamp)-Number(b.timestamp));
+    const end=Math.floor(now/1000),start=end-3600;
+    const bars=candles.filter(c=>uint(c.highPriceQuoteE12)&&uint(c.lowPriceQuoteE12)).map(c=>({time:Number(c.timestamp),open:Number(c.openPriceQuoteE12)/1e12,high:Number(c.highPriceQuoteE12)/1e12,low:Number(c.lowPriceQuoteE12)/1e12,close:Number(c.closePriceQuoteE12)/1e12})).filter(c=>Number.isSafeInteger(c.time)&&c.time<=end&&[c.open,c.high,c.low,c.close].every(v=>Number.isFinite(v)&&v>0)&&c.low<=Math.min(c.open,c.close)&&c.high>=Math.max(c.open,c.close));
+    const recent=bars.filter(c=>c.time>=start);
+    // Empty trading intervals retain the last observed close, never a random price.
+    const previous=bars.filter(c=>c.time<start).at(-1);
+    if(recent.length||previous){
+      const filled=[];let last=previous?.close;
+      for(let time=Math.ceil(start/300)*300;time<=end;time+=300){
+        const bar=recent.find(c=>c.time===time);
+        if(bar){filled.push(bar);last=bar.close;}
+        else if(last)filled.push({time,open:last,high:last,low:last,close:last,noTrades:true});
+      }
+      if(filled.length)hourChart={start,end,unit:'QUAI',candles:filled};
+    }
     const cutoff=Math.floor(now/1000)-86400;
     const earlier=candles.filter(c=>Number(c.timestamp)+300<=cutoff).at(-1);
     const baseline=earlier?earlier.closePriceQuoteE12:now-created<86400000?candles[0]?.openPriceQuoteE12:null;
     if(baseline&&BigInt(baseline)>0n){const change=Number((price-BigInt(baseline))*1000000n/BigInt(baseline))/10000;if(Number.isFinite(change))changePercent=change;}
   }
   const priceUsd=Number(price)/1e12*q.usd;if(!Number.isFinite(priceUsd)||priceUsd<=0)throw new Error('Invalid price');
-  return {priceUsd:String(priceUsd),changePercent,period:now-created<86400000?'since launch · QUAI':'24h · QUAI',source:'Quainance',dex:'Quainance',pool:launch.pair.address,quoteAt:q.takenAt,checkedAt:new Date(now).toISOString()};
+  return {hourChart,priceUsd:String(priceUsd),changePercent,period:now-created<86400000?'since launch · QUAI':'24h · QUAI',source:'Quainance',dex:'Quainance',pool:launch.pair.address,quoteAt:q.takenAt,checkedAt:new Date(now).toISOString()};
 }
 export function createMarketReader(fetcher=fetch){
   let cached=null;
