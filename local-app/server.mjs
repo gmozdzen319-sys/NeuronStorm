@@ -1,3 +1,4 @@
+import {recordDailyLogin} from './daily-activity.mjs';
 import {readFileForAccount} from './content-files.mjs';
 import {verificationFields,settleVerification} from './verification.mjs';
 import {configuredLiveTalk} from './live-talk-provider.mjs';
@@ -138,6 +139,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
           res.setHeader('Set-Cookie',cookie('ns_passkey_challenge',browser,120));return json(200,result);
         }
         const result=await passkeys.verify(purpose,browser||'',input);
+        await recordDailyLogin(db,result.account,now());
         await passkeys.logout(cookies(req).ns_passkey_session);
         res.setHeader('Set-Cookie',[cookie('ns_passkey_session',result.raw,28800),cookie('ns_passkey_challenge','',0)]);
         return json(200,{account:result.account});
@@ -210,7 +212,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       }
       const debateRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/debate$/);
       if(debateRoute&&['GET','POST'].includes(req.method))return json(200,(await debate(db,(await account(req)),debateRoute[1],await actionSession(req),new URL(req.url,origin).searchParams,req.method==='POST'?await body(req):null,now())));
-      if (path === '/api/session' && req.method === 'GET') return json(200, { account: (await account(req)) || await passkeys.session(cookies(req).ns_passkey_session) });
+      if (path === '/api/session' && req.method === 'GET') {const current=(await account(req)) || await passkeys.session(cookies(req).ns_passkey_session);await recordDailyLogin(db,current,now());return json(200,{account:current});}
       if(path==='/api/notifications'&&req.method==='GET'){const owner=await account(req);const result=await listNotifications(db,owner,new URL(req.url,origin).searchParams);tokenNotices?.schedule(owner);return json(200,result);}
       if(['/api/notifications/read','/api/notifications/read-all'].includes(path)&&req.method==='POST')return json(200,(await readNotifications(db,(await account(req)),await body(req),path.endsWith('read-all'),now())));
       if(path.startsWith('/api/admin/')){
@@ -301,6 +303,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
           const old = cookies(req).ns_session;
           if (old) (await db.prepare("DELETE FROM sessions WHERE token_hash=$1").run(hash(old)));
           (await db.prepare("INSERT INTO sessions VALUES($1,$2,$3)").run(hash(session), recovered, now() + 28800000));
+          await recordDailyLogin(db,{address:recovered},now());
 
         });
         res.setHeader('Set-Cookie', [cookie('ns_session', session, 28800), cookie('ns_challenge', '', 0)]);

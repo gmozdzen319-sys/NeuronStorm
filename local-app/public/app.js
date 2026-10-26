@@ -49,6 +49,10 @@ async function api(path, data) {
 }
 function notice(message = '', error = false) { status.textContent = message; status.classList.toggle('error', error); }
 function profileNotice(message = '', type = '') { const target=$('#profile-status'); target.textContent=message; target.className=type; }
+function renderActivity(points=0){
+ let target=$('#saved-activity');if(!target){target=document.createElement('p');target.id='saved-activity';target.className='field-hint';$('#saved-points').after(target);}
+ target.textContent=points+' Activity points';target.title='+1 per day you sign in (UTC). Separate from reputation and topic verification.';
+}
 function showProfile() {
   for(const control of Object.values(topicSuggestions))control.close();
   conversations.openProfile();
@@ -57,7 +61,7 @@ function showProfile() {
   $('#profile-title').textContent='My Profile';
   $('#profile-intro').textContent='Your experience, your interests, your next conversation.';
   form.hidden=true; $('#profile-view').hidden=false;
-  renderReputation(profile.reputation);$('#saved-nickname').textContent=profile.nickname;$('#saved-points').textContent='★ '+(profile.points||0)+' Reputation';
+  renderReputation(profile.reputation);renderActivity(profile.activityPoints);$('#saved-nickname').textContent=profile.nickname;$('#saved-points').textContent='★ '+(profile.points||0)+' Reputation';
   $('#saved-name').textContent=[profile.firstName,profile.lastName].filter(Boolean).join(' ');
   for(const kind of ['work','hobbies']) {
     const list=$('#saved-'+kind);list.replaceChildren();
@@ -237,6 +241,6 @@ await refresh();window.addEventListener('focus',refresh);setInterval(refresh,600
 async function refreshPoints(){
   if(!currentAccount||!profile||$('#profile-area').hidden||$('#profile-view').hidden)return;
   const current=profileRevision;
-  try{const result=await api('/api/profile');if(current!==profileRevision||!result.profile)return;profile.reputation=result.profile.reputation;renderReputation(profile.reputation);profile.points=result.profile.points;$('#saved-points').textContent='★ '+profile.points+' Reputation';}catch(error){if(error.httpStatus===401)await refresh();}
+  try{const result=await api('/api/profile');if(current!==profileRevision||!result.profile)return;profile.activityPoints=result.profile.activityPoints;renderActivity(profile.activityPoints);profile.reputation=result.profile.reputation;renderReputation(profile.reputation);profile.points=result.profile.points;$('#saved-points').textContent='★ '+profile.points+' Reputation';}catch(error){if(error.httpStatus===401)await refresh();}
 }
 setInterval(()=>{if(!document.hidden)refreshPoints();},5000);

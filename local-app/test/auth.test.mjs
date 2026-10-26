@@ -708,3 +708,13 @@ test('Registration provider metadata is stored only after verified first registr
   assert.equal((await f.db.prepare('SELECT method FROM account_registration_methods WHERE address=$1').get(address)).method,method);
  }
 });
+
+
+test('authenticated session awards one daily activity point; anonymous and repeated requests cannot add points',async t=>{
+ const f=await fixture(t);await f.request('/api/session');
+ assert.equal((await f.db.prepare('SELECT count(*) AS n FROM daily_login_activity').get()).n,0);
+ await f.login();await f.request('/api/session');await f.request('/api/session');
+ assert.equal((await f.db.prepare('SELECT count(*) AS n FROM daily_login_activity').get()).n,1);
+ await f.request('/api/logout',{});await f.request('/api/session');
+ assert.equal((await f.db.prepare('SELECT count(*) AS n FROM daily_login_activity').get()).n,1);
+});

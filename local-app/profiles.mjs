@@ -1,3 +1,4 @@
+import {activityPoints} from './daily-activity.mjs';
 import {validateUpload,storeFile,fileMetadata} from './content-files.mjs';
 import {registerVerificationFields,verificationFields} from './verification.mjs';
 import {currentWalletForIdentity} from './current-wallet.mjs';
@@ -28,7 +29,7 @@ export async function readProfile(db, address) {
   if (!profile) return null;
   const selected = (await db.prepare(`SELECT c.id,c.kind,c.name FROM categories c JOIN profile_categories p ON p.category_id=c.id WHERE p.address=$1 ORDER BY lower(c.name),c.id`).all(address));
   const score=await reputation(db,address);
-  return { ...profile, verification:await verificationFields(db,address,Date.now()), avatar:(await fileMetadata(db,'avatar',address))[0]||null, currentWalletAddress:await currentWalletForIdentity(db,address), points:score.units/100,reputation:score, work: selected.filter(c => c.kind === 'work').map(({id,name})=>({id,name})), hobbies: selected.filter(c => c.kind === 'hobbies').map(({id,name})=>({id,name})) };
+  return { ...profile, activityPoints:await activityPoints(db,address), verification:await verificationFields(db,address,Date.now()), avatar:(await fileMetadata(db,'avatar',address))[0]||null, currentWalletAddress:await currentWalletForIdentity(db,address), points:score.units/100,reputation:score, work: selected.filter(c => c.kind === 'work').map(({id,name})=>({id,name})), hobbies: selected.filter(c => c.kind === 'hobbies').map(({id,name})=>({id,name})) };
 }
 export async function readCategories(db,availableOnly=false) {
   const rows=(await db.prepare(`SELECT c.id,c.kind,c.name,(SELECT count(*) FROM profile_categories pc WHERE pc.category_id=c.id) AS "memberCount" FROM categories c ${availableOnly?'WHERE EXISTS(SELECT 1 FROM profile_categories pc WHERE pc.category_id=c.id)':''} ORDER BY lower(c.name),c.id`).all());
