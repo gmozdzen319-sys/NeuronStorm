@@ -64,7 +64,7 @@ export function createLiveTalkUI(api){
   if((data?.finished||data?.paused||data?.endsAt&&now()>=data.endsAt)&&room)disconnect();
   if(mic&&!turn?.mine){mic=false;room?.localParticipant.setMicrophoneEnabled(false).catch(()=>{});}
   clock.textContent='Talk remaining '+time((data?.remainingMs??600000)-(data?.speaking?Math.max(0,Math.min(now(),data.speakingUntil)-data.now):0));
-  status.textContent=error||(data?.finished?'Live Talk has ended. Continue in the text debate.':!data?.enabled?'Live Talk is not available yet.':data?.paused?'Paused · tap Join to continue.':turn?`${turn.nickname} · ${turn.topic||'Follow-up'} · ${time(turn.endsAt-now())}${turn.mine&&!mic?' · Tap Enable mic to speak.':''}`:connected?'Listening · raise your hand to speak.':'Join to listen. Microphone access is only needed to speak.');
+  status.textContent=error||(data?.finished?'Live Talk has ended. Continue in the text debate.':!data?.enabled?'Live Talk is not available yet.':data?.paused?'Paused · tap Join to continue.':turn?`${turn.nickname} · ${turn.topic||'Follow-up'} · ${time(turn.endsAt-now())}${turn.mine&&!mic?' · Tap Enable mic to speak.':''}`:connected?'Listening':'Join to listen. Microphone access is only needed to speak.');
   join.hidden=connected;join.disabled=pending||!data?.enabled||data?.finished||data?.participants>=10;
   for(const b of [speak,end,resume,leave]){b.hidden=!connected;b.disabled=pending;}
   speak.hidden=!connected||!!turn?.mine;speak.disabled=pending||!data?.canSpeak||!!turn;
