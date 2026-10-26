@@ -71,7 +71,7 @@ export function createPasskeyUI({api,onExternal,onAccount,onSetupReady=()=>{}}){
     $('#passkey-options').hidden=true;message('');dialog.showModal();
     $('#auth-passkey').disabled=true;$('#auth-availability').textContent='Checking availability…';
     try{const [config,terms]=await Promise.all([api('/api/passkey/config'),api('/api/legal')]);legal=terms;
-      $('#auth-passkey').disabled=!config.enabled;$('#auth-availability').textContent=config.enabled?'Use your fingerprint, face or device PIN.':'Passkey is being prepared. Pelagus and BillPay are available now.';
+      $('#auth-passkey').disabled=!config.enabled;$('#auth-availability').textContent=config.enabled?'Use your fingerprint, face or device PIN. The easiest way to use Neuron Storm.':'Passkey is being prepared. Pelagus and BillPay are available now.';
       $('#passkey-terms').hidden=!terms.published;$('#passkey-agree').checked=false;
     }catch{message('Unable to check passkey availability. You can still use your connected wallet.');}
   }
