@@ -230,3 +230,22 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 .member-nav button.nav-activity{font-weight:700;animation:nav-activity-glow 4.8s ease-in-out infinite}
 @keyframes nav-activity-glow{0%,100%{color:#eaf6ff;text-shadow:0 0 8px #eaf6ff40}35%{color:#58d1ff;text-shadow:0 0 12px #40caff70}70%{color:#ef6c86;text-shadow:0 0 12px #ef6c8660}}
 @media(prefers-reduced-motion:reduce){.member-nav button.nav-activity{animation:none;color:#58d1ff;text-shadow:0 0 8px #40caff40}}
+
+/* Quiet, borderless header actions; animate only the unread bell. */
+.notification-controls{gap:6px}
+#notifications-button,#notification-sound,header #wallet-button{border:0;background:transparent;box-shadow:none;border-radius:10px;min-height:44px;padding:9px 10px;color:#9ddff2}
+#notifications-button{display:inline-flex;align-items:center;gap:6px;min-width:52px}
+#notification-sound{display:inline-flex;align-items:center;justify-content:center;min-width:44px}
+#notifications-button:hover,#notification-sound:hover,header #wallet-button:hover{background:#40caff0c;color:#eaf6ff;box-shadow:none}
+#notifications-button.unread-pulse{animation:none;background:transparent;border:0;box-shadow:none}
+.notification-bell,.notification-speaker{width:24px;height:24px;flex-shrink:0;overflow:visible}
+.notification-bell .bell-accent{color:#ef6c86}
+#notification-count{font-size:12px;font-weight:600;min-width:12px;color:#bdd9e5}
+#notifications-button.unread-pulse .notification-bell{animation:notification-breathe 2.6s ease-in-out infinite;transform-origin:center;color:#58d1ff}
+#notifications-button.unread-pulse #notification-count{color:#ff9aac}
+.notification-speaker .sound-muted{display:none;color:#ef6c86}
+#notification-sound[aria-pressed=true] .notification-speaker .sound-muted{display:block}
+#notification-sound[aria-pressed=true] .notification-speaker .sound-waves{display:none}
+#notification-sound[aria-pressed=true]{opacity:1;color:#8eaac5}
+@keyframes notification-breathe{0%,100%{transform:scale(1);filter:drop-shadow(0 0 2px #40caff25)}50%{transform:scale(1.14);filter:drop-shadow(0 0 6px #40caff80)}}
+@media(prefers-reduced-motion:reduce){#notifications-button.unread-pulse .notification-bell{animation:none;filter:drop-shadow(0 0 4px #40caff60)}}

@@ -6,7 +6,7 @@ export function advanceSequence(previous,next){
 export function createNotificationSound(button){
   let owner=null,sequence=null,context=null,muted=false;
   try{muted=localStorage.getItem('ns-notification-muted')==='true';}catch{}
-  function render(){button.textContent=muted?'🔇':'🔊';button.setAttribute('aria-pressed',String(muted));button.title=muted?'Unmute notification sounds':'Mute notification sounds';button.setAttribute('aria-label',button.title);}
+  function render(){button.setAttribute('aria-pressed',String(muted));button.title=muted?'Unmute notification sounds':'Mute notification sounds';button.setAttribute('aria-label',button.title);}
   function unlock(){
     if(muted)return;
     try{context??=new (window.AudioContext||window.webkitAudioContext)();if(context.state==='suspended')context.resume().catch(()=>{});}catch{}
