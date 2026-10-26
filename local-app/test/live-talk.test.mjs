@@ -19,7 +19,8 @@ async function fixture(t){
  const rooms=new Map(),calls=[];let revokeFails=false;
  const provider={url:'wss://test.livekit.cloud',async create(name){if(!rooms.has(name))rooms.set(name,new Map());},async participants(name){return [...(rooms.get(name)?.values()||[])];},async permission(name,identity,publish){calls.push({identity,publish});if(!publish&&revokeFails)throw Error('provider unavailable');const p=rooms.get(name)?.get(identity);if(!p)throw Error('missing participant');p.permission.canPublish=publish;},async remove(name,identity){rooms.get(name)?.delete(identity);},async removeRoom(name){rooms.delete(name);},async token(name,identity){rooms.get(name).set(identity,{identity,permission:{canPublish:false}});return 'test-token';}};
  const service=createLiveTalk(db,provider,()=>clock),post=(user,action,extra={})=>service.handle(user,q.id,{action,...extra});
- return {app,db,users,q:q.id,field,service,provider,calls,rooms,post,now:()=>clock,advance:ms=>clock+=ms,revokeFailure:()=>{revokeFails=true;}};
+ const microphone=async(user,on)=>{const m=await db.prepare('SELECT identity FROM live_talk_members WHERE question_id=$1 AND address=$2').get(q.id,user.address);for(const peers of rooms.values()){const p=peers.get(m.identity);if(p)p.tracks=[{source:2,type:0,muted:!on}];}await post(user,'microphone');};
+ return {app,db,users,q:q.id,field,service,provider,calls,rooms,post,microphone,now:()=>clock,advance:ms=>clock+=ms,revokeFailure:()=>{revokeFails=true;}};
 }
 
 test('Live Talk checks authentication and question access, caps concurrency, persists deadline',async t=>{
@@ -33,8 +34,9 @@ test('Live Talk checks authentication and question access, caps concurrency, per
  await f.post(f.users[0],'leave');f.advance(1000);await f.post(f.users[0],'join');
  assert.equal((await f.service.handle(f.users[0],f.q)).endsAt,first.endsAt);
  f.advance(600000);await f.service.tickRoom(f.q);
- await assert.rejects(f.post(f.users[0],'join'),e=>e.status===409);
  assert.equal(f.rooms.size,0);
+ const paused=await f.service.handle(f.users[0],f.q);assert.equal(paused.paused,true);assert.equal(paused.remainingMs,600000);
+ await f.post(f.users[0],'join');assert.equal((await f.service.handle(f.users[0],f.q)).remainingMs,600000);
 });
 
 test('one durable speaker, no permission until next cycle, no self or non-listener votes',async t=>{
@@ -57,7 +59,7 @@ test('one durable speaker, no permission until next cycle, no self or non-listen
 test('failed revocation does not grant the next queued speaker; restart reuses durable turn',async t=>{
  const f=await fixture(t),[a,b]=f.users;
  await f.post(a,'join');await f.post(b,'join');await f.post(a,'raise');await f.post(b,'raise');await f.service.tickRoom(f.q);await f.service.tickRoom(f.q);
- const before=(await f.service.handle(a,f.q)).turns[0];f.advance(61000);
+ await f.microphone(a,true);const before=(await f.service.handle(a,f.q)).turns[0];f.advance(61000);
  await f.post(a,'heartbeat');await f.post(b,'heartbeat');f.revokeFailure();
  const restarted=createLiveTalk(f.db,f.provider,f.now);
  await assert.rejects(restarted.tickRoom(f.q),/provider unavailable/);
@@ -70,7 +72,7 @@ test('disconnect heartbeat expiry releases members and no audio data is stored',
  const f=await fixture(t);await f.post(f.users[0],'join');await f.post(f.users[0],'raise');await f.service.tickRoom(f.q);await f.service.tickRoom(f.q);
  f.advance(26000);await f.service.tickRoom(f.q);
  assert.equal((await f.service.handle(f.users[0],f.q)).participants,0);
- assert.equal([...f.rooms.values()][0].size,0);
+ assert.equal(f.rooms.size,0);
  const columns=await f.db.prepare("SELECT column_name FROM information_schema.columns WHERE table_name LIKE 'live_talk_%'").all();
  assert(!columns.some(c=>/audio|transcript|secret|token/.test(c.column_name)));
 });
@@ -105,10 +107,11 @@ test('expired room cleanup survives provider failure and cannot restart its allo
  const original=f.provider.removeRoom;f.provider.removeRoom=async()=>{throw Error('temporary outage');};
  f.advance(600001);await assert.rejects(f.service.tickRoom(f.q),/temporary outage/);
  assert.equal((await f.db.prepare('SELECT ended_at FROM live_talk_rooms').get()).ended_at,null);
+ assert.equal((await f.db.prepare('SELECT reserved_minutes FROM live_talk_sessions').get()).reserved_minutes,110);
  await assert.rejects(f.post(a,'join'),e=>e.status===409);
  f.provider.removeRoom=original;
  await createLiveTalk(f.db,f.provider,f.now).tick();
- assert.equal((await f.db.prepare('SELECT ended_at FROM live_talk_rooms').get()).ended_at,f.now());
+ assert.equal((await f.db.prepare('SELECT paused FROM live_talk_rooms').get()).paused,true);
  assert.equal(f.rooms.size,0);
 });
 
@@ -119,4 +122,41 @@ test('only question author may request an unverified follow-up without a matchin
  await assert.rejects(f.post(b,'raise',{fieldId:f.field}),e=>e.status===403);
  await f.post(a,'raise',{fieldId:f.field});await f.service.tickRoom(f.q);
  const turn=(await f.service.handle(a,f.q)).turns[0];assert.equal(turn.fieldId,null);
+});
+
+test('idle pauses after 15 seconds; restart and rejoin preserve remaining time',async t=>{
+ const f=await fixture(t),a=f.users[0];await f.post(a,'join');
+ const old=(await f.db.prepare('SELECT room_name FROM live_talk_rooms').get()).room_name;
+ f.advance(14000);await f.service.tick();assert.equal((await f.service.handle(a,f.q)).remainingMs,600000);
+ f.advance(1000);await f.service.tick();assert.equal(f.rooms.size,0);
+ const paused=await createLiveTalk(f.db,f.provider,f.now).handle(a,f.q);assert.equal(paused.paused,true);assert.equal(paused.finished,false);
+ const session=await f.db.prepare('SELECT * FROM live_talk_sessions').get();assert.equal(session.reserved_minutes,20);assert.equal(session.ended_at,f.now());
+ await f.service.tick();assert.equal((await f.db.prepare('SELECT reserved_minutes FROM live_talk_sessions').get()).reserved_minutes,20);
+ await f.post(a,'join');assert.notEqual((await f.db.prepare('SELECT room_name FROM live_talk_rooms').get()).room_name,old);
+ assert.equal((await f.service.handle(a,f.q)).remainingMs,600000);assert.equal((await f.db.prepare('SELECT count(*) AS n FROM live_talk_sessions').get()).n,2);
+});
+
+test('only provider-confirmed unmuted microphone consumes time; mute freezes it',async t=>{
+ const f=await fixture(t),a=f.users[0];await f.post(a,'join');await f.post(a,'raise');await f.service.tick();await f.service.tick();
+ await f.post(a,'microphone',{active:true});f.advance(5000);await f.service.tick();assert.equal((await f.service.handle(a,f.q)).remainingMs,600000);
+ await f.microphone(a,true);f.advance(10000);await f.post(a,'heartbeat');await f.service.tick();assert.equal((await f.service.handle(a,f.q)).remainingMs,590000);
+ await f.microphone(a,false);f.advance(14000);await f.service.tick();assert.equal((await f.service.handle(a,f.q)).remainingMs,590000);
+ f.advance(1000);await f.service.tick();assert.equal((await f.service.handle(a,f.q)).paused,true);
+ await f.post(a,'join');assert.equal((await f.service.handle(a,f.q)).remainingMs,590000);
+});
+
+test('ten minutes of microphone time is terminal, not resumable',async t=>{
+ const f=await fixture(t),a=f.users[0];await f.post(a,'join');
+ await f.db.prepare('UPDATE live_talk_rooms SET used_ms=599000 WHERE question_id=$1').run(f.q);
+ await f.post(a,'raise');await f.service.tick();await f.service.tick();await f.microphone(a,true);
+ f.advance(1000);await f.service.tick();assert.equal((await f.service.handle(a,f.q)).finished,true);
+ assert.equal((await f.service.handle(a,f.q)).remainingMs,0);await assert.rejects(f.post(a,'join'),e=>e.status===409);
+});
+
+test('resuming checks monthly budget again and does not reset time when admission is rejected',async t=>{
+ const f=await fixture(t),a=f.users[0];await f.post(a,'join');f.advance(15000);await f.service.tick();
+ await f.db.prepare('UPDATE live_talk_sessions SET reserved_minutes=4400').run();
+ await assert.rejects(f.post(a,'join'),e=>e.status===409);
+ const state=await f.service.handle(a,f.q);assert.equal(state.paused,true);assert.equal(state.remainingMs,600000);assert.equal(f.rooms.size,0);
+ assert.equal((await f.db.prepare('SELECT count(*) AS n FROM live_talk_sessions').get()).n,1);
 });

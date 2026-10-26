@@ -11,7 +11,7 @@ export function createLiveTalkUI(api){
  const panel=document.createElement('section');panel.className='live-talk';panel.setAttribute('aria-label','Live Talk');
  const el=(tag,text='')=>{const e=document.createElement(tag);e.textContent=text;return e;};
  const heading=el('div'),title=el('strong','🎙 Live Talk'),clock=el('span');heading.className='live-talk-heading';heading.append(title,clock);
- const status=el('p','Join to listen. One person speaks at a time.'),buttons=el('div'),queue=el('p'),rating=el('div'),select=document.createElement('select'),privacy=el('small','Live audio via LiveKit — no recording or transcript. Turn and vote history is kept. Other participants may record independently.');
+ const status=el('p','Join to listen. One person speaks at a time.'),buttons=el('div'),queue=el('p'),rating=el('div'),select=document.createElement('select');
  status.setAttribute('role','status');buttons.className='live-talk-buttons';queue.className='field-hint';rating.className='live-talk-rating';select.setAttribute('aria-label','Topic for your live contribution');
  const audio=document.createElement('div');audio.hidden=true;
  const button=(label,handler)=>{const b=el('button',label);b.type='button';b.className='login';b.onclick=handler;buttons.append(b);return b;};
@@ -34,16 +34,16 @@ export function createLiveTalkUI(api){
   catch(e){disconnect();api(`/api/questions/${q}/live-talk`,{action:'leave'}).catch(()=>{});throw e;}
  }));
  const hand=button('✋ Raise hand',()=>act(()=>action(data?.queued?'lower':'raise',{fieldId:Number(select.value)})));
- const microphone=button('Enable mic',()=>act(async()=>{if(!currentTurn()?.mine||!room?.localParticipant.permissions?.canPublish)return;mic=!mic;try{await room.localParticipant.setMicrophoneEnabled(mic);}catch(e){mic=false;throw e;}}));
+ const microphone=button('Enable mic',()=>act(async()=>{if(!currentTurn()?.mine||!room?.localParticipant.permissions?.canPublish)return;mic=!mic;try{await room.localParticipant.setMicrophoneEnabled(mic);await action('microphone');}catch(e){mic=false;await room?.localParticipant.setMicrophoneEnabled(false).catch(()=>{});throw e;}}));
  const end=button('End turn',()=>act(async()=>{if(room)await room.localParticipant.setMicrophoneEnabled(false);mic=false;await action('finish');}));
  const resume=button('Enable sound',()=>act(async()=>{await room?.startAudio();for(const a of audio.querySelectorAll('audio'))await a.play();}));
  const leave=button('Leave',()=>act(async()=>{const q=id;disconnect();await api(`/api/questions/${q}/live-talk`,{action:'leave'});await refresh();}));
- panel.append(heading,status,select,buttons,queue,rating,privacy,audio);
+ panel.append(heading,status,select,buttons,queue,rating,audio);
  document.querySelector('#debate-mute').before(panel);
  async function action(action,extra={}){const g=epoch,result=await api(`/api/questions/${id}/live-talk`,{action,...extra});if(g===epoch)apply(result);}
  async function act(fn){if(pending||!id)return;pending=true;error='';render();try{await fn();}catch(e){error=e.message||'Audio is temporarily unavailable. Please use the text debate.';}finally{pending=false;render();}}
  function disconnect(){const r=room;room=null;mic=false;for(const {track} of tracks.values())track.detach().forEach(e=>e.remove());tracks.clear();audio.replaceChildren();if(r)r.disconnect();}
- function apply(result){data=result;offset=result.now-Date.now();const value=select.value,signature=JSON.stringify(result.fields);if(select.dataset.fields!==signature){select.replaceChildren(...result.fields.map(f=>new Option(f.name,f.id)));if(result.fields.some(f=>String(f.id)===value))select.value=value;select.dataset.fields=signature;}render();}
+ function apply(result){if(result.paused)error='';data=result;offset=result.now-Date.now();const value=select.value,signature=JSON.stringify(result.fields);if(select.dataset.fields!==signature){select.replaceChildren(...result.fields.map(f=>new Option(f.name,f.id)));if(result.fields.some(f=>String(f.id)===value))select.value=value;select.dataset.fields=signature;}render();}
  function syncAudio(){
   const speaker=currentTurn()?.identity;
   for(const {track,identity} of tracks.values()){
@@ -54,10 +54,10 @@ export function createLiveTalkUI(api){
  function render(){
   panel.hidden=!id;if(!id)return;
   const turn=currentTurn(),connected=!!room;
-  if((data?.finished||data?.endsAt&&now()>=data.endsAt)&&room)disconnect();
+  if((data?.finished||data?.paused||data?.endsAt&&now()>=data.endsAt)&&room)disconnect();
   if(mic&&!turn?.mine){mic=false;room?.localParticipant.setMicrophoneEnabled(false).catch(()=>{});}
-  clock.textContent=data?.endsAt?'Talk remaining '+time(data.endsAt-now()):'1 min / turn · 10 min / question';
-  status.textContent=error||(data?.finished?'Live Talk has ended. Continue in the text debate.':!data?.enabled?'Live Talk is not available yet.':turn?`${turn.nickname} · ${turn.topic||'Follow-up'} · ${time(turn.endsAt-now())}${turn.mine&&!mic?' · Tap Enable mic to speak.':''}`:connected?'Listening · raise your hand to speak.':'Join and allow microphone access. One person speaks at a time.');
+  clock.textContent='Talk remaining '+time((data?.remainingMs??600000)-(data?.speaking?Math.max(0,Math.min(now(),data.speakingUntil)-data.now):0));
+  status.textContent=error||(data?.finished?'Live Talk has ended. Continue in the text debate.':!data?.enabled?'Live Talk is not available yet.':data?.paused?'Paused · tap Join to continue.':turn?`${turn.nickname} · ${turn.topic||'Follow-up'} · ${time(turn.endsAt-now())}${turn.mine&&!mic?' · Tap Enable mic to speak.':''}`:connected?'Listening · raise your hand to speak.':'Join and allow microphone access. One person speaks at a time.');
   join.hidden=connected;join.disabled=pending||!data?.enabled||data?.finished||data?.participants>=10;
   for(const b of [hand,microphone,end,resume,leave]){b.hidden=!connected;b.disabled=pending;}
   hand.textContent=data?.queued?'✋ Leave queue':'✋ Raise hand';hand.disabled=pending||!data?.canSpeak||!!turn?.mine;
@@ -66,7 +66,7 @@ export function createLiveTalkUI(api){
   select.hidden=!connected||data?.fields.length<2;select.disabled=data?.queued||!!turn?.mine||pending;
   queue.textContent=connected?`${data?.participants||0}/10 connected${data?.queue.length?' · Queue: '+data.queue.map(m=>m.mine?'You':m.nickname).join(' → '):''}`:'';
   const rated=turn||data?.turns[0],signature=JSON.stringify(rated&&[rated.id,rated.upvotes,rated.downvotes,rated.myVote,rated.canVote]);
-  if(rating.dataset.signature!==signature){rating.dataset.signature=signature;rating.replaceChildren();if(rated){rating.append(el('span',turn?'Rate this contribution: ':'Last: '+rated.nickname+' '));for(const [value,label,count] of [[1,'👍',rated.upvotes],[-1,'👎',rated.downvotes]]){const b=el('button',`${label} ${count}`);b.type='button';b.className='text-button';b.disabled=!rated.canVote;b.setAttribute('aria-label',value===1?'Helpful live contribution':'Not helpful live contribution');b.setAttribute('aria-pressed',String(rated.myVote===value));b.onclick=()=>act(async()=>{await api(`/api/questions/${id}/debate/${rated.messageId}/vote`,{value:rated.myVote===value?0:value});await refresh();});rating.append(b);}rating.append(el('small','Verification updates in 1–5 minutes.'));}}
+  if(rating.dataset.signature!==signature){rating.dataset.signature=signature;rating.replaceChildren();if(rated){rating.append(el('span',turn?'Rate this contribution: ':'Last: '+rated.nickname+' '));for(const [value,label,count] of [[1,'👍',rated.upvotes],[-1,'👎',rated.downvotes]]){const b=el('button',`${label} ${count}`);b.type='button';b.className='text-button';b.disabled=!rated.canVote;b.setAttribute('aria-label',value===1?'Helpful live contribution':'Not helpful live contribution');b.setAttribute('aria-pressed',String(rated.myVote===value));b.onclick=()=>act(async()=>{await api(`/api/questions/${id}/debate/${rated.messageId}/vote`,{value:rated.myVote===value?0:value});await refresh();});rating.append(b);}}}
   syncAudio();
  }
  async function refresh(){if(!id||polling)return;polling=true;const q=id,g=epoch;try{const result=await api(`/api/questions/${q}/live-talk`,room?{action:'heartbeat'}:undefined);if(g===epoch)apply(result);}catch(e){if(g===epoch){error=e.message;if([401,403,404,409].includes(e.httpStatus))disconnect();render();}}finally{polling=false;}}
