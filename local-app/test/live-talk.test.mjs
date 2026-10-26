@@ -39,11 +39,11 @@ test('Live Talk checks authentication and question access, caps concurrency, per
  await f.post(f.users[0],'join');assert.equal((await f.service.handle(f.users[0],f.q)).remainingMs,600000);
 });
 
-test('one durable speaker, no permission until next cycle, no self or non-listener votes',async t=>{
+test('first Speak gets a durable turn, no queue, no self or non-listener votes',async t=>{
  const f=await fixture(t),[a,b,c]=f.users;
  await f.post(a,'join');await f.post(b,'join');
- await f.post(a,'raise',{fieldId:f.field});await f.post(b,'raise',{fieldId:f.field});
- await f.service.tickRoom(f.q);assert.equal(f.calls.filter(c=>c.publish).length,0);
+ await f.post(a,'speak',{fieldId:f.field});await assert.rejects(f.post(b,'speak',{fieldId:f.field}),e=>e.status===409);
+ assert.equal((await f.service.handle(b,f.q)).queue.length,0);
  await f.service.tickRoom(f.q);assert.equal(f.calls.filter(c=>c.publish).length,1);
  const s=await f.service.handle(b,f.q),m=s.turns[0].messageId;
  await assert.rejects(voteOnDebate(f.db,a,f.q,m,{value:1},f.now()),e=>e.status===403);
@@ -51,14 +51,14 @@ test('one durable speaker, no permission until next cycle, no self or non-listen
  await voteOnDebate(f.db,b,f.q,m,{value:1},f.now());
  assert.equal((await verificationFields(f.db,a.address,f.now()))[0].net,0);
  assert.equal((await verificationFields(f.db,a.address,f.now()+300001))[0].net,1);
- await f.post(a,'finish');await f.service.tickRoom(f.q);await f.service.tickRoom(f.q);
+ await f.post(a,'finish');await f.service.tickRoom(f.q);assert.equal((await f.service.handle(b,f.q)).turns[0].endedAt,f.now());await f.post(b,'speak');
  const publishes=[...f.rooms.values()][0];assert.equal([...publishes.values()].filter(p=>p.permission.canPublish).length,1);
  assert.equal((await f.service.handle(b,f.q)).turns[0].mine,true);
 });
 
-test('failed revocation does not grant the next queued speaker; restart reuses durable turn',async t=>{
+test('failed revocation blocks Speak; restart preserves durable turn',async t=>{
  const f=await fixture(t),[a,b]=f.users;
- await f.post(a,'join');await f.post(b,'join');await f.post(a,'raise');await f.post(b,'raise');await f.service.tickRoom(f.q);await f.service.tickRoom(f.q);
+ await f.post(a,'join');await f.post(b,'join');await f.post(a,'speak');await assert.rejects(f.post(b,'speak'),e=>e.status===409);await f.service.tickRoom(f.q);await f.service.tickRoom(f.q);
  await f.microphone(a,true);const before=(await f.service.handle(a,f.q)).turns[0];f.advance(61000);
  await f.post(a,'heartbeat');await f.post(b,'heartbeat');f.revokeFailure();
  const restarted=createLiveTalk(f.db,f.provider,f.now);
@@ -69,7 +69,7 @@ test('failed revocation does not grant the next queued speaker; restart reuses d
 });
 
 test('disconnect heartbeat expiry releases members and no audio data is stored',async t=>{
- const f=await fixture(t);await f.post(f.users[0],'join');await f.post(f.users[0],'raise');await f.service.tickRoom(f.q);await f.service.tickRoom(f.q);
+ const f=await fixture(t);await f.post(f.users[0],'join');await f.post(f.users[0],'speak');await f.service.tickRoom(f.q);await f.service.tickRoom(f.q);
  f.advance(26000);await f.service.tickRoom(f.q);
  assert.equal((await f.service.handle(f.users[0],f.q)).participants,0);
  assert.equal(f.rooms.size,0);
@@ -119,8 +119,8 @@ test('only question author may request an unverified follow-up without a matchin
  const f=await fixture(t),[a,b]=f.users;
  await f.post(a,'join');await f.post(b,'join');
  await f.db.prepare('DELETE FROM profile_categories WHERE address=ANY($1::text[])').run([a.address,b.address]);
- await assert.rejects(f.post(b,'raise',{fieldId:f.field}),e=>e.status===403);
- await f.post(a,'raise',{fieldId:f.field});await f.service.tickRoom(f.q);
+ await assert.rejects(f.post(b,'speak',{fieldId:f.field}),e=>e.status===403);
+ await f.post(a,'speak',{fieldId:f.field});await f.service.tickRoom(f.q);
  const turn=(await f.service.handle(a,f.q)).turns[0];assert.equal(turn.fieldId,null);
 });
 
@@ -137,7 +137,7 @@ test('idle pauses after 15 seconds; restart and rejoin preserve remaining time',
 });
 
 test('only provider-confirmed unmuted microphone consumes time; mute freezes it',async t=>{
- const f=await fixture(t),a=f.users[0];await f.post(a,'join');await f.post(a,'raise');await f.service.tick();await f.service.tick();
+ const f=await fixture(t),a=f.users[0];await f.post(a,'join');await f.post(a,'speak');await f.service.tick();await f.service.tick();
  await f.post(a,'microphone',{active:true});f.advance(5000);await f.service.tick();assert.equal((await f.service.handle(a,f.q)).remainingMs,600000);
  await f.microphone(a,true);f.advance(10000);await f.post(a,'heartbeat');await f.service.tick();assert.equal((await f.service.handle(a,f.q)).remainingMs,590000);
  await f.microphone(a,false);f.advance(14000);await f.service.tick();assert.equal((await f.service.handle(a,f.q)).remainingMs,590000);
@@ -148,7 +148,7 @@ test('only provider-confirmed unmuted microphone consumes time; mute freezes it'
 test('ten minutes of microphone time is terminal, not resumable',async t=>{
  const f=await fixture(t),a=f.users[0];await f.post(a,'join');
  await f.db.prepare('UPDATE live_talk_rooms SET used_ms=599000 WHERE question_id=$1').run(f.q);
- await f.post(a,'raise');await f.service.tick();await f.service.tick();await f.microphone(a,true);
+ await f.post(a,'speak');await f.service.tick();await f.service.tick();await f.microphone(a,true);
  f.advance(1000);await f.service.tick();assert.equal((await f.service.handle(a,f.q)).finished,true);
  assert.equal((await f.service.handle(a,f.q)).remainingMs,0);await assert.rejects(f.post(a,'join'),e=>e.status===409);
 });
@@ -159,4 +159,25 @@ test('resuming checks monthly budget again and does not reset time when admissio
  await assert.rejects(f.post(a,'join'),e=>e.status===409);
  const state=await f.service.handle(a,f.q);assert.equal(state.paused,true);assert.equal(state.remainingMs,600000);assert.equal(f.rooms.size,0);
  assert.equal((await f.db.prepare('SELECT count(*) AS n FROM live_talk_sessions').get()).n,1);
+});
+
+
+test('concurrent Speak clicks select exactly one speaker and never queue the loser',async t=>{
+ const f=await fixture(t),[a,b]=f.users;await f.post(a,'join');await f.post(b,'join');
+ const results=await Promise.allSettled([f.post(a,'speak'),f.post(b,'speak')]);
+ assert.equal(results.filter(r=>r.status==='fulfilled').length,1);
+ assert.equal(results.filter(r=>r.status==='rejected'&&r.reason.status===409).length,1);
+ assert.equal((await f.db.prepare('SELECT count(*) AS n FROM live_talk_turns WHERE ended_at IS NULL').get()).n,1);
+ assert.equal((await f.db.prepare('SELECT count(*) AS n FROM live_talk_members WHERE queued_at IS NOT NULL').get()).n,0);
+ assert.equal([...f.rooms.values()][0].values().filter(p=>p.permission.canPublish).toArray().length,1);
+});
+
+test('uncertain grant retains durable speaker and blocks another until reconciled',async t=>{
+ const f=await fixture(t),[a,b]=f.users;await f.post(a,'join');await f.post(b,'join');
+ const original=f.provider.permission;f.provider.permission=async(...args)=>{await original(...args);if(args[2])throw Error('lost acknowledgement');};
+ await assert.rejects(f.post(a,'speak'),/lost acknowledgement/);
+ await assert.rejects(f.post(b,'speak'),e=>e.status===409);
+ f.provider.permission=original;await createLiveTalk(f.db,f.provider,f.now).tickRoom(f.q);
+ assert.equal((await f.db.prepare('SELECT count(*) AS n FROM live_talk_turns').get()).n,1);
+ await f.post(a,'finish');await f.post(b,'speak');assert.equal((await f.service.handle(b,f.q)).turns[0].mine,true);
 });

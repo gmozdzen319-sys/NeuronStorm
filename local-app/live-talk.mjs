@@ -60,11 +60,11 @@ export function createLiveTalk(db,provider,now=Date.now){
    participants:members.length,queue,turns:rows,fields,canSpeak:fields.length>0||q?.author===address,limits:{turnSeconds:60,questionSeconds:600,participants:10}};
  }
  async function handle(account,id,input=null){
-  return db.transaction(async()=>{
+  const result=await db.transaction(async()=>{
    await lock(id);const q=await permitted(account,id),address=account.address.toLowerCase();
    if(!input)return state(id,address);
    if(!provider)throw fail(503,'Live Talk is not available yet. The text debate is still available.');
-   if(!['join','heartbeat','raise','lower','finish','leave','microphone'].includes(input.action))throw fail(400,'Unknown Live Talk action.');
+   if(!['join','heartbeat','speak','raise','lower','finish','leave','microphone'].includes(input.action))throw fail(400,'Unknown Live Talk action.');
    let room=await roomFor(id),members=await membersFor(id),mine=members.find(m=>m.address===address);
    if(input.action==='join'){
     if(room&&(room.ended_at!==null||used(room)>=limits.questionMs))throw fail(409,'This question has used its 10 minutes of Live Talk.');
@@ -100,12 +100,20 @@ export function createLiveTalk(db,provider,now=Date.now){
    }else{
     if(room.ended_at!==null||room.paused||room.session_ends_at<=now()||used(room)>=limits.questionMs)throw fail(409,'Audio is paused or finished. Join again if time remains.');
     await db.prepare('UPDATE live_talk_members SET seen_at=$3 WHERE question_id=$1 AND address=$2').run(id,address,now());
-    if(input.action==='raise'){
-     if(turn?.address===address)throw fail(409,'Finish your current turn before joining the queue again.');
+    if(input.action==='speak'||input.action==='raise'){
+     if(turn)throw fail(409,'Someone is speaking. Try Speak when their turn ends.');
+     const peers=await provider.participants(room.room_name);
+     if(!peers.some(p=>p.identity===mine.identity))throw fail(409,'Audio is still connecting. Try Speak again.');
+     for(const peer of peers)if(peer.permission?.canPublish)await provider.permission(room.room_name,peer.identity,false);
      const fields=[];for(const f of await debateFields(db,id))if(await activeField(db,address,f.id))fields.push(f);
      const field=fields.length===1?fields[0].id:input.fieldId;
      if(fields.length&&!fields.some(f=>f.id===field)||!fields.length&&q.author!==address)throw fail(403,'Choose a debate topic from your profile.');
-     await db.prepare('UPDATE live_talk_members SET queued_at=COALESCE(queued_at,$3),field_id=CASE WHEN queued_at IS NULL THEN $4 ELSE field_id END WHERE question_id=$1 AND address=$2').run(id,address,now(),fields.length?field:null);
+     const selectedField=fields.length?field:null;
+     const start=now(),end=turnDeadline(start,Math.min(room.session_ends_at,start+limits.questionMs-used(room))),client=randomUUID();
+     const message=await db.prepare('INSERT INTO debate_messages(question_id,author,body,client_id,created_at) VALUES($1,$2,$3,$4,$5) RETURNING id').get(id,address,'Live Talk contribution · audio not recorded',client,start);
+     await db.prepare('INSERT INTO verification_contributions(message_id,field_id,kind) VALUES($1,$2,$3)').run(message.id,selectedField,selectedField===null?'follow_up':'field');
+     await db.prepare('INSERT INTO live_talk_turns(question_id,address,message_id,started_at,ends_at) VALUES($1,$2,$3,$4,$5)').run(id,address,message.id,start,end);
+     await db.prepare('UPDATE live_talk_members SET queued_at=NULL WHERE question_id=$1 AND address=$2').run(id,address);
     }
     if(input.action==='lower')await db.prepare('UPDATE live_talk_members SET queued_at=NULL WHERE question_id=$1 AND address=$2').run(id,address);
     if(input.action==='finish'&&turn?.address===address)await endTurn(room,turn,members);
@@ -113,6 +121,12 @@ export function createLiveTalk(db,provider,now=Date.now){
    }
    return state(id,address);
   });
+  if(input?.action==='speak'||input?.action==='raise'){
+   // Grant only after committing the durable turn; worker can recover an interrupted grant.
+   await tickRoom(id);
+   return state(id,account.address.toLowerCase());
+  }
+  return result;
  }
  async function tickRoom(id){
   await db.transaction(async()=>{
@@ -136,20 +150,7 @@ export function createLiveTalk(db,provider,now=Date.now){
    }
    members=await membersFor(id);
    if(turn&&(turn.ends_at<=now()||!members.some(m=>m.address===turn.address))){await endTurn(room,turn,members);turn=null;}
-   if(!turn){
-    const next=members.find(m=>m.queued_at!==null&&peers.some(p=>p.identity===m.identity));
-    if(!next)return;
-    // Recheck topic eligibility immediately before awarding the microphone.
-    if(next.field_id!==null&&!await activeField(db,next.address,next.field_id)||next.field_id===null&&next.address!==q.author){await db.prepare('UPDATE live_talk_members SET queued_at=NULL WHERE question_id=$1 AND address=$2').run(id,next.address);return;}
-    const start=now(),end=turnDeadline(start,Math.min(room.session_ends_at,start+limits.questionMs-used(room))),client=randomUUID();
-    const message=await db.prepare('INSERT INTO debate_messages(question_id,author,body,client_id,created_at) VALUES($1,$2,$3,$4,$5) RETURNING id').get(id,next.address,'Live Talk contribution · audio not recorded',client,start);
-    await db.prepare('INSERT INTO verification_contributions(message_id,field_id,kind) VALUES($1,$2,$3)').run(message.id,next.field_id,next.field_id===null?'follow_up':'field');
-    await db.prepare('INSERT INTO live_talk_turns(question_id,address,message_id,started_at,ends_at) VALUES($1,$2,$3,$4,$5)').run(id,next.address,message.id,start,end);
-    await db.prepare('UPDATE live_talk_members SET queued_at=NULL WHERE question_id=$1 AND address=$2').run(id,next.address);
-    // Commit the intended turn first. A later cycle grants the microphone against
-    // this durable record; a crash can never create an untracked speaker.
-    return;
-   }
+   if(!turn)return;
    const speaker=members.find(m=>m.address===turn.address),peer=peers.find(p=>p.identity===speaker?.identity);
    if(!peer)return;
    if(!peer.permission?.canPublish)await provider.permission(room.room_name,speaker.identity,true);
