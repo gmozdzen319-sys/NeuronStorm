@@ -3,7 +3,7 @@ export async function requestLiveMicrophone(mediaDevices=globalThis.navigator?.m
  if(!mediaDevices?.getUserMedia)throw Error('Microphone access is unavailable. Open Neuron Storm in a supported browser over HTTPS.');
  let stream;
  try{stream=await mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});}
- catch(e){throw Error(e.name==='NotAllowedError'?'Allow microphone access in your browser settings, then tap Join again.':e.name==='NotFoundError'?'No microphone was found on this device.':'Cannot access the microphone. Close other apps using it, then tap Join again.');}
+ catch(e){throw Error(e.name==='NotAllowedError'?'Allow microphone access in your browser settings, then tap Speak again.':e.name==='NotFoundError'?'No microphone was found on this device. You can still listen.':'Cannot access the microphone. Close other apps using it, then tap Speak again.');}
  finally{stream?.getTracks().forEach(track=>track.stop());}
  // Permission only: never publish or keep the microphone open while listening.
 }
@@ -20,7 +20,7 @@ export function createLiveTalkUI(api){
  const currentTurn=()=>data?.turns.find(t=>t.endedAt===null&&t.endsAt>now());
  const time=ms=>`${String(Math.floor(Math.max(0,ms)/60000)).padStart(2,'0')}:${String(Math.floor(Math.max(0,ms)/1000)%60).padStart(2,'0')}`;
  const join=button('Join',()=>act(async()=>{
-  const q=id,g=epoch;await requestLiveMicrophone();if(g!==epoch)return;
+  const q=id,g=epoch;
   const sdk=await import('./livekit-client.js');
   if(g!==epoch)return;
   const result=await api(`/api/questions/${q}/live-talk`,{action:'join'});
@@ -34,7 +34,7 @@ export function createLiveTalkUI(api){
   try{await r.connect(result.url,result.token,{autoSubscribe:true});if(g!==epoch){await r.disconnect();return;}await r.startAudio();}
   catch(e){disconnect();api(`/api/questions/${q}/live-talk`,{action:'leave'}).catch(()=>{});throw e;}
  }));
- const speak=button('Speak',()=>act(async()=>{wantSpeak=true;try{await action('speak',{fieldId:Number(select.value)});await startSpeaking();}catch(e){wantSpeak=false;throw e;}}));
+ const speak=button('Speak',()=>act(async()=>{const g=epoch,r=room;await requestLiveMicrophone();if(g!==epoch||room!==r||!r)return;wantSpeak=true;try{await action('speak',{fieldId:Number(select.value)});await startSpeaking();}catch(e){wantSpeak=false;throw e;}}));
  const end=button('Stop speaking',()=>act(async()=>{wantSpeak=false;if(room)await room.localParticipant.setMicrophoneEnabled(false);mic=false;await action('finish');}));
  async function startSpeaking(){
   if(!wantSpeak||mic||micStarting||!currentTurn()?.mine||!room?.localParticipant.permissions?.canPublish)return;
@@ -64,7 +64,7 @@ export function createLiveTalkUI(api){
   if((data?.finished||data?.paused||data?.endsAt&&now()>=data.endsAt)&&room)disconnect();
   if(mic&&!turn?.mine){mic=false;room?.localParticipant.setMicrophoneEnabled(false).catch(()=>{});}
   clock.textContent='Talk remaining '+time((data?.remainingMs??600000)-(data?.speaking?Math.max(0,Math.min(now(),data.speakingUntil)-data.now):0));
-  status.textContent=error||(data?.finished?'Live Talk has ended. Continue in the text debate.':!data?.enabled?'Live Talk is not available yet.':data?.paused?'Paused · tap Join to continue.':turn?`${turn.nickname} · ${turn.topic||'Follow-up'} · ${time(turn.endsAt-now())}${turn.mine&&!mic?' · Tap Enable mic to speak.':''}`:connected?'Listening · raise your hand to speak.':'Join and allow microphone access. One person speaks at a time.');
+  status.textContent=error||(data?.finished?'Live Talk has ended. Continue in the text debate.':!data?.enabled?'Live Talk is not available yet.':data?.paused?'Paused · tap Join to continue.':turn?`${turn.nickname} · ${turn.topic||'Follow-up'} · ${time(turn.endsAt-now())}${turn.mine&&!mic?' · Tap Enable mic to speak.':''}`:connected?'Listening · raise your hand to speak.':'Join to listen. Microphone access is only needed to speak.');
   join.hidden=connected;join.disabled=pending||!data?.enabled||data?.finished||data?.participants>=10;
   for(const b of [speak,end,resume,leave]){b.hidden=!connected;b.disabled=pending;}
   speak.hidden=!connected||!!turn?.mine;speak.disabled=pending||!data?.canSpeak||!!turn;
