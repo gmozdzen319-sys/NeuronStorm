@@ -225,3 +225,8 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 @media(max-width:760px){#wallet-help-dialog{padding:18px}.wallet-help-options,.wallet-help-choice dl{grid-template-columns:1fr}.wallet-help-option{padding:16px}.wallet-help-heading{gap:10px}.wallet-help-heading h2{font-size:22px}.wallet-help-footer button{width:100%}}
 @media(prefers-reduced-motion:reduce){.wallet-help-trigger span{animation:none;box-shadow:0 0 5px #55c9f422}}
 .live-talk{padding:12px;margin:12px 0;border:1px solid #315369;border-radius:12px;background:linear-gradient(135deg,#102838,#0a1822);font-size:13px}.live-talk-heading{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;color:#82e8ff}.live-talk p{margin:8px 0}.live-talk-buttons,.live-talk-rating{display:flex;align-items:center;flex-wrap:wrap;gap:6px}.live-talk-buttons button{padding:8px 10px;min-height:40px;font-size:12px}.live-talk select{margin:6px 0;padding:8px;font-size:13px}.live-talk small{display:block;font-size:11px;line-height:1.5;color:#a6bdcc;margin-top:8px}.live-talk-rating small{flex-basis:100%}.live-talk-rating button{min-width:40px;min-height:40px}.live-talk-rating button[aria-pressed=true]{color:#83edff;background:#15475c}
+
+/* Unread questions and real conversation activity use the existing brand colors. */
+.member-nav button.nav-activity{font-weight:700;animation:nav-activity-glow 4.8s ease-in-out infinite}
+@keyframes nav-activity-glow{0%,100%{color:#eaf6ff;text-shadow:0 0 8px #eaf6ff40}35%{color:#58d1ff;text-shadow:0 0 12px #40caff70}70%{color:#ef6c86;text-shadow:0 0 12px #ef6c8660}}
+@media(prefers-reduced-motion:reduce){.member-nav button.nav-activity{animation:none;color:#58d1ff;text-shadow:0 0 8px #40caff40}}

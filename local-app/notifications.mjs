@@ -7,7 +7,7 @@ const rewardOwner=p=>`(r.recipient=${p} OR EXISTS(SELECT 1 FROM accepted_answers
  JOIN passkey_community_accounts ca ON ca.address=aa.answer_author
  JOIN passkey_current_wallet_accounts cw ON cw.account_id=ca.account_id
  WHERE aa.question_id=r.question_id AND ca.address=${p}))`;
-export async function listNotifications(db,account,params){
+export async function listNotifications(db,account,params,now=Date.now()){
   (await requireProfile(db,account));const address=account.address.toLowerCase(),page=Number(params.get('page')||1);
   if(!Number.isSafeInteger(page)||page<1||page>100000)throw fail(400,'Invalid notification page.');
   const filter="NOT EXISTS(SELECT 1 FROM blocked_members b WHERE (b.owner=n.address AND b.target=n.actor) OR (b.target=n.address AND b.owner=n.actor)) AND n.address=$1 AND q.deleted_at IS NULL AND q.closed_at IS NULL AND EXISTS(SELECT 1 FROM question_participants qp WHERE qp.question_id=q.id AND qp.address=n.address)";
@@ -15,11 +15,16 @@ export async function listNotifications(db,account,params){
     UNION ALL SELECT -r.id,r.question_id,'reward',r.created_at,r.read_at,'Neuron Storm',substr(a.question_body,1,110),r.units,r.tx_hash FROM reward_receipts r JOIN accepted_answers a ON a.question_id=r.question_id WHERE ${rewardOwner('$2')}
     UNION ALL SELECT -1000000000-d.id,d.question_id,'deadline',d.created_at,d.read_at,'Neuron Storm',substr(q.body,1,110),NULL,NULL FROM deadline_reminders d JOIN questions q ON q.id=d.question_id WHERE d.address=$3 AND q.closed_at IS NULL AND q.deleted_at IS NULL
     UNION ALL SELECT -2000000000-a.id,a.question_id,a.kind,a.created_at,a.read_at,COALESCE(p.nickname,'A wallet'),COALESCE(a.symbol,'')||CASE WHEN a.amount IS NULL THEN '' ELSE ' · '||a.amount END,NULL,a.tx_hash FROM account_activity a LEFT JOIN profiles p ON p.address=a.actor WHERE a.address=$1 AND (a.question_id IS NULL OR EXISTS(SELECT 1 FROM questions q JOIN question_participants qp ON qp.question_id=q.id WHERE q.id=a.question_id AND q.deleted_at IS NULL AND q.closed_at IS NULL AND qp.address=a.address)) AND NOT EXISTS(SELECT 1 FROM blocked_members b WHERE (b.owner=a.address AND b.target=a.actor) OR (b.target=a.address AND b.owner=a.actor))`;
-  const counts=(await db.prepare(`SELECT count(*) AS total,count(*) FILTER (WHERE "readAt" IS NULL) AS unread,COALESCE(max(CASE WHEN id>0 THEN id ELSE 0 END),0) AS "throughId",COALESCE(max(CASE WHEN kind='reward' THEN -id ELSE 0 END),0) AS "throughRewardId",COALESCE(max(CASE WHEN kind='deadline' THEN -id-1000000000 ELSE 0 END),0) AS "throughReminderId",COALESCE(max(CASE WHEN id < -2000000000 THEN -id-2000000000 ELSE 0 END),0) AS "throughActivityId" FROM (${source})`).get(address,address,address));
+  const counts=(await db.prepare(`SELECT count(*) AS total,count(*) FILTER (WHERE "readAt" IS NULL) AS unread,count(*) FILTER (WHERE "readAt" IS NULL AND kind='question') AS "inboxUnread",count(*) FILTER (WHERE "readAt" IS NULL AND kind IN ('reply','like','tip') AND EXISTS(SELECT 1 FROM questions own WHERE own.id="questionId" AND own.author=$1)) AS "mineUnread",COALESCE(max(CASE WHEN id>0 THEN id ELSE 0 END),0) AS "throughId",COALESCE(max(CASE WHEN kind='reward' THEN -id ELSE 0 END),0) AS "throughRewardId",COALESCE(max(CASE WHEN kind='deadline' THEN -id-1000000000 ELSE 0 END),0) AS "throughReminderId",COALESCE(max(CASE WHEN id < -2000000000 THEN -id-2000000000 ELSE 0 END),0) AS "throughActivityId" FROM (${source})`).get(address,address,address));
   const pages=Math.max(1,Math.ceil(counts.total/20)),actualPage=Math.min(page,pages);
   const notifications=(await db.prepare(`SELECT * FROM (${source}) ORDER BY "createdAt" DESC,id DESC LIMIT 20 OFFSET $4`).all(address,address,address,(actualPage-1)*20)).map(({units,...n})=>({...n,...(units?{amount:formatBalance(units,18)}:{})}));
   const sequence=(await db.prepare(`SELECT (SELECT count(*) FROM notifications WHERE address=$1)+(SELECT count(*) FROM reward_receipts r WHERE ${rewardOwner('$2')})+(SELECT count(*) FROM deadline_reminders WHERE address=$3)+(SELECT count(*) FROM account_activity WHERE address=$1) AS n`).get(address,address,address)).n;
-  return {...counts,sequence,page:actualPage,pages,notifications};
+  const hot=await db.prepare(`SELECT EXISTS(SELECT 1 FROM questions q JOIN debate_messages m ON m.question_id=q.id
+   WHERE q.author=$1 AND q.deleted_at IS NULL AND q.closed_at IS NULL AND q.created_at>$2::bigint-604800000
+   AND m.created_at>$2::bigint-300000 AND m.created_at<=$2 AND m.author<>$1
+   AND NOT EXISTS(SELECT 1 FROM blocked_members b WHERE (b.owner=$1 AND b.target=m.author) OR (b.target=$1 AND b.owner=m.author))
+   GROUP BY q.id HAVING count(*)>=3) AS active`).get(address,now);
+  return {...counts,navActivity:{inbox:counts.inboxUnread>0,mine:counts.mineUnread>0||hot.active},sequence,page:actualPage,pages,notifications};
 }
 export async function readNotifications(db,account,input,all,now){
  return db.transaction(async () => {
