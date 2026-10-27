@@ -15,6 +15,16 @@ export async function conversationProfile(db,account,questionId,params){
   const row=await db.prepare(reply?'SELECT author FROM replies WHERE question_id=$1 AND id=$2 AND deleted_at IS NULL':'SELECT author FROM debate_messages WHERE question_id=$1 AND id=$2').get(questionId,Number(reply||message));
   if(!row)throw missing();address=row.author;
  }
+ return publicFields(db,account,address);
+}
+export async function rankingProfile(db,account,eventId){
+ await requireProfile(db,account);
+ if(!/^[1-9][0-9]{0,14}$/.test(String(eventId)))throw missing();
+ const row=await db.prepare('SELECT recipient FROM reputation_events WHERE id=$1').get(Number(eventId));
+ if(!row)throw missing();
+ return publicFields(db,account,row.recipient);
+}
+async function publicFields(db,account,address){
  if(await isBlocked(db,account.address.toLowerCase(),address))throw missing();
  const profile=await db.prepare('SELECT nickname FROM profiles WHERE address=$1').get(address);if(!profile)throw missing();
  const topics=await db.prepare('SELECT c.id,c.kind,c.name FROM categories c JOIN profile_categories p ON p.category_id=c.id WHERE p.address=$1 ORDER BY lower(c.name),c.id').all(address);

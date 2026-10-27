@@ -1,8 +1,10 @@
+import {voteOnReply} from '../threads.mjs';
+import {reputationRanking} from '../reputation.mjs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createApp} from './database.mjs';
 import {saveProfile} from '../profiles.mjs';
-import {conversationProfile} from '../public-profile.mjs';
+import {conversationProfile,rankingProfile} from '../public-profile.mjs';
 test('public profile exposes only approved fields; enforces conversation, session, target and block boundaries',async t=>{
  const app=await createApp();t.after(()=>app.close());const db=app.db,now=Date.now();
  const a='0x'+'1'.repeat(40),b='0x'+'2'.repeat(40),c='0x'+'3'.repeat(40),q='11111111-1111-4111-8111-111111111111';
@@ -21,5 +23,12 @@ test('public profile exposes only approved fields; enforces conversation, sessio
  const message=await db.prepare('INSERT INTO debate_messages(question_id,author,body,client_id,created_at) VALUES($1,$2,$3,$4,$5) RETURNING id').get(q,b,'Message','22222222-2222-4222-8222-222222222222',now);
  assert.equal((await conversationProfile(db,{address:a},q,new URLSearchParams('message='+message.id))).nickname,'Member');
  await db.prepare('INSERT INTO blocked_members VALUES($1,$2,$3)').run('test-block',a,b);await assert.rejects(conversationProfile(db,account,q,params),{status:404});await db.prepare('DELETE FROM blocked_members WHERE id=$1').run('test-block');
+ await voteOnReply(db,{address:a},q,reply.id,{value:1},now);
+ const ranking=await reputationRanking(db,new URLSearchParams(),now);
+ assert.equal(ranking.rows.length,1);const ref=ranking.rows[0].profileRef;assert.ok(ref);
+ assert.equal(Object.hasOwn(ranking.rows[0],'recipient'),false);assert.equal(Object.hasOwn(ranking.rows[0],'address'),false);
+ const rankedProfile=await rankingProfile(db,{address:c},ref);assert.equal(rankedProfile.nickname,'Member');assert.equal(Object.hasOwn(rankedProfile,'currentWalletAddress'),false);
+ await assert.rejects(rankingProfile(db,null,ref),{status:401});await assert.rejects(rankingProfile(db,{address:c},'invalid'),{status:404});await assert.rejects(rankingProfile(db,{address:c},99999999),{status:404});
+ await db.prepare('INSERT INTO blocked_members VALUES($1,$2,$3)').run('ranking-block',b,c);await assert.rejects(rankingProfile(db,{address:c},ref),{status:404});
  await db.prepare('UPDATE questions SET closed_at=$1 WHERE id=$2').run(now,q);await assert.rejects(conversationProfile(db,account,q,params),{status:404});
 });

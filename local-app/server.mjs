@@ -1,4 +1,4 @@
-import {conversationProfile} from './public-profile.mjs';
+import {conversationProfile,rankingProfile} from './public-profile.mjs';
 import {recordDailyLogin} from './daily-activity.mjs';
 import {readFileForAccount} from './content-files.mjs';
 import {verificationFields,settleVerification} from './verification.mjs';
@@ -249,6 +249,8 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if(acceptanceRoute&&req.method==='POST'){const result=(await submitAction(db,(await account(req)),await actionSession(req),path,await body(req),now(),passkeys.verifyAction));return json(200,result);}
       const voteRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/replies\/(\d+)\/vote$/);
       if(voteRoute&&req.method==='POST')return json(200,(await voteOnReply(db,(await account(req)),voteRoute[1],Number(voteRoute[2]),await body(req),now())));
+      const rankingProfileRoute=path.match(/^\/api\/ranking\/member-profile\/([1-9][0-9]{0,14})$/);
+      if(rankingProfileRoute&&req.method==='GET')return json(200,{profile:await rankingProfile(db,await account(req),rankingProfileRoute[1])});
       const memberProfileRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})\/member-profile$/);
       if(memberProfileRoute&&req.method==='GET')return json(200,{profile:await conversationProfile(db,await account(req),memberProfileRoute[1],new URL(req.url,origin).searchParams)});
       const threadRoute=path.match(/^\/api\/questions\/([a-f0-9-]{36})(?:\/(replies|read))?$/);

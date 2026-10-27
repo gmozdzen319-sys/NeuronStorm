@@ -1,4 +1,4 @@
-import {appendAvatar} from './file-ui.js';
+import {appendAvatar,memberProfileButton} from './file-ui.js';
 const el=(tag,text,cls='')=>{const n=document.createElement(tag);n.textContent=text;n.className=cls;return n;};
 export const points=units=>new Intl.NumberFormat('en-GB',{maximumFractionDigits:2}).format(units/100);
 const date=ms=>new Date(ms).toLocaleString('en-GB',{timeZone:'UTC',dateStyle:'medium',timeStyle:'short'})+' UTC';
@@ -15,7 +15,7 @@ export function scoreCard(score){
 export function renderReputation(score){const host=document.querySelector('#profile-reputation');if(host&&score)host.replaceChildren(scoreCard(score));}
 export function renderRanking(result,host){
  host.replaceChildren();for(const row of result.rows){const card=el('article','','ranking-row'+(row.position<=3?' reputation-top':''));
- appendAvatar(card,row.avatar);card.append(el('strong',`#${row.position} ${row.nickname}`),el('span',row.expertise||'General','reputation-expertise'),el('span',points(row.weeklyUnits)+' Weekly Score'),el('span',points(row.totalUnits)+' Reputation'));
+ card.append(memberProfileButton(`#${row.position} ${row.nickname}`,row.avatar,null,'ranking',row.profileRef),el('span',row.expertise||'General','reputation-expertise'),el('span',points(row.weeklyUnits)+' Weekly Score'),el('span',points(row.totalUnits)+' Reputation'));
  const wallet=Object.hasOwn(row,'currentWalletAddress')?row.currentWalletAddress:row.address;
  if(wallet)card.append(el('code',wallet,'address'));host.append(card);
  }if(!result.rows.length)host.append(el('p','No scored contributions in this round yet.','empty-state'));
