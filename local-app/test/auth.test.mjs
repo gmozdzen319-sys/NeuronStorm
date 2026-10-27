@@ -51,12 +51,12 @@ test('file HTTP upload limits, profile avatar and authenticated attachment downl
  const result=await f.request('/api/profile',{nickname:'Files',work:['Files'],hobbies:[],avatar:{name:'avatar.png',data:png.toString('base64')}});
  assert.equal(result.status,200);assert(result.data.profile.avatar);
  const category=(await f.request('/api/categories')).data.categories.work.find(c=>c.name==='Files').id;
- const data={body:'With attachment',categoryIds:[category],attachment:{name:'large.txt',data:Buffer.alloc(5*1024*1024,65).toString('base64')}};
+ const data={body:'With attachment',categoryIds:[category],attachment:{name:'large.txt',data:Buffer.alloc(10*1024*1024,65).toString('base64')}};
  const posted=await f.request('/api/questions',data);assert.equal(posted.status,201);
  const file=(await f.request('/api/questions/'+posted.data.id)).data.thread.attachments[0];
  const download=async(id,cookie)=>new Promise((resolve,reject)=>{http.get({hostname:'127.0.0.1',port:f.server.address().port,path:'/api/files/'+id,headers:{Host:'localhost:3000',Cookie:cookie}},res=>{const chunks=[];res.on('data',c=>chunks.push(c));res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,bytes:Buffer.concat(chunks)}));}).on('error',reject);});
  const cookie='ns_session='+f.jar.ns_session;
- const fetched=await download(file.id,cookie);assert.equal(fetched.status,200);assert.equal(fetched.bytes.length,5*1024*1024);assert.equal(fetched.headers['content-type'],'application/octet-stream');assert.match(fetched.headers['content-disposition'],/^attachment; filename="[a-f0-9-]+\.txt"$/);assert.equal(fetched.headers['x-content-type-options'],'nosniff');assert.match(fetched.headers['content-security-policy'],/sandbox/);
+ const fetched=await download(file.id,cookie);assert.equal(fetched.status,200);assert.equal(fetched.bytes.length,10*1024*1024);assert.equal(fetched.headers['content-type'],'application/octet-stream');assert.match(fetched.headers['content-disposition'],/^attachment; filename="[a-f0-9-]+\.txt"$/);assert.equal(fetched.headers['x-content-type-options'],'nosniff');assert.match(fetched.headers['content-security-policy'],/sandbox/);
  assert.equal((await download(file.id,'')).status,401);assert.equal((await download(randomUUID(),cookie)).status,404);
  const avatar=await download(result.data.profile.avatar.id,cookie);assert.equal(avatar.headers['content-type'],'image/webp');assert.equal((await sharp(avatar.bytes).metadata()).width,256);
  assert.equal((await f.request('/api/actions/challenge',{path:'/api/questions',payload:{body:'Unauthorized'}},{Cookie:''})).status,401);

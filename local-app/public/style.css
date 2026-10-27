@@ -231,6 +231,14 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 @keyframes nav-activity-glow{0%,100%{color:#eaf6ff;text-shadow:0 0 8px #eaf6ff40}35%{color:#58d1ff;text-shadow:0 0 12px #40caff70}70%{color:#ef6c86;text-shadow:0 0 12px #ef6c8660}}
 @media(prefers-reduced-motion:reduce){.member-nav button.nav-activity{animation:none;color:#58d1ff;text-shadow:0 0 8px #40caff40}}
 
+/* Compact attachment picker directly below question and answer composition. */
+.compose-attachment{margin:8px 0 12px;max-width:420px}
+.conversations .compose-attachment label{font-size:12px;margin:0 0 5px;color:#9ab0c8}
+.compose-attachment input[type=file]{display:block;width:100%;font-size:12px;min-height:36px}
+.compose-attachment input[type=file]::file-selector-button{padding:7px 10px;min-height:36px;font-size:12px;margin-right:8px}
+.compose-attachment .field-hint{font-size:11px;line-height:1.5;margin:4px 0 0}
+@media(pointer:coarse){.compose-attachment input[type=file],.compose-attachment input[type=file]::file-selector-button{min-height:44px}}
+
 /* Quiet, borderless header actions; animate only the unread bell. */
 .notification-controls{gap:6px}
 #notifications-button,#notification-sound,header #wallet-button{border:0;background:transparent;box-shadow:none;border-radius:10px;min-height:44px;padding:9px 10px;color:#9ddff2}

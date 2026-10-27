@@ -206,7 +206,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if(path==='/api/actions/challenge'&&req.method==='POST'){
         const current=await account(req);
         if(!current)throw failure(401,'Please sign in first.');
-        const input=await body(req,7100000);
+        const input=await body(req,14100000);
         const challenge=await prepareAction(db,current,await actionSession(req),input.path,input.payload,origin,now());
         return json(200,{...challenge,...(current.method==='passkey'?{method:'passkey',options:await passkeys.actionOptions(current,challenge.message)}:{})});
       }

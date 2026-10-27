@@ -37,8 +37,8 @@ async function office(bytes,ext){
 }
 async function validate(){
  const {input,avatar}=workerData;
- if(!input||typeof input.name!=='string'||input.name.length>255||typeof input.data!=='string'||input.data.length>Math.ceil((avatar?1048576:5242880)/3)*4||/[^A-Za-z0-9+/=]/.test(input.data))invalid();
- let bytes=Buffer.from(input.data,'base64');if(bytes.toString('base64')!==input.data||!bytes.length||bytes.length>(avatar?1048576:5242880))invalid();
+ if(!input||typeof input.name!=='string'||input.name.length>255||typeof input.data!=='string'||input.data.length>Math.ceil((avatar?1048576:10485760)/3)*4||/[^A-Za-z0-9+/=]/.test(input.data))invalid();
+ let bytes=Buffer.from(input.data,'base64');if(bytes.toString('base64')!==input.data||!bytes.length||bytes.length>(avatar?1048576:10485760))invalid();
  let ext=input.name.split('.').at(-1).toLowerCase();if(ext==='jpeg')ext='jpg';
  if(!(avatar?['jpg','png','webp']:['jpg','png','webp','gif','pdf','txt','csv','docx','xlsx']).includes(ext))invalid();
  const detected=await fileTypeFromBuffer(bytes);let mime;
@@ -61,6 +61,6 @@ async function validate(){
   if(/[\x00-\x08\x0b\x0c\x0e-\x1f]/.test(text)||/^\s*(?:#!|<\?php|<!doctype\s+html|<html|<script|<svg|@echo\s+off)/i.test(text))invalid();
   if(ext==='csv'&&/(?:^|[,;\t\r\n])\s*"?[=+@]/.test(text))invalid();mime=ext==='csv'?'text/csv':'text/plain';
  }
- if(bytes.length>5242880)invalid();return {bytes,ext,mime};
+ if(bytes.length>10485760)invalid();return {bytes,ext,mime};
 }
 try{parentPort.postMessage({result:await validate()});}catch{parentPort.postMessage({error:'This file is invalid, unsupported, too complex or contains unsafe active content.'});}

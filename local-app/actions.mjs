@@ -19,10 +19,10 @@ export async function prepareAction(db,account,session,path,input,origin,now){
   else if(reply){const question=(await allowed(db,reply[1],account));if(question.created_at+QUESTION_LIFETIME<=now)throw fail(409,'This conversation has expired.');context=`Question ID: ${question.id}\nQuestion: ${question.body}`;}
   else{
     const raw=input.categoryIds??[input.categoryId];
-    if(!Array.isArray(raw)||!raw.length||raw.length>100||raw.some(id=>!Number.isSafeInteger(id)))throw fail(400,'Choose at least one existing topic (up to 100).');
+    if(!Array.isArray(raw)||!raw.length||raw.length>4||raw.some(id=>!Number.isSafeInteger(id)))throw fail(400,'Choose 1 to 4 existing topics.');
     payload.categoryIds=[...new Set(raw)].sort((a,b)=>a-b);
     const topics=(await Promise.all(payload.categoryIds.map(async id=>(await db.prepare("SELECT name,kind FROM categories WHERE id=$1").get(id)))));
-    if(topics.some(topic=>!topic))throw fail(400,'Choose at least one existing topic (up to 100).');
+    if(topics.some(topic=>!topic))throw fail(400,'Choose 1 to 4 existing topics.');
     context='Topics: '+topics.map((topic,i)=>`${topic.name} (${topic.kind}, #${payload.categoryIds[i]})`).join(', ');
   }
   const id=randomBytes(32).toString('hex'),expires=now+300000;

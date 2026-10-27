@@ -35,8 +35,8 @@ test('Reject forged types, unsafe formats, malformed documents, ZIPs, active con
  for(const [name,data]of [['image.png','not an image'],['note.txt',Buffer.from([0x4d,0x5a,0,1])],['page.txt','<script>alert(1)</script>'],['script.js','alert(1)'],['archive.zip',zip(office('docx'))],['fake.docx',zip({'notes.txt':'hello'})],['evil.csv','name,value\nTest,=cmd()'],['broken.pdf','%PDF-1.7\ninvalid']])await assert.rejects(validateUpload(upload(name,data)),e=>e.status===400);
  for(const extra of [{'word/vbaProject.bin':'macro'},{'word/_rels/document.xml.rels':'<Relationships><Relationship TargetMode="&#69;xternal" Target="http://example.com"/></Relationships>'},{'../escape.xml':'<x/>'}])await assert.rejects(validateUpload(upload('bad.docx',zip({...office('docx'),...extra}))));
  const doc=await PDFDocument.create();doc.addPage();doc.catalog.set(PDFName.of('OpenAction'),doc.context.obj({S:'JavaScript',JS:PDFString.of('app.alert(1)')}));await assert.rejects(validateUpload(upload('active.pdf',await doc.save())));
- await assert.rejects(validateUpload(upload('large.txt',Buffer.alloc(5*1024*1024+1,65))));await assert.rejects(validateUpload(upload('large.png',Buffer.alloc(1024*1024+1)),true));
- assert.equal((await validateUpload(upload('limit.txt',Buffer.alloc(5*1024*1024,65)))).bytes.length,5*1024*1024);
+ await assert.rejects(validateUpload(upload('large.txt',Buffer.alloc(10*1024*1024+1,65))));await assert.rejects(validateUpload(upload('large.png',Buffer.alloc(1024*1024+1)),true));
+ assert.equal((await validateUpload(upload('limit.txt',Buffer.alloc(10*1024*1024,65)))).bytes.length,10*1024*1024);
 });
 async function fixture(t){const key='files-'+randomUUID();let app=await createApp({database:key});t.after(()=>app.db.close());const db=app.db,now=Date.now();const accounts=[1,2,3].map(n=>({address:'0x'+String(n).padStart(40,'0'),role:'member',method:'passkey'}));
  for(const [i,a]of accounts.entries()){await db.prepare('INSERT INTO accounts VALUES($1,$2)').run(a.address,now);await saveProfile(db,a.address,{nickname:'Member '+i,work:[i===2?'Other':'Files'],hobbies:[]},now);}

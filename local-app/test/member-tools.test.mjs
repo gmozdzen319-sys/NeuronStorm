@@ -1,3 +1,4 @@
+import {prepareAction} from '../actions.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {id as hashEvent} from 'quais';
@@ -62,3 +63,14 @@ test('verified reward notifies only its winner after 3 confirmations and cannot 
  await assert.rejects(async ()=>(await readNotifications(db,accounts[2],{id:n.notifications[0].id},false,now)),e=>e.status===404);
  (await readNotifications(db,accounts[1],{throughId:n.throughId,throughRewardId:n.throughRewardId},true,now));assert.equal((await listNotifications(db,accounts[1],new URLSearchParams())).unread,0);assert.equal((await db.prepare("SELECT count(*) AS n FROM reward_receipts").get()).n,1);
 });
+
+ test('questions accept four topics and reject five before preview, signing or creation',async t=>{
+ const f=await fixture(t);await saveProfile(f.db,f.accounts[1].address,{nickname:'Member 1',work:['Group A','Group B','Group C'],hobbies:['Group D','Group E']},f.now);
+ const cats=await readCategories(f.db),ids=[...cats.work,...cats.hobbies].filter(c=>c.name.startsWith('Group ')).map(c=>c.id);
+ assert.equal(ids.length,5);const payload={body:'Relevant groups',categoryIds:ids.slice(0,4)};
+ assert.equal((await previewQuestion(f.db,f.accounts[0],payload)).categoryIds.length,4);
+ await prepareAction(f.db,f.accounts[0],'test','/api/questions',payload,'https://example.com',f.now);
+ await createQuestion(f.db,f.accounts[0],payload,f.now);
+ const tooMany={...payload,categoryIds:ids};
+ for(const run of [()=>previewQuestion(f.db,f.accounts[0],tooMany),()=>prepareAction(f.db,f.accounts[0],'test','/api/questions',tooMany,'https://example.com',f.now),()=>createQuestion(f.db,f.accounts[0],tooMany,f.now)])await assert.rejects(run,e=>e.status===400&&/1 to 4/.test(e.message));
+ });

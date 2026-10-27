@@ -1,7 +1,7 @@
 export async function selectedFile(input,avatar=false){
  const file=input?.files?.[0];if(!file)return null;
- const limit=(avatar?1:5)*1024*1024,extension=file.name.split('.').at(-1).toLowerCase();
- if(file.size>limit)throw Error(`Choose a file no larger than ${avatar?1:5} MB.`);
+ const limit=(avatar?1:10)*1024*1024,extension=file.name.split('.').at(-1).toLowerCase();
+ if(file.size>limit)throw Error(`Choose a file no larger than ${avatar?1:10} MB.`);
  if(!(avatar?['jpg','jpeg','png','webp']:['jpg','jpeg','png','webp','gif','pdf','txt','csv','docx','xlsx']).includes(extension))throw Error('Choose one of the supported file types.');
  const data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result).split(',')[1]);reader.onerror=()=>reject(Error('Unable to read this file.'));reader.readAsDataURL(file);});
  return {name:file.name,data};

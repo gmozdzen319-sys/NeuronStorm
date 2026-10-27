@@ -20,7 +20,7 @@ export async function allowed(db,id,account,includeDeleted=false){
 }
 export async function previewQuestion(db,account,input){
   (await requireProfile(db,account));const body=message(input.body,4000),raw=input.categoryIds??[input.categoryId];
-  if(!Array.isArray(raw)||!raw.length||raw.length>100||raw.some(id=>!Number.isSafeInteger(id)))throw fail(400,'Choose 1–100 existing topics.');
+  if(!Array.isArray(raw)||!raw.length||raw.length>4||raw.some(id=>!Number.isSafeInteger(id)))throw fail(400,'Choose 1 to 4 existing topics.');
   for(const id of raw)if(!await db.prepare("SELECT 1 FROM categories WHERE id=$1").get(id))throw fail(400,'Choose existing topics.');
   const categoryIds=[...new Set(raw)];
   const recipientCount=(await db.prepare(`SELECT count(DISTINCT address) AS n FROM profile_categories WHERE category_id=ANY($1::bigint[]) AND address<>$2 AND NOT EXISTS(SELECT 1 FROM blocked_members b WHERE (b.owner=$2 AND b.target=profile_categories.address) OR (b.target=$2 AND b.owner=profile_categories.address))`).get(categoryIds,account.address.toLowerCase())).n;
@@ -32,7 +32,7 @@ export async function createQuestion(db,account,input,now){
 
   (await requireProfile(db,account));
   const body=message(input.body,4000),raw=input.categoryIds??[input.categoryId],author=account.address.toLowerCase();
-  if(!Array.isArray(raw)||!raw.length||raw.length>100||raw.some(id=>!Number.isSafeInteger(id)))throw fail(400,'Choose at least one existing topic (up to 100).');
+  if(!Array.isArray(raw)||!raw.length||raw.length>4||raw.some(id=>!Number.isSafeInteger(id)))throw fail(400,'Choose 1 to 4 existing topics.');
   for(const id of raw)if(!await db.prepare("SELECT 1 FROM categories WHERE id=$1").get(id))throw fail(400,'Choose existing topics.');
   const categoryIds=[...new Set(raw)],categoryId=categoryIds[0];
 
