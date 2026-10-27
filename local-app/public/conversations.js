@@ -11,6 +11,12 @@ import {createSignedSender} from './wallet.js';
 import {createDebate} from './debate.js';
 export function createConversations({api,onProfile,onExpired,getPaymentProvider,onPasskeyPayment,onNavigate=()=>{}}) {
   const $=s=>document.querySelector(s), root=$('#conversations');
+  const menuToggle=$('#member-menu-toggle'),menuLinks=$('#member-menu-links');
+  function closeMenu(restoreFocus=false){menuLinks.hidden=true;menuToggle.setAttribute('aria-expanded','false');if(restoreFocus)menuToggle.focus();}
+  menuToggle.addEventListener('click',()=>{const open=menuLinks.hidden;menuLinks.hidden=!open;menuToggle.setAttribute('aria-expanded',String(open));});
+  menuLinks.addEventListener('click',event=>{if(event.target.closest('[data-view]'))closeMenu(true);});
+  document.addEventListener('click',event=>{if(!event.target.closest('.member-menu'))closeMenu();});
+  document.addEventListener('keydown',event=>{if(event.key==='Escape'&&!menuLinks.hidden){closeMenu(true);event.preventDefault();}});
   let identity=null, view='inbox', threadId=null, backView='inbox', epoch=0, revision=0, timerBusy=false, signature='', sending=false;
   let adminPage=1,adminPages=1,adminSearch='',adminState='active',adminThread=false,moderated=null,pendingModeration=null,notificationPage=1,notificationPages=1,notificationThrough=0,notificationSignature='';
   let questionPreview=null,notificationReminderThrough=0,notificationRewardThrough=0,notificationActivityThrough=0;
@@ -25,6 +31,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
   const node=(tag,text,className)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=text;if(className)el.className=className;return el;};
   function status(id,text='',error=false){const el=$(id);el.textContent=text;el.classList.toggle('error',error);}
   function shell(next,detail={}){
+    closeMenu();
     onNavigate({view:next,...detail});if(next!=='thread')globe.hide();
     $('#passkey-home').hidden=true;
     debate.stop();epoch++;view=next;$('#blocked-view').hidden=next!=='blocked';$('#reports-view').hidden=next!=='reports';$('#library-view').hidden=next!=='library';$('#ranking-view').hidden=next!=='ranking';$('#wallet-view').hidden=next!=='wallet';$('#admin-view').hidden=next!=='admin';$('#notifications-view').hidden=next!=='notifications';signature='';revision=0;
@@ -33,6 +40,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
     document.querySelectorAll('[data-view]').forEach(button=>{if(button.dataset.view===next)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');});
   }
   function clear(){
+    closeMenu();
     clearReputationAdmin();
     questionTools.setAccount(null);memberTools.clear();questionPreview=null;$('#question-preview-dialog').close();globe.clear();debate.stop();sounds.setAccount(null);rewards.clear();lifecycle.clear();
     root.before($('#landing'));

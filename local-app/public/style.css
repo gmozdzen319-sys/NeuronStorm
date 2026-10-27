@@ -271,3 +271,16 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 .token-hour-chart .candle-down{color:#ff537d;filter:drop-shadow(0 0 2px #ff537d25)}
 @media(max-width:1150px){.brand-group{grid-template-columns:max-content 95px;column-gap:8px}}
 @media(max-width:540px){.brand-group{flex-basis:100%;grid-template-columns:max-content minmax(60px,120px)}.brand-group>.brand{font-size:18px}.brand-group .token-live small{font-size:10px}}
+
+/* Compact account navigation; existing navigation buttons retain their handlers. */
+.member-nav{padding-top:16px;padding-bottom:12px;align-items:center}
+.member-menu{position:relative;margin-right:auto}
+.member-nav #member-menu-toggle{display:flex;align-items:center;gap:10px;min-height:44px;padding:9px 14px;border:1px solid #32758b;border-radius:10px;background:#0d1e29;color:#bceaff;font-weight:600}
+.member-nav #member-menu-toggle:hover,.member-nav #member-menu-toggle[aria-expanded="true"]{border-color:#68dff8;background:#132937;box-shadow:0 0 18px #36cfff18}
+#member-menu-links{position:absolute;top:calc(100% + 8px);left:0;z-index:50;width:250px;max-width:calc(100vw - 48px);padding:8px;border:1px solid #32758b;border-radius:12px;background:#0d1e29;box-shadow:0 12px 36px #0008}
+#member-menu-links[hidden]{display:none}
+.member-nav #member-menu-links button{display:block;width:100%;min-height:44px;padding:11px 13px;border:0;border-radius:7px;text-align:left}
+.member-nav #member-menu-links button[hidden]{display:none}
+.member-nav #member-menu-links button:hover,.member-nav #member-menu-links button[aria-current]{background:#183442;color:#68dff8}
+.member-nav #member-menu-toggle:focus-visible,.member-nav #member-menu-links button:focus-visible{outline:2px solid #68dff8;outline-offset:2px}
+.member-nav .nav-reward-pool{margin-bottom:0}

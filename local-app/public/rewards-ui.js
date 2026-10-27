@@ -80,9 +80,7 @@ renderRanking(result,$('#ranking-list'));$('#ranking-status').textContent='';}ca
       const change=data.changePercent,label=change===null?'New funds · % unavailable':(Number(change)>0?'+':'')+change+'% this week';
       const note='Compared with the first recorded balance this week ('+new Date(data.baselineAt).toLocaleString('en-GB',{timeZone:'UTC'})+' UTC).'+(change===null?' Percentage growth cannot be calculated from a zero starting balance.':'');
       for(const id of ['#reward-change','#nav-reward-change']){const node=$(id);node.textContent=label;node.title=note;node.classList.toggle('pool-up',Number(change)>0);node.classList.toggle('pool-down',Number(change)<0);}
-      $('#reward-growth-note').textContent=note;
-      $('#reward-address').textContent=data.address;$('#reward-address').href='https://explorer.qu.ai/address/'+data.address;
-    }catch{for(const id of ['#reward-balance','#nav-reward-balance'])$(id).textContent='Balance unavailable';for(const id of ['#reward-change','#nav-reward-change','#reward-growth-note'])$(id).textContent='';}
+    }catch{for(const id of ['#reward-balance','#nav-reward-balance'])$(id).textContent='Balance unavailable';for(const id of ['#reward-change','#nav-reward-change'])$(id).textContent='';}
     finally{poolBusy=false;}
   }
   for(const selector of ['#ranking-category','#ranking-round','#ranking-limit'])$(selector).addEventListener('change',loadRanking);
