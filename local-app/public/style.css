@@ -284,3 +284,10 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 .member-nav #member-menu-links button:hover,.member-nav #member-menu-links button[aria-current]{background:#183442;color:#68dff8}
 .member-nav #member-menu-toggle:focus-visible,.member-nav #member-menu-links button:focus-visible{outline:2px solid #68dff8;outline-offset:2px}
 .member-nav .nav-reward-pool{margin-bottom:0}
+
+.member-profile-link{display:inline-flex;align-items:center;gap:8px;background:none;border:0;color:inherit;font:inherit;text-align:left;padding:0;cursor:pointer}
+.member-profile-link:hover strong{color:#68dff8;text-decoration:underline}
+.member-profile-link:focus-visible{outline:2px solid #68dff8;outline-offset:4px;border-radius:6px}
+.member-profile-dialog h3{margin-top:22px;font-size:15px;color:#bceaff}
+.member-profile-dialog>.text-button{display:block;margin-left:auto;margin-bottom:12px}
+.member-profile-dialog p{overflow-wrap:anywhere}

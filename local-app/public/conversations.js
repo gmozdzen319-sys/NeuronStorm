@@ -1,4 +1,4 @@
-import {selectedFile,appendAttachments,appendAvatar} from './file-ui.js';
+import {selectedFile,appendAttachments,appendAvatar,configurePublicProfiles,closePublicProfile,memberProfileButton} from './file-ui.js';
 import {renderVerification} from './verification-ui.js';
 import {loadReputationAdmin,clearReputationAdmin} from './reputation-ui.js';
 import {createQuestionTools} from './question-tools.js';
@@ -11,6 +11,7 @@ import {createSignedSender} from './wallet.js';
 import {createDebate} from './debate.js';
 export function createConversations({api,onProfile,onExpired,getPaymentProvider,onPasskeyPayment,onNavigate=()=>{}}) {
   const $=s=>document.querySelector(s), root=$('#conversations');
+  configurePublicProfiles(api);
   const menuToggle=$('#member-menu-toggle'),menuLinks=$('#member-menu-links');
   function closeMenu(restoreFocus=false){menuLinks.hidden=true;menuToggle.setAttribute('aria-expanded','false');if(restoreFocus)menuToggle.focus();}
   menuToggle.addEventListener('click',()=>{const open=menuLinks.hidden;menuLinks.hidden=!open;menuToggle.setAttribute('aria-expanded',String(open));});
@@ -40,6 +41,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
     document.querySelectorAll('[data-view]').forEach(button=>{if(button.dataset.view===next)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');});
   }
   function clear(){
+    closePublicProfile();
     closeMenu();
     clearReputationAdmin();
     questionTools.setAccount(null);memberTools.clear();questionPreview=null;$('#question-preview-dialog').close();globe.clear();debate.stop();sounds.setAccount(null);rewards.clear();lifecycle.clear();
@@ -88,7 +90,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
   function renderMessage(message,question=false){
     const article=node('article',undefined,question?'':'reply');
     article.append(node('span',question?'Question':'Answer','message-kind'));if(message.unread){article.classList.add('unread-pulse');article.append(node('span','New','message-new'));pulseObserver.observe(article);}
-    const meta=node('div',undefined,'message-meta');meta.append(node('strong',message.author),node('time',date(message.createdAt)));appendAvatar(meta,message.avatar);meta.lastChild.dateTime=new Date(message.createdAt).toISOString();
+    const meta=node('div',undefined,'message-meta');meta.append(memberProfileButton(message.author,message.avatar,threadId,question?'':'reply',message.id),node('time',date(message.createdAt)));meta.lastChild.dateTime=new Date(message.createdAt).toISOString();
     const verification=node('div',undefined,'verification-fields message-verification');renderVerification(verification,message.verification);meta.append(verification);
     if(message.editedAt)meta.append(node('span','Edited '+date(message.editedAt)));article.append(meta,node('p',message.body,'message-body'));appendAttachments(article,message.attachments);return article;
   }

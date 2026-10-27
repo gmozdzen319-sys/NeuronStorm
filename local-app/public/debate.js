@@ -1,4 +1,4 @@
-import {appendAvatar} from './file-ui.js';
+import {appendAvatar,memberProfileButton} from './file-ui.js';
 import {verificationIndicator} from './verification-ui.js';
 import {createLiveTalkUI} from './live-talk.js';
 export function createDebate(api,onExpired,getAccount=()=>null,onMessage=()=>{}){
@@ -22,7 +22,7 @@ export function createDebate(api,onExpired,getAccount=()=>null,onMessage=()=>{})
     $('#debate-form').hidden=result.canPost===false;for(const m of result.ratings||[]){const a=list.querySelector(`[data-message-id="${m.id}"]`);if(a)votes(a,m);}
     const bottom=list.scrollHeight-list.scrollTop-list.clientHeight<60,height=list.scrollHeight;
     const fragment=document.createDocumentFragment();
-    for(const message of result.messages){const existing=list.querySelector(`[data-message-id="${message.id}"]`);if(existing){votes(existing,message);continue;}const article=node('article','');article.dataset.messageId=message.id;article.className='debate-message'+(message.mine?' mine':'');const time=new Intl.DateTimeFormat('en-GB',{dateStyle:'short',timeStyle:'short'}).format(new Date(message.createdAt));const heading=node('div','');heading.className='debate-author';heading.append(node('strong',message.mine?'You':message.author));appendAvatar(heading,message.avatar);article.append(heading,node('p',message.body),node('small',time));votes(article,message);fragment.append(article);latest=Math.max(latest,message.id);earliest=earliest?Math.min(earliest,message.id):message.id;}
+    for(const message of result.messages){const existing=list.querySelector(`[data-message-id="${message.id}"]`);if(existing){votes(existing,message);continue;}const article=node('article','');article.dataset.messageId=message.id;article.className='debate-message'+(message.mine?' mine':'');const time=new Intl.DateTimeFormat('en-GB',{dateStyle:'short',timeStyle:'short'}).format(new Date(message.createdAt));const heading=node('div','');heading.className='debate-author';heading.append(memberProfileButton(message.mine?'You':message.author,message.avatar,id,'message',message.id));article.append(heading,node('p',message.body),node('small',time));votes(article,message);fragment.append(article);latest=Math.max(latest,message.id);earliest=earliest?Math.min(earliest,message.id):message.id;}
     if(older)list.prepend(fragment);else list.append(fragment);
     if(older)list.scrollTop+=list.scrollHeight-height;else if(bottom)list.scrollTop=list.scrollHeight;
     $('#debate-online').textContent=result.online.length?`${result.online.length} online · ${result.online.join(', ')}`:'No one else is here yet.';
