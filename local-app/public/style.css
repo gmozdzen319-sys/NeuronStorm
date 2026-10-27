@@ -291,3 +291,5 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 .member-profile-dialog h3{margin-top:22px;font-size:15px;color:#bceaff}
 .member-profile-dialog>.text-button{display:block;margin-left:auto;margin-bottom:12px}
 .member-profile-dialog p{overflow-wrap:anywhere}
+
+@media(prefers-reduced-motion:reduce){.member-nav #member-menu-toggle.nav-activity{color:#58d1ff;text-shadow:0 0 8px #40caff40}}

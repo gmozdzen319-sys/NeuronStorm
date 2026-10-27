@@ -206,6 +206,9 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
     catch(error){if(current===epoch)await failure(error,'#moderation-status');}finally{sending=false;$('#moderation-submit').disabled=false;}
   });
   function updateNavActivity(activity={}){
+    const active=activity.inbox===true||activity.mine===true;
+    menuToggle.classList.toggle('nav-activity',active);
+    menuToggle.setAttribute('aria-label',active?'Menu — new activity':'Menu');
     for(const [view,label] of [['inbox','Questions for You'],['mine','My Questions']]){
       const button=$('#member-nav [data-view="'+view+'"]');
       button.classList.toggle('nav-activity',activity[view]===true);
