@@ -107,7 +107,13 @@ export function createPasskeyUI({api,onExternal,onAccount,onSetupReady=()=>{}}){
     finally{busy=false;dialog.querySelectorAll('button').forEach(b=>b.disabled=false);}
   }
   $('#passkey-signin').addEventListener('click',()=>authenticate('login'));
-  $('#passkey-signup').addEventListener('click',()=>authenticate('register'));
+  const createInfo=$('#passkey-create-info');
+  $('#passkey-signup').addEventListener('click',()=>{if(!busy&&!createInfo.open)createInfo.showModal();});
+  $('#passkey-create-cancel').addEventListener('click',()=>createInfo.close());
+  $('#passkey-create-continue').addEventListener('click',()=>{
+    if(!createInfo.open||busy)return;
+    createInfo.close();authenticate('register');
+  });
   let activationTimer,sendTimer,sendWatch=0,tokenRevision=0,feeMode=false,baseAssets=[];
   const terminal=s=>['confirmed','failed','stopped'].includes(s);
   function watchTransfers(rows,revision,activeId=null){
