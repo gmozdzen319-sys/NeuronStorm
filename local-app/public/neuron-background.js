@@ -30,6 +30,7 @@ export function startNeuronBackground(){
   const navigation=performance.getEntriesByType('navigation')[0];
   const {homeReload,skipSection}=introReloadState(navigation?.type,window.history.state);
   if(story&&skipSection)story.hidden=true;
+  if(story&&!story.querySelector('.story-scroll-hint')){const hint=document.createElement('div');hint.className='story-scroll-hint';hint.textContent='Scroll down ↓';story.querySelector('.story-stage')?.append(hint);}
   // Build presentation text from the isolated fictional source. Never fetch member data.
   const copy=story?.querySelector('.story-copy'),annotations=story?.querySelector('.story-nodes');
   if(copy){copy.replaceChildren(...storyScenes.map(scene=>{const article=document.createElement('article');article.className='story-beat'+(scene.quote?' story-answer':'');article.dataset.storyAt=scene.at;

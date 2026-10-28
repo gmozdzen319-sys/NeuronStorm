@@ -343,3 +343,7 @@ body.story-in-network #neuron-background{display:block}body.story-in-network #si
 .network-story:not(.is-enhanced) .story-topline{position:sticky;top:0;z-index:4}
 
 @media(max-width:700px){.is-enhanced .story-beat[data-story-at="0.3"],.is-enhanced .story-beat[data-story-at="0.41"]{top:12%}.story-beat[data-story-at="0.3"] h2,.story-beat[data-story-at="0.41"] h2{font-size:21px}.story-beat[data-story-at="0.3"] .story-note,.story-beat[data-story-at="0.41"] .story-note{display:none}.story-beat[data-story-at="0.3"] .story-support,.story-beat[data-story-at="0.41"] .story-support{font-size:12px;margin-top:10px}}
+
+/* Small persistent direction cue inside the intro only. */
+.story-scroll-hint{position:absolute;left:4vw;bottom:max(22px,env(safe-area-inset-bottom));z-index:4;color:#c4edff;font-size:13px;font-weight:600;letter-spacing:.4px;text-shadow:0 0 12px #38c6ff55;pointer-events:none}
+@media(max-width:700px){.story-scroll-hint{left:16px;bottom:max(16px,env(safe-area-inset-bottom));font-size:12px}}
