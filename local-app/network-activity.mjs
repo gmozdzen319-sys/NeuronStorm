@@ -9,15 +9,17 @@ export function createNetworkActivity(db,now=Date.now){
   pending=(async()=>{
    const end=now()-1500,start=end-45000;
    const rows=await db.prepare(`WITH events AS (
-    SELECT 'question' AS kind,q.id AS question,q.id::text AS event,q.author AS actor,q.author AS asker,q.created_at AS at FROM questions q WHERE q.created_at>$1 AND q.created_at<=$2 AND q.deleted_at IS NULL AND q.closed_at IS NULL
+    SELECT 'question' AS kind,q.id AS question,q.id::text AS event,q.author AS actor,q.author AS asker,q.created_at AS at,NULL::text AS answer_event FROM questions q WHERE q.created_at>$1 AND q.created_at<=$2 AND q.deleted_at IS NULL AND q.closed_at IS NULL
     UNION ALL
-    SELECT 'answer',q.id,r.id::text,r.author,q.author,r.created_at FROM (SELECT id,question_id,author,created_at,deleted_at FROM replies ORDER BY id DESC LIMIT 80) r JOIN questions q ON q.id=r.question_id WHERE r.created_at>$1 AND r.created_at<=$2 AND r.deleted_at IS NULL AND q.deleted_at IS NULL AND q.closed_at IS NULL
+    SELECT 'answer',q.id,r.id::text,r.author,q.author,r.created_at,NULL::text FROM (SELECT id,question_id,author,created_at,deleted_at FROM replies ORDER BY id DESC LIMIT 80) r JOIN questions q ON q.id=r.question_id WHERE r.created_at>$1 AND r.created_at<=$2 AND r.deleted_at IS NULL AND q.deleted_at IS NULL AND q.closed_at IS NULL
+    UNION ALL
+    SELECT 'best_answer',q.id,q.id::text,a.answer_author,q.author,a.closed_at,a.reply_id::text FROM questions q JOIN accepted_answers a ON a.question_id=q.id JOIN replies r ON r.id=a.reply_id AND r.question_id=q.id WHERE q.closed_at>$1 AND q.closed_at<=$2 AND a.closed_at=q.closed_at AND a.selection='author' AND a.answer_author=r.author AND a.question_author=q.author AND q.deleted_at IS NULL AND r.deleted_at IS NULL
    ) SELECT e.*,p.nickname,a.nickname AS asker_name,
     (SELECT file_id FROM content_file_links WHERE avatar_owner=e.actor LIMIT 1) AS avatar,
     (SELECT file_id FROM content_file_links WHERE avatar_owner=e.asker LIMIT 1) AS asker_avatar
     FROM events e JOIN profiles p ON p.address=e.actor JOIN profiles a ON a.address=e.asker ORDER BY e.at DESC,e.kind,e.event LIMIT 80`).all(start,end);
    const person=(name,avatar)=>({nickname:String(name).slice(0,60),avatar:avatar?String(avatar):null});
-   cached={loaded:now(),through:end,events:rows.reverse().map(r=>({id:opaque(r.kind+':'+r.event),conversation:opaque('visual:'+r.question),kind:r.kind,at:Number(r.at),person:person(r.nickname,r.avatar),asker:person(r.asker_name,r.asker_avatar)}))};return cached;
+   cached={loaded:now(),through:end,events:rows.reverse().map(r=>({id:opaque(r.kind+':'+r.event),conversation:opaque('visual:'+r.question),kind:r.kind,at:Number(r.at),person:person(r.nickname,r.avatar),asker:person(r.asker_name,r.asker_avatar),...(r.kind==='best_answer'?{answerEvent:opaque('answer:'+r.answer_event)}:{})}))};return cached;
   })().finally(()=>{pending=null;});return pending;
  }
  return {async read(since){const s=await snapshot();const n=Number(since);return {through:s.through,events:since!==null&&Number.isFinite(n)?s.events.filter(e=>e.at>Math.max(n,s.through-45000)):[]};}};
