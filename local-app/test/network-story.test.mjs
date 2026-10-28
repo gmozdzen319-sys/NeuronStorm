@@ -56,3 +56,14 @@ test('top answers occupy separated existing responder nodes while Builder stays 
   const [a,b,c]=nodes;assert.notEqual((b.x-a.x)*(c.y-a.y)-(b.y-a.y)*(c.x-a.x),0);
  }
 });
+
+import {introReloadState} from '../public/neuron-background.js';
+test('Home reload replays intro; other restored sections never do',()=>{
+ const state=view=>({neuronSection:{owner:'member',route:{view}}});
+ assert.deepEqual(introReloadState('reload',state('ask')),{homeReload:true,skipSection:false});
+ for(const view of ['wallet','profile','profile-edit','thread','inbox','mine','admin','ranking','library','notifications'])
+   assert.deepEqual(introReloadState('reload',state(view)),{homeReload:false,skipSection:true});
+ assert.deepEqual(introReloadState('navigate',state('ask')),{homeReload:false,skipSection:false});
+ assert.deepEqual(introReloadState('reload',null),{homeReload:false,skipSection:false});
+ assert.deepEqual(introReloadState('back_forward',state('wallet')),{homeReload:false,skipSection:true});
+});

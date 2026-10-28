@@ -16,6 +16,10 @@ export function debateMembers(points,mobile=false){
  const candidates=points.map((p,index)=>({...p,index})).filter(p=>mobile?p.v>=.57&&p.v<=.86&&p.u>.1&&p.u<.9&&p.index%2===0:p.u>=.57&&p.u<=.83&&p.v>=.28&&p.v<=.72);
  return candidates.slice(0,mobile?8:16).map(({index},i)=>({index,years:storyData.responders[i][1],specialty:storyData.responders[i][0]}));
 }
+export function introReloadState(navigationType,historyState){
+  const view=historyState?.neuronSection?.route?.view;
+  return {homeReload:navigationType==='reload'&&view==='ask',skipSection:!!view&&view!=='ask'};
+}
 export function startNeuronBackground(){
   const canvas=document.querySelector('#neuron-background'),ctx=canvas?.getContext('2d');
   if(!ctx)return;
@@ -23,12 +27,15 @@ export function startNeuronBackground(){
   const liveNetwork=createLiveNetwork(networkPath,()=>!active&&!reduced.matches);
   let width=0,height=0,frame=0,last=0,time=0,points=[],edges=[],sparks=[],nextSpark=4+Math.random()*8;
   const story=document.querySelector('#network-story'),header=document.querySelector('body>header');
+  const navigation=performance.getEntriesByType('navigation')[0];
+  const {homeReload,skipSection}=introReloadState(navigation?.type,window.history.state);
+  if(story&&skipSection)story.hidden=true;
   // Build presentation text from the isolated fictional source. Never fetch member data.
   const copy=story?.querySelector('.story-copy'),annotations=story?.querySelector('.story-nodes');
   if(copy){copy.replaceChildren(...storyScenes.map(scene=>{const article=document.createElement('article');article.className='story-beat'+(scene.quote?' story-answer':'');article.dataset.storyAt=scene.at;
     for(const [tag,className,text] of [['p','story-kicker',scene.label],[scene.at===0?'h1':'h2','',scene.title],['p','story-support',scene.body],['blockquote','',scene.quote],['p','story-note',scene.note]])if(text){const element=document.createElement(tag);element.className=className;element.textContent=text;article.append(element);}return article;}));}
   const beats=[...(story?.querySelectorAll('.story-beat')||[])],starts=beats.map(b=>Number(b.dataset.storyAt));
-  let progress=0,rawProgress=0,visualProgress=0,active=false,completed=false,mouse={x:0,y:0},people=[],route=[],debate=[],debateRoutes=[],returnRoutes=[],exitRoute=[],lastBeat=-1;
+  let progress=0,rawProgress=0,visualProgress=0,active=false,completed=skipSection,mouse={x:0,y:0},people=[],route=[],debate=[],debateRoutes=[],returnRoutes=[],exitRoute=[],lastBeat=-1;
   const hideAnnotations=()=>annotations?.replaceChildren();
   let sessionObserver;
   function finishIntro(){
@@ -75,7 +82,7 @@ export function startNeuronBackground(){
   window.addEventListener('scroll',updateStory,{passive:true});
   window.addEventListener('pointermove',event=>{if(event.pointerType!=='touch'){mouse.x=event.clientX/innerWidth-.5;mouse.y=event.clientY/innerHeight-.5;}},{passive:true});
   const logout=document.querySelector('#logout');
-  if(story&&logout){sessionObserver=new MutationObserver(()=>{if(!logout.hidden)finishIntro();});sessionObserver.observe(logout,{attributes:true,attributeFilter:['hidden']});}
+  if(story&&logout){sessionObserver=new MutationObserver(()=>{if(!logout.hidden&&!(homeReload&&window.history.state?.neuronSection?.route?.view==='ask'))finishIntro();});sessionObserver.observe(logout,{attributes:true,attributeFilter:['hidden']});}
 
   const transitionLabelAnchors=new Map();
   function resize(){
@@ -263,7 +270,6 @@ export function startNeuronBackground(){
   }
   function reset(){cancelAnimationFrame(frame);frame=0;last=performance.now();draw();if(!document.hidden&&!reduced.matches)frame=requestAnimationFrame(tick);}
   if(story&&!story.hidden){window.scrollTo({top:0,behavior:'instant'});window.addEventListener('pageshow',()=>{if(!completed)requestAnimationFrame(()=>window.scrollTo({top:0,behavior:'instant'}));},{once:true});}
-  const navigation=performance.getEntriesByType('navigation')[0];
   let sameSiteReturn=false;try{sameSiteReturn=navigation?.type!=='reload'&&new URL(document.referrer).origin===location.origin;}catch{}
   resize();if(sameSiteReturn)finishIntro();reset();window.addEventListener('resize',resize);document.addEventListener('visibilitychange',reset);reduced.addEventListener('change',()=>{layoutStory();reset();});layoutStory();
 }
