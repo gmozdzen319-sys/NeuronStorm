@@ -298,3 +298,8 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 .header-reputation[hidden]{display:none}
 .header-reputation .reputation-star{flex-shrink:0;overflow:visible;animation:notification-breathe 2.6s ease-in-out infinite;transform-origin:center}
 @media(prefers-reduced-motion:reduce){.header-reputation,.header-reputation .reputation-star{animation:none}}
+
+header #member-name.member-profile-link{display:inline-flex;align-items:center;gap:8px;background:transparent;border:0;box-shadow:none;padding:0;color:#bdd9e5;cursor:pointer}
+header #member-name.member-profile-link:hover{color:#68dff8}
+
+header #member-name.member-profile-link[hidden]{display:none}

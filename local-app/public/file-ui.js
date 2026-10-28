@@ -21,14 +21,15 @@ export function closePublicProfile(){profileRequest++;profileDialog?.close();pro
 export function memberProfileButton(name,avatar,questionId,kind='',id=''){
  const button=document.createElement('button');button.type='button';button.className='member-profile-link';button.setAttribute('aria-label','View profile: '+name);
  const label=document.createElement('strong');label.textContent=name;button.append(label);appendAvatar(button,avatar);
- button.onclick=async()=>{
+ button.onclick=()=>openMemberProfile(questionId,kind,id);return button;
+}
+export async function openMemberProfile(questionId,kind='',id=''){
   if(!profileApi)return;
   if(!profileDialog){profileDialog=document.createElement('dialog');profileDialog.className='member-profile-dialog';profileDialog.setAttribute('aria-label','Member profile');const close=document.createElement('button');close.type='button';close.className='text-button';close.textContent='Close ×';close.onclick=closePublicProfile;profileContent=document.createElement('div');profileContent.setAttribute('aria-live','polite');profileDialog.append(close,profileContent);document.body.append(profileDialog);profileDialog.addEventListener('cancel',closePublicProfile);}
   const request=++profileRequest;profileContent.textContent='Loading profile…';if(!profileDialog.open)profileDialog.showModal();
-  try{const {profile:p}=await profileApi(kind==='ranking'?'/api/ranking/member-profile/'+encodeURIComponent(id):'/api/questions/'+encodeURIComponent(questionId)+'/member-profile'+(kind?'?'+kind+'='+encodeURIComponent(id):''));if(request!==profileRequest||!profileDialog.open)return;
+  try{const {profile:p}=await profileApi(kind==='self'?'/api/profile':kind==='ranking'?'/api/ranking/member-profile/'+encodeURIComponent(id):'/api/questions/'+encodeURIComponent(questionId)+'/member-profile'+(kind?'?'+kind+'='+encodeURIComponent(id):''));if(request!==profileRequest||!profileDialog.open)return;
    const node=(tag,text)=>{const n=document.createElement(tag);n.textContent=text;return n;};profileContent.replaceChildren();appendAvatar(profileContent,p.avatar,true);profileContent.append(node('h2',p.nickname));
    for(const [heading,items] of [['Work & Education',p.work],['Hobbies & Interests',p.hobbies]]){profileContent.append(node('h3',heading),node('p',items.map(t=>t.name).join(' · ')||'Not added'));}
    profileContent.append(node('p',p.points+' Reputation · '+p.activityPoints+' daily activity points'),node('h3','Verification'));const fields=node('div','');fields.className='verification-fields';renderVerification(fields,p.verification);profileContent.append(fields);
   }catch(error){if(request===profileRequest&&profileDialog.open)profileContent.textContent=error.message||'Profile could not be loaded.';}
- };return button;
 }

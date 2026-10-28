@@ -1,4 +1,4 @@
-import {selectedFile,appendAttachments,appendAvatar,configurePublicProfiles,closePublicProfile,memberProfileButton} from './file-ui.js';
+import {selectedFile,appendAttachments,appendAvatar,configurePublicProfiles,closePublicProfile,memberProfileButton,openMemberProfile} from './file-ui.js';
 import {renderVerification} from './verification-ui.js';
 import {loadReputationAdmin,clearReputationAdmin} from './reputation-ui.js';
 import {createQuestionTools} from './question-tools.js';
@@ -12,6 +12,7 @@ import {createDebate} from './debate.js';
 export function createConversations({api,onProfile,onExpired,getPaymentProvider,onPasskeyPayment,onNavigate=()=>{}}) {
   const $=s=>document.querySelector(s), root=$('#conversations');
   configurePublicProfiles(api);
+  $('#member-name').addEventListener('click',()=>{if(identity)openMemberProfile(null,'self');});
   const menuToggle=$('#member-menu-toggle'),menuLinks=$('#member-menu-links');
   function closeMenu(restoreFocus=false){menuLinks.hidden=true;menuToggle.setAttribute('aria-expanded','false');if(restoreFocus)menuToggle.focus();}
   menuToggle.addEventListener('click',()=>{const open=menuLinks.hidden;menuLinks.hidden=!open;menuToggle.setAttribute('aria-expanded',String(open));});
