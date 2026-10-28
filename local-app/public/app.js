@@ -107,7 +107,7 @@ async function loadProfile() {
     const [saved,topics]=await Promise.all([api('/api/profile'),api('/api/categories')]);
     if(revision!==profileRevision)return;
     profile=saved.profile;catalog=topics.categories;profileNotice();updateOnboarding();
-    if(profile){conversations.setIdentity(currentAccount,profile);if(!sectionHistory.restoreCurrent())conversations.openDefault();}else showEditor();
+    if(profile){renderReputation(profile.reputation);conversations.setIdentity(currentAccount,profile);if(!sectionHistory.restoreCurrent())conversations.openDefault();}else showEditor();
   } catch(error) {
     if(revision!==profileRevision)return;
     if(error.httpStatus===401){await renderSession(null);notice('Your session has expired. Please sign in again.',true);}
