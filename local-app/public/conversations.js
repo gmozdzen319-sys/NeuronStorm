@@ -41,6 +41,7 @@ export function createConversations({api,onProfile,onExpired,getPaymentProvider,
     document.querySelectorAll('[data-view]').forEach(button=>{if(button.dataset.view===next)button.setAttribute('aria-current','page');else button.removeAttribute('aria-current');});
   }
   function clear(){
+    $('#header-reputation').hidden=true;$('#header-reputation-value').textContent='0';
     closePublicProfile();
     closeMenu();
     clearReputationAdmin();

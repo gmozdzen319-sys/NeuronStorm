@@ -293,3 +293,8 @@ html.globe-modal-open{overflow:hidden}#globe-dialog[open]{display:block;z-index:
 .member-profile-dialog p{overflow-wrap:anywhere}
 
 @media(prefers-reduced-motion:reduce){.member-nav #member-menu-toggle.nav-activity{color:#58d1ff;text-shadow:0 0 8px #40caff40}}
+
+.header-reputation{display:inline-flex;align-items:center;gap:6px;flex-shrink:0;color:#58d1ff;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums;animation:nav-activity-glow 4.8s ease-in-out infinite}
+.header-reputation[hidden]{display:none}
+.header-reputation .reputation-star{flex-shrink:0;overflow:visible;animation:notification-breathe 2.6s ease-in-out infinite;transform-origin:center}
+@media(prefers-reduced-motion:reduce){.header-reputation,.header-reputation .reputation-star{animation:none}}
