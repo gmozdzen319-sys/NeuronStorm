@@ -14,8 +14,8 @@ export function scoreCard(score){
 }
 export function renderReputation(score){const badge=document.querySelector('#header-reputation');if(badge){badge.hidden=!score;if(score){const value=points(score.units);document.querySelector('#header-reputation-value').textContent=value;badge.setAttribute('aria-label','Your reputation: '+value);}}const host=document.querySelector('#profile-reputation');if(host&&score)host.replaceChildren(scoreCard(score));}
 export function renderRanking(result,host){
- host.replaceChildren();for(const row of result.rows){const card=el('article','','ranking-row'+(row.position<=3?' reputation-top':''));
- card.append(memberProfileButton(`#${row.position} ${row.nickname}`,row.avatar,null,'ranking',row.profileRef),el('span',row.expertise||'General','reputation-expertise'),el('span',points(row.weeklyUnits)+' Weekly Score'),el('span',points(row.totalUnits)+' Reputation'));
+ host.replaceChildren();for(const row of result.rows){const card=el('article','','ranking-row'+(row.position<=5?' reputation-top reputation-place-'+row.position:''));
+ card.append(memberProfileButton(`${row.position} ${row.nickname}`,row.avatar,null,'ranking',row.profileRef),el('span',row.expertise||'General','reputation-expertise'),el('span',points(row.weeklyUnits)+' Weekly Score'),el('span',points(row.totalUnits)+' Reputation'));
  const wallet=Object.hasOwn(row,'currentWalletAddress')?row.currentWalletAddress:row.address;
  if(wallet)card.append(el('code',wallet,'address'));host.append(card);
  }if(!result.rows.length)host.append(el('p','No scored contributions in this round yet.','empty-state'));

@@ -69,7 +69,7 @@ export function createRewardsUI(api,getAccount,onChanged,{getProvider=getWalletP
 const result=await api('/api/ranking?category='+$('#ranking-category').value+'&limit='+$('#ranking-limit').value+($('#ranking-round').value?'&round='+$('#ranking-round').value:''));if(current!==rankRequest)return;
 const picker=$('#ranking-category'),chosen=picker.value;picker.replaceChildren(new Option('All fields','0'));for(const c of result.categories)picker.append(new Option(c.name+' · '+c.kind,c.id));picker.value=chosen;
 roundOptions($('#ranking-round'),result.rounds,result.weekStart);$('#ranking-period').textContent=new Date(result.weekStart).toISOString().slice(0,10)+' – '+new Date(result.weekEnd).toISOString().slice(0,10)+' · Monday 00:00 UTC · '+result.round.status;
-$('#ranking-me').textContent=result.me?'Your overall Weekly Score: '+points(result.me.weekly.units)+' · Rank: '+(result.me.weeklyRank?'#'+result.me.weeklyRank:'—')+' · Total Reputation: '+points(result.me.units):'Sign in to see your weekly position.';
+$('#ranking-me').textContent=result.me?'Your overall Weekly Score: '+points(result.me.weekly.units)+' · Rank: '+(result.me.weeklyRank?String(result.me.weeklyRank):'—')+' · Total Reputation: '+points(result.me.units):'Sign in to see your weekly position.';
 renderRanking(result,$('#ranking-list'));$('#ranking-status').textContent='';}catch(error){if(current===rankRequest)$('#ranking-status').textContent=error.message;}}
   let poolBusy=false;
   async function pool(){
