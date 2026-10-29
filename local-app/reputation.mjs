@@ -1,3 +1,4 @@
+import {freezeWeeklyRewards,weeklyRewardRows,rewardUnits} from './weekly-rewards.mjs';
 import {currentWalletForIdentity} from './current-wallet.mjs';
 // Hosting-independent scoring API. PostgreSQL's append-only ledger is authoritative.
 export const WEEK=604800000;
@@ -9,6 +10,7 @@ export async function rounds(db,now){
  SELECT s,s,s+$2,CASE WHEN s<$1 THEN 'closed' ELSE 'open' END FROM generate_series(
  LEAST(COALESCE((SELECT min(round_id) FROM weekly_rounds),$1),$1),$1,$2) s ON CONFLICT DO NOTHING`).run(current,WEEK);
  await db.prepare("UPDATE weekly_rounds SET status='closed' WHERE end_time<=$1 AND status='open'").run(now);
+ await freezeWeeklyRewards(db,now);
  return db.prepare('SELECT * FROM weekly_rounds ORDER BY round_id DESC').all();
 }
 function selection(params,now){
@@ -45,8 +47,18 @@ export async function reputationRanking(db,params,now,includeAddresses=false,add
  SELECT s.*,p.nickname,(SELECT min(id) FROM reputation_events WHERE recipient=s.recipient) AS "profileRef",(SELECT json_build_object('id',l.file_id) FROM content_file_links l WHERE l.avatar_owner=p.address) AS avatar,COALESCE((SELECT sum(units)::bigint FROM reputation_events WHERE recipient=s.recipient),0) AS "totalUnits",
  (SELECT c.name FROM reputation_events e JOIN reputation_event_categories ec ON ec.event_id=e.id JOIN categories c ON c.id=ec.category_id WHERE e.recipient=s.recipient GROUP BY c.id ORDER BY sum(ec.units) DESC,c.id LIMIT 1) AS expertise
  FROM ranked s JOIN profiles p ON p.address=s.recipient ORDER BY s.position,p.nickname,s.recipient LIMIT $3`).all(round,category,limit);
- const result=rows.map(({recipient,...r})=>({...r,...(includeAddresses?{address:recipient}:{}),stars:r.weeklyUnits/100}));
+ let result=rows.map(({recipient,...r})=>({...r,...(includeAddresses?{address:recipient}:{}),stars:r.weeklyUnits/100}));
  if(includeAddresses)for(const row of result)row.currentWalletAddress=await currentWalletForIdentity(db,row.address);
+ const policy=await db.prepare('SELECT first_round FROM weekly_reward_policy').get();
+ const snapshot=await db.prepare('SELECT * FROM weekly_reward_snapshots WHERE round_id=$1').get(round);
+ const frozen=snapshot?await weeklyRewardRows(db,round):[];
+ if(category===0&&round>=policy.first_round){
+  if(snapshot){
+   const members=new Set(frozen.map(r=>r.member));
+   const final=frozen.map(r=>({nickname:r.nickname,position:r.final_rank,weeklyUnits:r.weekly_units,stars:r.weekly_units/100,rewardUnits:r.units,rewardStatus:r.status,rewardTx:r.tx_hash,rewardFinal:true,profileRef:r.profile_ref,...(includeAddresses?{address:r.member,currentWalletAddress:r.recipient}:{}),totalUnits:rows.find(x=>x.recipient===r.member)?.totalUnits??0}));
+   result=[...final,...result.filter(r=>!members.has(rows.find(x=>x.profileRef===r.profileRef)?.recipient)&&r.position>10)].slice(0,Math.max(limit,final.length));
+  }else for(const row of result){row.rewardUnits=rewardUnits(row.position);row.rewardFinal=false;}
+ }
  return {weekStart:round,weekEnd:round+WEEK,round:history.find(r=>r.round_id===round),rounds:history,rows:result,
  categories:await db.prepare('SELECT id,name,kind FROM categories ORDER BY kind,name').all(),
  me:address?await reputation(db,address,now,round):null};
@@ -68,5 +80,7 @@ export async function reputationAdmin(db,params,now){
  COALESCE(sum(e.units) FILTER(WHERE rv.qualified_for_rewards=true),0)::bigint AS "qualifiedUnits"
  FROM reputation_events e LEFT JOIN reputation_reviews rv ON rv.event_id=e.id WHERE e.round_id=$1`).get(round);
  for(const row of ranking.rows)row.reputation=await reputation(db,row.address,now,round);
- return {...ranking,totals,events,page,pages:Math.max(1,Math.ceil(totals.events/50)),review,suspiciousVotes,suspiciousAccounts,engineEnabled:false,serverTime:now};
+ const weeklyRewards=await weeklyRewardRows(db,round);
+ const rewardSnapshot=await db.prepare('SELECT * FROM weekly_reward_snapshots WHERE round_id=$1').get(round);
+ return {...ranking,weeklyRewards,rewardSnapshot,totals,events,page,pages:Math.max(1,Math.ceil(totals.events/50)),review,suspiciousVotes,suspiciousAccounts,engineEnabled:false,serverTime:now};
 }

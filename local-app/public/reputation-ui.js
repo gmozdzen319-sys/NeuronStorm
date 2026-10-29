@@ -1,3 +1,4 @@
+import {renderWeeklyAdmin} from './weekly-rewards-ui.js';
 import {appendAvatar,memberProfileButton} from './file-ui.js';
 const el=(tag,text,cls='')=>{const n=document.createElement(tag);n.textContent=text;n.className=cls;return n;};
 export const points=units=>new Intl.NumberFormat('en-GB',{maximumFractionDigits:2}).format(units/100);
@@ -14,8 +15,9 @@ export function scoreCard(score){
 }
 export function renderReputation(score){const badge=document.querySelector('#header-reputation');if(badge){badge.hidden=!score;if(score){const value=points(score.units);document.querySelector('#header-reputation-value').textContent=value;badge.setAttribute('aria-label','Your reputation: '+value);}}const host=document.querySelector('#profile-reputation');if(host&&score)host.replaceChildren(scoreCard(score));}
 export function renderRanking(result,host){
- host.replaceChildren();for(const row of result.rows){const card=el('article','','ranking-row'+(row.position<=5?' reputation-top reputation-place-'+row.position:''));
- card.append(memberProfileButton(`${row.position} ${row.nickname}`,row.avatar,null,'ranking',row.profileRef),el('span',row.expertise||'General','reputation-expertise'),el('span',points(row.weeklyUnits)+' Weekly Score'),el('span',points(row.totalUnits)+' Reputation'));
+ host.replaceChildren();for(const row of result.rows){const card=el('article','','ranking-row'+(row.position<=5?' reputation-top reputation-place-'+row.position:''));if(row.position<=3)card.classList.add('weekly-podium');
+ card.append(memberProfileButton(`${['🥇','🥈','🥉'][row.position-1]||row.position} ${row.nickname}`,row.avatar,null,'ranking',row.profileRef),el('span',row.expertise||'General','reputation-expertise'),el('span',points(row.weeklyUnits)+' Weekly Score'),el('span',points(row.totalUnits)+' Reputation'));
+ if(row.rewardUnits){const amount=String(BigInt(row.rewardUnits)/10n**18n);card.append(el('strong',amount+' NS'+(row.rewardFinal?' · '+(row.rewardStatus==='paid'?'PAID ✓':'Final'):' · Projected'),'weekly-reward-amount'));}
  const wallet=Object.hasOwn(row,'currentWalletAddress')?row.currentWalletAddress:row.address;
  if(wallet)card.append(el('code',wallet,'address'));host.append(card);
  }if(!result.rows.length)host.append(el('p','No scored contributions in this round yet.','empty-state'));
@@ -31,6 +33,7 @@ export async function loadReputationAdmin(api){
   const period=el('p',date(result.weekStart)+' → '+date(result.weekEnd)+' · '+result.round.status,'field-hint'),clock=el('p','','round-clock');clock.dataset.end=result.weekEnd;
   host.append(period,clock);updateClocks();
   const totals=result.totals;host.append(el('p',`${totals.voteEvents} vote events · ${totals.helpful} Helpful events · ${totals.notHelpful} Not Helpful events · ${totals.bestAnswers} Best Answers`),el('p',`${points(totals.qaUnits)} Q&A score · ${points(totals.debateUnits)} Debate score`));
+  renderWeeklyAdmin(api,result,host,()=>loadReputationAdmin(api));
   const list=el('div','');renderRanking(result,list);host.append(list);
   for(const row of result.rows){const d=el('details','');d.append(el('summary',row.nickname+' · contribution details'),scoreCard(row.reputation));host.append(d);}
   const fraud=el('section','','reputation-card');fraud.append(el('h3','Anti-Fraud · preparation'),el('p','Engine not enabled. No votes have been automatically verified. Visible scores do not guarantee NS rewards.','field-hint'),el('p',`Weekly Score Before Review: ${points(totals.units)} · Weekly Score After Review: ${result.review.assessed===totals.events&&totals.events?points(result.review.qualifiedUnits):'Pending review'}`),el('p',`${result.review.assessed} assessed events · ${result.review.rejected} rejected events`));

@@ -1,3 +1,4 @@
+import {createWeeklyPayments} from './weekly-payments.mjs';
 import {createNetworkActivity,networkAvatar} from './network-activity.mjs';
 import {conversationProfile,rankingProfile} from './public-profile.mjs';
 import {recordDailyLogin} from './daily-activity.mjs';
@@ -48,6 +49,7 @@ import { readProfile, readCategories, saveProfile } from './profiles.mjs';
 import { listQuestions, readThread, previewQuestion, markThreadRead, voteOnReply } from './threads.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
+export const REWARD_ADMIN='0x001d5be0940145de0c2c1d851b99f33968ded764';
 export const ADMIN = '0x00198C77e2cce7C839A34aF8C54Eb82106862640'.toLowerCase();
 const token = () => randomBytes(32).toString('hex');
 const hash = (value) => createHash('sha256').update(value).digest('hex');
@@ -72,6 +74,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   let maintenance;
   const maintain=()=>maintenance??=(async()=>{await expireQuestions(db,now());await remindDeadlines(db,now());await db.prepare('DELETE FROM content_file_links WHERE action_id IN (SELECT id FROM signed_actions WHERE expires<$1 AND (completed IS NULL OR completed<$2))').run(now(),now()-86400000);})().finally(()=>{maintenance=null;});
   const confirmReward=createRewardConfirmation(db,paymentFetch);
+  const weeklyPayments=createWeeklyPayments(db,paymentFetch);
   const payments=createPayments(db,paymentFetch,now);
   const tokenNotices=process.env.RENDER==='true'?createTokenNotices(db,notificationRPC(),now):null;
   const readMarket=createMarketReader(marketFetch);
@@ -82,7 +85,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
     const session = cookies(req).ns_session;
     if (!session || !/^[a-f0-9]{64}$/.test(session)) return null;
     const row = (await db.prepare("SELECT address FROM sessions WHERE token_hash=$1 AND expires>$2").get(hash(session), now()));
-    return row ? { address: getAddress(row.address), role: row.address === ADMIN ? 'admin' : 'member' } : null;
+    return row ? { address: getAddress(row.address), role: [ADMIN,REWARD_ADMIN].includes(row.address) ? 'admin' : 'member' } : null;
   }
   async function account(req){const current=await externalAccount(req)||await passkeys.session(cookies(req).ns_passkey_session);return current?.address?current:null;}
   async function actionSession(req){return hash((await account(req))?.method==='passkey'?cookies(req).ns_passkey_session:cookies(req).ns_session||'');}
@@ -229,6 +232,8 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         if(path==='/api/admin/reputation'&&req.method==='GET')return json(200,await reputationAdmin(db,new URL(req.url,origin).searchParams,now()));
         if(path==='/api/admin/archive.txt'&&req.method==='GET'){res.setHeader('Content-Type','text/plain; charset=utf-8');res.setHeader('Content-Disposition','attachment; filename="neuron-storm-history.txt"');await pipeline(Readable.from((await archiveText(db))),res);return;}
         if(path==='/api/admin/reports'&&['GET','POST'].includes(req.method))return json(200,(await adminReports(db,current,req.method==='POST'?await body(req):null,new URL(req.url,origin).searchParams,now())));
+        if(path==='/api/admin/weekly-rewards/prepare'&&req.method==='POST')return json(200,await weeklyPayments.prepare(current,await body(req),now()));
+        if(path==='/api/admin/weekly-rewards/confirm'&&req.method==='POST')return json(200,await weeklyPayments.confirm(current,await body(req),now()));
         if(path==='/api/admin/rewards/confirm'&&req.method==='POST')return json(200,await confirmReward(current,await body(req),now()));
         if(path==='/api/admin/accepted'&&req.method==='GET')return json(200,(await acceptedAnswers(db,new URL(req.url,origin).searchParams)));
         if(path==='/api/admin/members'&&req.method==='GET')return json(200,await adminMembers(db,current,new URL(req.url,origin).searchParams));
@@ -320,7 +325,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
 
         });
         res.setHeader('Set-Cookie', [cookie('ns_session', session, 28800), cookie('ns_challenge', '', 0)]);
-        return json(200, { account: { address: getAddress(recovered), role: recovered === ADMIN ? 'admin' : 'member' } });
+        return json(200, { account: { address: getAddress(recovered), role: [ADMIN,REWARD_ADMIN].includes(recovered) ? 'admin' : 'member' } });
       }
       if (path === '/api/logout' && req.method === 'POST') {
         const current = cookies(req);
@@ -331,7 +336,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0),cookie('ns_passkey_session','',0),cookie('ns_passkey_challenge','',0)]);
         return json(200, { ok: true });
       }
-      const files = { '/network-story-data.js':['public/network-story-data.js','text/javascript'], '/network-live.js':['public/network-live.js','text/javascript'], '/live-talk.js':['public/live-talk.js','text/javascript'], '/livekit-client.js':['node_modules/livekit-client/dist/livekit-client.esm.mjs','text/javascript'], '/verification-ui.js':['public/verification-ui.js','text/javascript'], '/file-ui.js':['public/file-ui.js','text/javascript'], '/profile-validation.js':['public/profile-validation.js','text/javascript'], '/pelagus-mark.png':['public/brands/pelagus-mark.png','image/png'], '/blip-mark.svg':['public/brands/blip-mark.svg','image/svg+xml'], '/passkey-ui.js':['public/passkey-ui.js','text/javascript'], '/fonts/audiowide/Audiowide-Regular.ttf':['public/fonts/audiowide/Audiowide-Regular.ttf','font/ttf'], '/reputation-ui.js':['public/reputation-ui.js','text/javascript'], '/question-tools.js':['public/question-tools.js','text/javascript'], '/member-tools.js':['public/member-tools.js','text/javascript'], '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
+      const files = { '/weekly-rewards-ui.js':['public/weekly-rewards-ui.js','text/javascript'], '/network-story-data.js':['public/network-story-data.js','text/javascript'], '/network-live.js':['public/network-live.js','text/javascript'], '/live-talk.js':['public/live-talk.js','text/javascript'], '/livekit-client.js':['node_modules/livekit-client/dist/livekit-client.esm.mjs','text/javascript'], '/verification-ui.js':['public/verification-ui.js','text/javascript'], '/file-ui.js':['public/file-ui.js','text/javascript'], '/profile-validation.js':['public/profile-validation.js','text/javascript'], '/pelagus-mark.png':['public/brands/pelagus-mark.png','image/png'], '/blip-mark.svg':['public/brands/blip-mark.svg','image/svg+xml'], '/passkey-ui.js':['public/passkey-ui.js','text/javascript'], '/fonts/audiowide/Audiowide-Regular.ttf':['public/fonts/audiowide/Audiowide-Regular.ttf','font/ttf'], '/reputation-ui.js':['public/reputation-ui.js','text/javascript'], '/question-tools.js':['public/question-tools.js','text/javascript'], '/member-tools.js':['public/member-tools.js','text/javascript'], '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });
@@ -362,11 +367,15 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if(next)await walletExecutor.provisioner.execute(next.account_id);
     })().catch(()=>console.error('Approved wallet provisioning stopped; manual review required.')).finally(()=>{provisionWork=null;});
   };
+  let rewardTimer,rewardWork;
+  const rewardMaintenance=()=>{if(!rewardWork)rewardWork=rounds(db,now()).catch(()=>console.error('Weekly reward snapshot deferred.')).finally(()=>{rewardWork=null;});};
+  server.on('listening',()=>{rewardMaintenance();rewardTimer=setInterval(rewardMaintenance,30000);rewardTimer.unref();});
+  server.on('close',()=>clearInterval(rewardTimer));
   const runMaintenance=()=>maintain().catch(()=>console.error('Question maintenance failed.'));
   server.on('listening',()=>{runMaintenance();expiryTimer=setInterval(runMaintenance,10000);expiryTimer.unref();if(walletExecutor?.provisioner||autoActivation){provisionApproved();provisionTimer=setInterval(provisionApproved,10000);provisionTimer.unref();}});
   server.on('listening',()=>{if(feeWallet?.reconciler){reconcileSends();sendTimer=setInterval(reconcileSends,10000);sendTimer.unref();}});
   server.on('close',()=>{clearInterval(expiryTimer);clearInterval(provisionTimer);clearInterval(sendTimer);clearInterval(liveTimer);});
-  return { server, db, async close(){clearInterval(liveTimer);if(liveWork)await liveWork;clearInterval(expiryTimer);clearInterval(provisionTimer);clearInterval(sendTimer);if(server.listening)await new Promise(resolve=>server.close(resolve));if(maintenance)await maintenance.catch(()=>{});if(provisionWork)await provisionWork;if(sendWork)await sendWork;await db.close();} };
+  return { server, db, async close(){clearInterval(rewardTimer);if(rewardWork)await rewardWork;clearInterval(liveTimer);if(liveWork)await liveWork;clearInterval(expiryTimer);clearInterval(provisionTimer);clearInterval(sendTimer);if(server.listening)await new Promise(resolve=>server.close(resolve));if(maintenance)await maintenance.catch(()=>{});if(provisionWork)await provisionWork;if(sendWork)await sendWork;await db.close();} };
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
