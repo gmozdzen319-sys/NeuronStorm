@@ -118,6 +118,7 @@ async function renderSession(account) {
   passkeyUI.setAccount(account);
   const identity=a=>a?.method==='passkey'?'passkey:'+a.id:a?.address?.toLowerCase();
   const changed=identity(currentAccount)!==identity(account);
+  if(changed)window.dispatchEvent(new Event("ns-desktop-session-changed"));
   if(account&&changed)notice();
   if(changed){conversations.clear();profileRevision++;loading=false;profile=null;}
   currentAccount=account;sectionHistory.setOwner(identity(account)||null);updateOnboarding();if(account?.method!=='passkey')$('#profile-wallet-setup').hidden=true;conversations.setAccount(account);tokenUI.setAccount(account?.method==='passkey'?null:account);

@@ -718,3 +718,24 @@ test('authenticated session awards one daily activity point; anonymous and repea
  await f.request('/api/logout',{});await f.request('/api/session');
  assert.equal((await f.db.prepare('SELECT count(*) AS n FROM daily_login_activity').get()).n,1);
 });
+
+test('desktop pairing uses current signed login for Pelagus and BlipPay and expires on logout',async t=>{
+ const f=await fixture(t);let key;
+ do{key=new Wallet(randomBytes(32).toString('hex'));}while(!/^0x00[0-7]/i.test(key.address));
+ for(const method of ['pelagus','blippay']){
+  const c=await f.challenge(key.address);
+  assert.equal((await f.request('/api/verify',{id:c.id,signature:await key.signMessage(c.message),registrationMethod:method})).status,200);
+  const endpoint='/api/desktop/pair/';
+  const opened=await f.request(endpoint+'open',{method});assert.equal(opened.status,200);
+  const {id,invite,control}=opened.data;
+  const bad=await f.request(endpoint+'claim',{id,invite,address:'0x0011111111111111111111111111111111111111',method});assert.equal(bad.status,409);
+  const claim=await f.request(endpoint+'claim',{id,invite,address:key.address,method});assert.equal(claim.status,200);
+  const heartbeat=claim.data.heartbeat;
+  const {data:{challenge}}=await f.request(endpoint+'challenge',{id,heartbeat});
+  assert.equal((await f.request(endpoint+'confirm',{id,heartbeat,challenge,address:key.address,method,chain:'9'})).status,200);
+  const result=await f.request(endpoint+'poll',{id,control});assert.equal(result.data.address,key.address.toLowerCase());
+  await f.request('/api/logout',{});assert.equal((await f.request(endpoint+'challenge',{id,heartbeat})).status,401);
+  assert.equal((await f.request(endpoint+'poll',{id,control})).status,410);
+  assert.equal((await f.request(endpoint+'poll',{id,control})).status,410);
+ }
+});

@@ -1,3 +1,4 @@
+import {miningRoutes} from './mining-routes.mjs';
 import {createWeeklyPayments} from './weekly-payments.mjs';
 import {createNetworkActivity,networkAvatar} from './network-activity.mjs';
 import {conversationProfile,rankingProfile} from './public-profile.mjs';
@@ -71,6 +72,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
   db.verifyCurrentWallet=async id=>{if(!feeWallet)return null;const row=await feeWallet.registry.load(db,id);if(!row)return null;return {row,view:await feeWallet.chain.snapshot(row.plan)};};
   const passkeys=createPasskeyAccounts(db,{config:passkeyConfig,legal,now,onRegistered:feeAutoActivation?feeSignupEnrollment(feeWallet.registry,now):null});
   const passkeyWallet=withFeeWallet(db,createPasskeyWallet(db,{chain:walletChain,executor:walletExecutor,autoActivation:!!autoActivation&&!feeAutoActivation,now}),feeWallet,{readBalance:createTokenBalanceReader(),now});
+  const desktopMining=miningRoutes({db,feeWallet,origin,now,account,externalAccount,body,cookies,hash});
   let maintenance;
   const maintain=()=>maintenance??=(async()=>{await expireQuestions(db,now());await remindDeadlines(db,now());await db.prepare('DELETE FROM content_file_links WHERE action_id IN (SELECT id FROM signed_actions WHERE expires<$1 AND (completed IS NULL OR completed<$2))').run(now(),now()-86400000);})().finally(()=>{maintenance=null;});
   const confirmReward=createRewardConfirmation(db,paymentFetch);
@@ -114,6 +116,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if (req.headers.host !== new URL(origin).host) throw failure(403, 'Open the website at ' + origin);
       const path = new URL(req.url, origin).pathname;
       if(req.method==='GET'&&path==='/healthz'){await db.query('SELECT 1');return json(200,{ok:true});}
+      if(path.startsWith('/api/desktop/'))return await desktopMining(req,json,path);
       if (req.method === 'POST') {
         if (req.headers.origin !== origin) throw failure(403, 'This request origin is not allowed.');
         const isDebate=/^\/api\/questions\/[a-f0-9-]{36}\/debate$/.test(path);
@@ -324,11 +327,13 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
           await recordDailyLogin(db,{address:recovered},now());
 
         });
+        if(cookies(req).ns_session)desktopMining.revokeSession(hash(cookies(req).ns_session));
         res.setHeader('Set-Cookie', [cookie('ns_session', session, 28800), cookie('ns_challenge', '', 0)]);
         return json(200, { account: { address: getAddress(recovered), role: [ADMIN,REWARD_ADMIN].includes(recovered) ? 'admin' : 'member' } });
       }
       if (path === '/api/logout' && req.method === 'POST') {
         const current = cookies(req);
+        if(current.ns_session)desktopMining.revokeSession(hash(current.ns_session));
         const departing=(await account(req));if(departing)(await db.prepare("DELETE FROM globe_presence WHERE address=$1").run(departing.address.toLowerCase()));
         await passkeys.logout(current.ns_passkey_session);
         if (current.ns_session) (await db.prepare("DELETE FROM sessions WHERE token_hash=$1").run(hash(current.ns_session)));
@@ -336,7 +341,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         res.setHeader('Set-Cookie', [cookie('ns_session', '', 0), cookie('ns_challenge', '', 0),cookie('ns_passkey_session','',0),cookie('ns_passkey_challenge','',0)]);
         return json(200, { ok: true });
       }
-      const files = { '/robots.txt':['public/robots.txt','text/plain'], '/sitemap.xml':['public/sitemap.xml','application/xml'], '/weekly-rewards-ui.js':['public/weekly-rewards-ui.js','text/javascript'], '/network-story-data.js':['public/network-story-data.js','text/javascript'], '/network-live.js':['public/network-live.js','text/javascript'], '/live-talk.js':['public/live-talk.js','text/javascript'], '/livekit-client.js':['node_modules/livekit-client/dist/livekit-client.esm.mjs','text/javascript'], '/verification-ui.js':['public/verification-ui.js','text/javascript'], '/file-ui.js':['public/file-ui.js','text/javascript'], '/profile-validation.js':['public/profile-validation.js','text/javascript'], '/pelagus-mark.png':['public/brands/pelagus-mark.png','image/png'], '/blip-mark.svg':['public/brands/blip-mark.svg','image/svg+xml'], '/passkey-ui.js':['public/passkey-ui.js','text/javascript'], '/fonts/audiowide/Audiowide-Regular.ttf':['public/fonts/audiowide/Audiowide-Regular.ttf','font/ttf'], '/reputation-ui.js':['public/reputation-ui.js','text/javascript'], '/question-tools.js':['public/question-tools.js','text/javascript'], '/member-tools.js':['public/member-tools.js','text/javascript'], '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
+      const files = { '/desktop-link.html':['public/desktop-link.html','text/html'], '/desktop-link.js':['public/desktop-link.js','text/javascript'], '/robots.txt':['public/robots.txt','text/plain'], '/sitemap.xml':['public/sitemap.xml','application/xml'], '/weekly-rewards-ui.js':['public/weekly-rewards-ui.js','text/javascript'], '/network-story-data.js':['public/network-story-data.js','text/javascript'], '/network-live.js':['public/network-live.js','text/javascript'], '/live-talk.js':['public/live-talk.js','text/javascript'], '/livekit-client.js':['node_modules/livekit-client/dist/livekit-client.esm.mjs','text/javascript'], '/verification-ui.js':['public/verification-ui.js','text/javascript'], '/file-ui.js':['public/file-ui.js','text/javascript'], '/profile-validation.js':['public/profile-validation.js','text/javascript'], '/pelagus-mark.png':['public/brands/pelagus-mark.png','image/png'], '/blip-mark.svg':['public/brands/blip-mark.svg','image/svg+xml'], '/passkey-ui.js':['public/passkey-ui.js','text/javascript'], '/fonts/audiowide/Audiowide-Regular.ttf':['public/fonts/audiowide/Audiowide-Regular.ttf','font/ttf'], '/reputation-ui.js':['public/reputation-ui.js','text/javascript'], '/question-tools.js':['public/question-tools.js','text/javascript'], '/member-tools.js':['public/member-tools.js','text/javascript'], '/topic-suggestions.js':['public/topic-suggestions.js','text/javascript'], '/globe-controls.js':['public/globe-controls.js','text/javascript'], '/wallet-provider.js':['public/wallet-provider.js','text/javascript'], '/globe.js':['public/globe.js','text/javascript'], '/world-map.json':['public/world-map.json','application/json'], '/lifecycle-ui.js':['public/lifecycle-ui.js','text/javascript'], '/': ['public/index.html', 'text/html'], '/rewards-ui.js':['public/rewards-ui.js','text/javascript'], '/notification-sound.js':['public/notification-sound.js','text/javascript'], '/neuron-background.js':['public/neuron-background.js','text/javascript'], '/debate.js':['public/debate.js','text/javascript'], '/token-ui.js':['public/token-ui.js','text/javascript'], '/app.js': ['public/app.js', 'text/javascript'], '/conversations.js': ['public/conversations.js', 'text/javascript'], '/wallet.js': ['public/wallet.js', 'text/javascript'], '/style.css': ['public/style.css', 'text/css'], '/favicon.svg': ['public/favicon.svg', 'image/svg+xml'], '/logo.svg': ['public/logo.svg', 'image/svg+xml'], '/neuron-storm-logo.png': ['public/neuron-storm-logo.png', 'image/png'] };
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });
