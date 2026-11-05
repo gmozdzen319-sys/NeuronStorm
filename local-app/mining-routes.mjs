@@ -3,6 +3,7 @@ import QRCode from 'qrcode';
 import {clientIp} from './geography.mjs';
 import {createMiningPairs} from './mining-pairs.mjs';
 import {createDesktopMining} from './desktop-mining.mjs';
+import {renewMiningIdentity} from './mining-renewal.mjs';
 
 export function miningRoutes({db,feeWallet,origin,now,account,externalAccount,body,cookies,hash}){
  const privateKey=process.env.NS_DESKTOP_IDENTITY_KEY?createPrivateKey(process.env.NS_DESKTOP_IDENTITY_KEY):generateKeyPairSync('ed25519').privateKey;
@@ -26,7 +27,9 @@ export function miningRoutes({db,feeWallet,origin,now,account,externalAccount,bo
    const observed=q.has('method')?{method:q.get('method'),address:q.get('address'),chain:q.get('chain')}:null;
    const current=await account(req);
    if(current)rate(attestCounts,current.id||current.address,20,10000);
-   return json(200,await attest(current,q.get('challenge'),observed));
+   return json(200,await renewMiningIdentity({loadAccount:()=>account(req),attest,
+    challenge:q.get('challenge'),observed,
+    diagnostic:value=>console.warn('[desktop-mining-renewal]',JSON.stringify(value))}));
   }
   if(req.method!=='POST'||!path.startsWith('/api/desktop/pair/'))bad(404,'Unknown desktop action');
   const action=path.slice('/api/desktop/pair/'.length);

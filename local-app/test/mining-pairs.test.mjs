@@ -23,3 +23,13 @@ test('reject reused invite, foreign reader, expired confirmations and session su
  const ch=f.ch();f.time(4100);assert.throws(()=>f.confirm(ch));
  const g=setup();assert.throws(()=>g.pairs.challenge(g,'other'));assert.throws(()=>g.pairs.poll(g));
 });
+for(const method of ['pelagus','blippay'])test(method+' renews the same authenticated wallet for 20 minutes while preserving the four-second deadline',()=>{
+ let now=0;const pairs=createMiningPairs({clock:()=>now});const f=pairs.open(method);
+ const {heartbeat}=pairs.claim({...f},'session',address,method);
+ for(let cycle=0;cycle<1200;cycle++){
+  now=cycle*1000;const {challenge}=pairs.challenge({...f,heartbeat},'session');
+  pairs.confirm({...f,heartbeat,challenge,address,method,chain:'9'},'session',address);
+  const state=pairs.poll(f);assert.equal(state.address,address);assert.equal(state.remainingMs,4000);
+ }
+ now+=4000;assert.throws(()=>pairs.poll(f),/expired/);
+});
