@@ -11,6 +11,22 @@ export function miningRoutes({db,feeWallet,origin,now,account,externalAccount,bo
  const verifyKey=Buffer.from(createPublicKey(privateKey).export({format:'jwk'}).x,'base64url').toString('hex');
  const attest=createDesktopMining({db,feeWallet,origin,now,keyPem});
  const pairs=createMiningPairs();
+ const walletBindings=new Map();
+ function desktopSession(req){
+   const raw=cookies(req).ns_passkey_session;
+   return typeof raw==='string' && /^[\w-]{43}$/.test(raw)?hash(raw):null;
+ }
+ function resetDesktop(req){
+   walletBindings.delete(desktopSession(req));
+ }
+ function bindingFor(session){
+   if(!session)return null;
+   if(!walletBindings.has(session)){
+     if(walletBindings.size>=2048)walletBindings.delete(walletBindings.keys().next().value);
+     walletBindings.set(session,{});
+   }
+   return walletBindings.get(session);
+ }
  const openCounts=new Map(),attestCounts=new Map();
  function rate(map,id,limit,windowMs){
    const t=now(), entry=map.get(id);
@@ -27,9 +43,16 @@ export function miningRoutes({db,feeWallet,origin,now,account,externalAccount,bo
    const observed=q.has('method')?{method:q.get('method'),address:q.get('address'),chain:q.get('chain')}:null;
    const current=await account(req);
    if(current)rate(attestCounts,current.id||current.address,20,10000);
-   return json(200,await renewMiningIdentity({loadAccount:()=>account(req),attest,
-    challenge:q.get('challenge'),observed,
-    diagnostic:value=>console.warn('[desktop-mining-renewal]',JSON.stringify(value))}));
+   const binding=current?.method==='passkey'?bindingFor(desktopSession(req)):null;
+   try {
+     return json(200,await renewMiningIdentity({loadAccount:()=>account(req),
+      attest:(a,c,o)=>attest(a,c,o,binding),
+      challenge:q.get('challenge'),observed,
+      diagnostic:value=>console.warn('[desktop-mining-renewal]',JSON.stringify(value))}));
+   } catch(error){
+     resetDesktop(req);
+     throw error;
+   }
   }
   if(req.method!=='POST'||!path.startsWith('/api/desktop/pair/'))bad(404,'Unknown desktop action');
   const action=path.slice('/api/desktop/pair/'.length);
@@ -55,5 +78,6 @@ export function miningRoutes({db,feeWallet,origin,now,account,externalAccount,bo
   if(action==='confirm')return json(200,pairs.confirm(p,session,current.address));
   bad(404,'Unknown pairing action');
  }
+ route.resetDesktop=resetDesktop;
  route.revokeSession=pairs.revokeSession; return route;
 }

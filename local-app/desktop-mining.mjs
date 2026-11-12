@@ -9,7 +9,7 @@ export function createDesktopMining({db, feeWallet, origin, now = Date.now,
   keyPem = process.env.NS_DESKTOP_IDENTITY_KEY, payoutVerified = false}) {
   const key = keyPem ? createPrivateKey(keyPem) : null;
   if (key && key.asymmetricKeyType !== 'ed25519') throw Error('Expected Ed25519 identity key');
-  return async function attest(account, challenge, observed) {
+  return async function attest(account, challenge, observed, binding) {
     if (!key) throw fail(503,'DESKTOP_MINING_NOT_ENABLED');
     if (origin !== originName && origin !== originName + '/') throw fail(503,'DESKTOP_ORIGIN_INVALID');
     if (!account) throw fail(401,'LOGIN_REQUIRED');
@@ -22,8 +22,13 @@ export function createDesktopMining({db, feeWallet, origin, now = Date.now,
         throw fail(423,'ACTIVE_V3_REQUIRED');
       const approval = await db.prepare('SELECT phase FROM passkey_fee_approvals WHERE account_id=$1').all(account.id);
       if (approval.length !== 1 || approval[0].phase !== 'confirmed') throw fail(423,'CONFIRMED_ACTIVATION_REQUIRED');
-      const state = await feeWallet.chain.snapshot(row.plan);
-      if (!state.deployed) throw fail(423,'DEPLOYED_WALLET_REQUIRED');
+      const assignment=JSON.stringify([account.id,row.credential_id,row.plan]);
+      if(binding?.assignment!==assignment){
+        if(binding)delete binding.assignment;
+        const state=await feeWallet.chain.snapshot(row.plan);
+        if(!state.deployed)throw fail(423,'DEPLOYED_WALLET_REQUIRED');
+        if(binding)binding.assignment=assignment;
+      }
       wallet = row.plan.address; method = 'passkey'; owner = account.id; generation = 3;
     } else {
       // externalAccount() obtains address only from a live session created by signature recovery.
