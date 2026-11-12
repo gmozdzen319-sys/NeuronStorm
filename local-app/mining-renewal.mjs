@@ -17,8 +17,11 @@ export async function renewMiningIdentity({loadAccount,attest,challenge,observed
       if(!same(account,await loadAccount()))throw Object.assign(Error('SESSION_CHANGED'),{status:401});
       return result;
     } catch(error) {
-      if(!canonicalityChanged(error))throw error;
-      diagnostic({stage:'MINING_IDENTITY_SNAPSHOT',code:'CANONICALITY_MISMATCH',attempt:attempt+1});
+      let code;
+      if(canonicalityChanged(error))code='CANONICALITY_MISMATCH';
+      else if(error?.code==='ERR_ASSERTION' && error.message==='incomplete canonical block')code='INCOMPLETE_CANONICAL_BLOCK';
+      else throw error;
+      diagnostic({stage:'MINING_IDENTITY_SNAPSHOT',code,attempt:attempt+1});
       if(attempt===2)throw Object.assign(Error('MINING_SNAPSHOT_RETRY'),{status:503});
       await sleep(attempt===0?100:250);
     }

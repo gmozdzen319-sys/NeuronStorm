@@ -21,6 +21,20 @@ test('persistent canonicality mismatch discards all three snapshots without mint
  await assert.rejects(()=>renewMiningIdentity({loadAccount:async()=>({id:'a'}),attest:async()=>{calls++;await mismatch()},sleep:async ms=>delays.push(ms)}),e=>e.status===503&&e.message==='MINING_SNAPSHOT_RETRY');
  assert.equal(calls,3);assert.deepEqual(delays,[100,250]);
 });
+for(const recover of [true,false])test('incomplete pinned block '+(recover?'recovers on fresh read':'exhausts retries safely'),async()=>{
+ let calls=0;
+ const events=[];
+ const renewal=renewMiningIdentity({loadAccount:async()=>({id:'a'}),sleep:async()=>{},
+  diagnostic:event=>events.push(event),attest:async()=>{
+   calls++;
+   await assertCanonicalBlock(async()=>recover && calls===2?block:null,block);
+   return 'verified';
+  }});
+ if(recover)assert.equal(await renewal,'verified');
+ else await assert.rejects(renewal,e=>e.status===503&&e.message==='MINING_SNAPSHOT_RETRY');
+ assert.equal(calls,recover?2:3);
+ assert.deepEqual(events.map(e=>e.code),Array(recover?1:3).fill('INCOMPLETE_CANONICAL_BLOCK'));
+});
 test('logout during snapshot rejects completed ticket',async()=>{
  let reads=0;
  await assert.rejects(()=>renewMiningIdentity({loadAccount:async()=>++reads===1?{id:'a'}:null,attest:async()=>({payload:'not delivered'})}),e=>e.status===401);
