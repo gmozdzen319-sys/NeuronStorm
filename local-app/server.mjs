@@ -118,7 +118,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if (req.headers.host !== new URL(origin).host) throw failure(403, 'Open the website at ' + origin);
       const path = new URL(req.url, origin).pathname;
       if(req.method==='GET'&&path==='/healthz'){await db.query('SELECT 1');return json(200,{ok:true});}
-      if(path==='/api/desktop-chat'||path.startsWith('/api/desktop-chat/'))return json(200,await desktopChat(db,await account(req),req,path,req.method==='POST'?await body(req,8192):null,now()));
+      if(path==='/api/desktop-chat'||path.startsWith('/api/desktop-chat/'))return json(200,await desktopChat(db,await account(req),req,path,req.method==='POST'?await body(req,8192):null,now(),hash(cookies(req).ns_passkey_session||'')));
       if(path.startsWith('/api/desktop/'))return await desktopMining(req,json,path);
       if (req.method === 'POST') {
         if (req.headers.origin !== origin) throw failure(403, 'This request origin is not allowed.');
