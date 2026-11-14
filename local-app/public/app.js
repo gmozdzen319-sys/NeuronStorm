@@ -1,3 +1,4 @@
+import {setupDesktopChat} from './desktop-chat.js';
 import {renderVerification} from './verification-ui.js';
 import {selectedFile,appendAvatar} from './file-ui.js';
 import {profileErrors,onboardingState} from './profile-validation.js';
@@ -245,3 +246,5 @@ async function refreshPoints(){
   try{const result=await api('/api/profile');if(current!==profileRevision||!result.profile)return;profile.activityPoints=result.profile.activityPoints;renderActivity(profile.activityPoints);profile.reputation=result.profile.reputation;renderReputation(profile.reputation);profile.points=result.profile.points;$('#saved-points').textContent='★ '+profile.points+' Reputation';}catch(error){if(error.httpStatus===401)await refresh();}
 }
 setInterval(()=>{if(!document.hidden)refreshPoints();},5000);
+
+setupDesktopChat();

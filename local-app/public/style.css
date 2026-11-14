@@ -366,3 +366,4 @@ body.story-in-network #neuron-background{display:block}body.story-in-network #si
 .download-meta strong{font-weight:600;color:#c6d8e7}
 .download-logo{display:block;width:100%;height:auto;max-width:300px;justify-self:center}
 @media(max-width:680px){.download-card{grid-template-columns:1fr;gap:20px}.download-logo{grid-row:1;width:105px;justify-self:start}.download-page .download-action{width:100%}.download-copy h1{font-size:clamp(32px,8vw,44px)}}
+.desktop-chat{width:min(36rem,92vw)}.desktop-chat header{display:flex;align-items:center;justify-content:space-between}.desktop-chat .chat-feed{max-height:48vh;overflow:auto;overscroll-behavior:contain}.chat-feed article{padding:.7rem 0;border-bottom:1px solid #28414e}.chat-feed p{white-space:pre-wrap;overflow-wrap:anywhere;margin:.4rem 0}.chat-feed time{display:block;font-size:.75rem;color:#98adbd}.desktop-chat form{display:grid;gap:.5rem;margin-top:1rem}.desktop-chat form button{justify-self:end}

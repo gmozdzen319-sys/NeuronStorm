@@ -24,7 +24,7 @@ export async function rankingProfile(db,account,eventId){
  if(!row)throw missing();
  return publicFields(db,account,row.recipient);
 }
-async function publicFields(db,account,address){
+export async function publicFields(db,account,address){
  if(await isBlocked(db,account.address.toLowerCase(),address))throw missing();
  const profile=await db.prepare('SELECT nickname FROM profiles WHERE address=$1').get(address);if(!profile)throw missing();
  const topics=await db.prepare('SELECT c.id,c.kind,c.name FROM categories c JOIN profile_categories p ON p.category_id=c.id WHERE p.address=$1 ORDER BY lower(c.name),c.id').all(address);
