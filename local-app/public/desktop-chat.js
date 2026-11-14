@@ -1,8 +1,6 @@
 import {memberProfileButton,closePublicProfile} from './file-ui.js';
 export function setupDesktopChat(){
  if(!window.nsDesktopChat)return;
- const menu=document.querySelector('#member-menu-links'),button=document.createElement('button');
- button.type='button';button.textContent='Chat';menu.insertBefore(button,menu.querySelector('a'));
  const dialog=document.createElement('dialog');dialog.className='member-profile-dialog desktop-chat';
  dialog.setAttribute('aria-labelledby','desktop-chat-title');
  dialog.innerHTML='<header><h2 id="desktop-chat-title">Desktop Chat</h2><button type="button" aria-label="Close chat">Close ×</button></header><div class="chat-feed" aria-label="Messages"></div><form><label for="chat-text">Your message</label><textarea id="chat-text" maxlength="1000" required rows="2"></textarea><button class="primary" type="submit">Send</button></form><small role="status"></small>';
@@ -38,7 +36,13 @@ export function setupDesktopChat(){
   }catch(e){if(rev===generation)status.textContent=String(e);}
   finally{if(rev===generation&&dialog.open){loading=false;timer=setTimeout(()=>refresh(rev),3000);}}
  }
- button.onclick=()=>{if(dialog.open)return;clear();if(document.querySelector('#member-menu-toggle').getAttribute('aria-expanded')==='true')document.querySelector('#member-menu-toggle').click();dialog.showModal();refresh(generation);};
+ window.addEventListener('ns-desktop-open-chat',()=>{
+  if(dialog.open)return;
+  const nav=document.querySelector('#member-nav');
+  if(!nav.hidden && !nav.inert){clear();dialog.showModal();refresh(generation);return;}
+  const login=document.querySelector('#login');
+  if(!login.hidden && !login.disabled)login.click();
+ });
  dialog.querySelector('header button').onclick=()=>dialog.close();
  input.oninput=()=>{draftId=null;};
  form.onsubmit=async e=>{
