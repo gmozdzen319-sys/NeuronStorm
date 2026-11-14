@@ -2,6 +2,7 @@ import {randomBytes, randomUUID, createHash} from 'node:crypto';
 import {generateRegistrationOptions, verifyRegistrationResponse, generateAuthenticationOptions, verifyAuthenticationResponse} from '@simplewebauthn/server';
 import {assignCloneWallet} from './wallet-infrastructure.mjs';
 import {communityAddress} from './passkey-community.mjs';
+import {passkeyRole} from './passkey-role.mjs';
 
 const secret=()=>randomBytes(32).toString('base64url');
 export const passkeyHash=value=>createHash('sha256').update(value).digest('hex');
@@ -49,7 +50,7 @@ export function createPasskeyAccounts(db,{config,legal,now=Date.now,onRegistered
       JOIN passkey_accounts a ON a.id=s.account_id JOIN passkey_credentials c ON c.id=s.credential_id
       WHERE s.token_hash=$1 AND s.expires>$2 AND c.revoked_at IS NULL AND c.account_id=a.id
       AND a.rp_id=$3 AND a.origin=$4`).get(passkeyHash(raw),now(),config.rpID,config.origin);
-    return row?{id:row.id,method:'passkey',role:'member',address:await communityAddress(db,row.id,now),walletStatus:'awaiting_review'}:null;
+    return row?{id:row.id,method:'passkey',role:await passkeyRole(db,row.id),address:await communityAddress(db,row.id,now),walletStatus:'awaiting_review'}:null;
   }
   async function options(purpose,browser,input={}){
     enabled();if(!['register','login'].includes(purpose))throw fail(400,'Invalid request.');
