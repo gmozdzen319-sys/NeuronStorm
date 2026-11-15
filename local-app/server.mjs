@@ -364,7 +364,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       if (req.method === 'GET' && files[path]) {
         const [file, type] = files[path];
         if(path==='/'){
-          desktopMining.resetDesktop(req);
+          // A page reload does not end the authenticated mining session.
           res.setHeader('Cache-Control','no-store');
         }
         res.writeHead(200, { 'Content-Type': type + '; charset=utf-8' });

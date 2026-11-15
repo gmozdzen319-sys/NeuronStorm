@@ -115,11 +115,13 @@ async function loadProfile() {
     else {profileNotice('Unable to load your profile. Please try again.','error');$('#retry-profile').hidden=false;}
   } finally {if(revision===profileRevision){loading=false;updateOnboarding();}}
 }
-async function renderSession(account) {
+let sessionObserved=false;
+async function renderSession(account,restoring=false) {
+  sessionObserved=true;
   passkeyUI.setAccount(account);
   const identity=a=>a?.method==='passkey'?'passkey:'+a.id:a?.address?.toLowerCase();
   const changed=identity(currentAccount)!==identity(account);
-  if(changed)window.dispatchEvent(new Event("ns-desktop-session-changed"));
+  if(changed)window.dispatchEvent(new CustomEvent("ns-desktop-session-changed",{detail:{restored:restoring}}));
   if(account&&changed)notice();
   if(changed){conversations.clear();profileRevision++;loading=false;profile=null;}
   currentAccount=account;sectionHistory.setOwner(identity(account)||null);updateOnboarding();if(account?.method!=='passkey')$('#profile-wallet-setup').hidden=true;conversations.setAccount(account);tokenUI.setAccount(account?.method==='passkey'?null:account);
@@ -208,7 +210,7 @@ async function walletChanged(){
 getWalletProvider()?.on?.('accountsChanged',walletChanged);getWalletProvider()?.on?.('disconnect',walletChanged);getWalletProvider()?.on?.('chainChanged',walletChanged);
 async function refresh(){
   if(busy||saving||loading)return;
-  try{const result=await api('/api/session');const expired=currentAccount&&!result.account;await renderSession(result.account);if(expired)notice('Your session has expired. Please sign in again.',true);}
+  try{const result=await api('/api/session');const expired=currentAccount&&!result.account;await renderSession(result.account,!sessionObserved);if(expired)notice('Your session has expired. Please sign in again.',true);}
   catch{notice('Unable to reach the local server. Start Neuron Storm and refresh this page.',true);}
   finally{login.disabled=false;}
 }
