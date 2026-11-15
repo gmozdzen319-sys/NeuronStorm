@@ -1,3 +1,4 @@
+import {desktopHeartbeat,desktopStatistics,recordDesktopDownload} from './desktop-statistics.mjs';
 import {createReadStream,statSync} from 'node:fs';
 import {miningRoutes} from './mining-routes.mjs';
 import {createWeeklyPayments} from './weekly-payments.mjs';
@@ -119,6 +120,9 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
       const path = new URL(req.url, origin).pathname;
       if(req.method==='GET'&&path==='/healthz'){await db.query('SELECT 1');return json(200,{ok:true});}
       if(path==='/api/desktop-chat'||path.startsWith('/api/desktop-chat/'))return json(200,await desktopChat(db,await account(req),req,path,req.method==='POST'?await body(req,8192):null,now(),hash(cookies(req).ns_passkey_session||'')));
+      if(path==='/api/desktop-statistics'&&req.method==='GET')return json(200,await desktopStatistics(db,now()));
+      if(path==='/api/desktop-heartbeat'&&req.method==='POST')return json(200,await desktopHeartbeat(db,await account(req),req,await body(req,1024),now()));
+      if(req.method==='GET'&&(path==='/api/network-activity'||path.startsWith('/api/network-avatar/'))&&['http://tauri.localhost','https://tauri.localhost','tauri://localhost'].includes(req.headers.origin))res.setHeader('Access-Control-Allow-Origin',req.headers.origin);
       if(path.startsWith('/api/desktop/'))return await desktopMining(req,json,path);
       if (req.method === 'POST') {
         if (req.headers.origin !== origin) throw failure(403, 'This request origin is not allowed.');
@@ -349,6 +353,7 @@ export async function createApp({ database = process.env.DATABASE_URL, databaseP
         const installer = join(root,'public/downloads/Neuron-Storm-Desktop-Windows-x64.exe');
         res.writeHead(200,{'Content-Type':'application/octet-stream','Content-Disposition':'attachment; filename="Neuron-Storm-Desktop-Windows-x64.exe"','Content-Length':statSync(installer).size,'Cache-Control':'no-cache','X-Content-Type-Options':'nosniff'});
         if(req.method==='HEAD')return res.end();
+        res.once('finish',()=>{void recordDesktopDownload(db).catch(()=>console.error('[desktop-download] counter unavailable'));});
         const stream=createReadStream(installer);
         res.once('close',()=>stream.destroy());
         stream.on('error',()=>res.destroy()).pipe(res);
