@@ -1,0 +1,30 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {randomBytes,createHash} from 'node:crypto';
+import http from 'node:http';
+import {createApp} from './database.mjs';
+test('Pulse checks canonical sessions per request: anonymous, URL bypass, expiry, logout and credential revocation',async t=>{
+ const previous={...process.env};Object.assign(process.env,{NS_PASSKEY_ENABLED:'true',NS_PASSKEY_ORIGIN:'http://localhost:3000',NS_PASSKEY_RP_ID:'localhost'});
+ let clock=Date.now();const app=await createApp({database:':memory:',now:()=>clock});
+ t.after(async()=>{await app.close();for(const k of ['NS_PASSKEY_ENABLED','NS_PASSKEY_ORIGIN','NS_PASSKEY_RP_ID'])if(previous[k]===undefined)delete process.env[k];else process.env[k]=previous[k];});
+ await new Promise(r=>app.server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+app.server.address().port;
+ const request=(path,cookie='',method='GET')=>new Promise((resolve,reject)=>{const req=http.request(base+path,{method,headers:{Host:'localhost:3000',Origin:'http://localhost:3000',Cookie:cookie,'Content-Type':'application/json'}},res=>{let data='';res.on('data',b=>data+=b);res.on('end',()=>resolve({status:res.statusCode,headers:res.headers,data}));});req.on('error',reject);req.end(method==='POST'?'{}':undefined);});
+ for(const path of ['/api/pulse/access','/api/pulse/private','/api/pulse/access?address=admin'])assert.equal((await request(path)).status,401);
+ for(const path of ['/pulse','/pulse/index.html','/pulse/assets/earth-day.jpg'])assert.equal((await request(path)).status,303);
+ assert.equal((await request('/api/pulse/access','ns_passkey_session=forged')).status,401);
+ const raw=randomBytes(32).toString('base64url'),hash=createHash('sha256').update(raw).digest('hex'),cookie='ns_passkey_session='+raw;
+ await app.db.prepare('INSERT INTO passkey_accounts(id,user_handle,created_at,rp_id,origin) VALUES($1,$2,$3,$4,$5)').run('pulse-test','handle',clock,'localhost','http://localhost:3000');
+ await app.db.prepare('INSERT INTO passkey_credentials(id,account_id,public_key,counter,label,backed_up,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)').run('pulse-credential','pulse-test','test-public-only',0,'test',false,clock);
+ await app.db.prepare('INSERT INTO passkey_sessions VALUES($1,$2,$3,$4)').run(hash,'pulse-test','pulse-credential',clock+60000);
+ const ok=await request('/api/pulse/access',cookie);assert.equal(ok.status,200);assert.equal(JSON.parse(ok.data).authorized,true);assert.match(ok.headers['cache-control'],/no-store/);assert.equal(ok.headers.vary,'Cookie');
+ assert.equal((await request('/pulse',cookie)).status,200);assert.equal((await request('/pulse/index.html',cookie)).status,404);
+ clock+=60001;assert.equal((await request('/api/pulse/access',cookie)).status,401);
+ await app.db.prepare('UPDATE passkey_sessions SET expires=$1').run(clock+60000);assert.equal((await request('/api/pulse/access',cookie)).status,200);
+ await app.db.prepare('UPDATE passkey_credentials SET revoked_at=$1').run(clock);assert.equal((await request('/api/pulse/access',cookie)).status,401);
+ await app.db.prepare('UPDATE passkey_credentials SET revoked_at=NULL').run();assert.equal((await request('/api/logout',cookie,'POST')).status,200);assert.equal((await request('/api/pulse/access',cookie)).status,401);
+ // The same canonical server guard also supports already authenticated external wallets.
+ await app.db.prepare('INSERT INTO accounts(address,created_at) VALUES($1,$2)').run('0x0000000000000000000000000000000000000000',clock);
+ const external=randomBytes(32).toString('hex');await app.db.prepare('INSERT INTO sessions VALUES($1,$2,$3)').run(createHash('sha256').update(external).digest('hex'),'0x0000000000000000000000000000000000000000',clock+60000);
+ assert.equal((await request('/api/pulse/access','ns_session='+external)).status,200);
+ assert.equal((await request('/api/logout','ns_session='+external,'POST')).status,200);assert.equal((await request('/api/pulse/access','ns_session='+external)).status,401);
+});
