@@ -1,6 +1,6 @@
 {
-  "sha256": "88c40d02e8755ec6d213cfa90ddcfc669fc205b427b87944bbfff2f382b49874",
-  "version": "0.5.1",
   "download": "/downloads/Neuron-Storm-Desktop-Windows-x64.exe",
-  "size": 2331269
+  "size": 5603303,
+  "version": "0.6.0",
+  "sha256": "a13d00b7b6f89f4078e51a588dbbda80c5315a7cc67bcd6b88f19d52b3cf3fdc"
 }
