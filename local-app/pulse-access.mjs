@@ -1,6 +1,8 @@
+import {createPulseLive} from './pulse-live.mjs';
 // Access only. Solar observations are fetched directly from NASA/NOAA by Desktop.
 // No bearer grants, cached authorization or separate identity system.
 export function createPulseAccess({account}) {
+  const live=createPulseLive();
   return async function pulseAccess(req,res,path) {
     if (!(path==='/pulse'||path.startsWith('/pulse/')||path==='/api/pulse'||path.startsWith('/api/pulse/'))) return false;
     res.setHeader('Cache-Control','private, no-store');
@@ -12,6 +14,7 @@ export function createPulseAccess({account}) {
       }else{res.writeHead(401,{'Content-Type':'application/json'});res.end(JSON.stringify({error:'Sign in to Neuron Storm to open NS Pulse.'}));}
       return true;
     }
+    if(path==='/api/pulse/live'){await live.handle(req,res,String(current.id||current.address).toLowerCase(),async()=>{const a=await account(req);return a?String(a.id||a.address).toLowerCase():null;});return true;}
     if(req.method==='GET'&&path==='/api/pulse/access'){
       res.writeHead(200,{'Content-Type':'application/json'});
       res.end(JSON.stringify({authorized:true,subject:String(current.id||current.address).toLowerCase()}));return true;
